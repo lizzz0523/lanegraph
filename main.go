@@ -64,35 +64,21 @@ func gitCommits(repo string) ([]commit, error) {
 	return commits, nil
 }
 
-type GraphRow struct {
-	NodeCol int      `json:"node_col"`
-	Top     [][2]int `json:"top"`
-	Bottom  [][2]int `json:"bottom"`
+type graphRow struct {
+	nodeCol int
+	top     [][2]int
+	bottom  [][2]int
 }
 
-type Graph struct {
-	Rows      []GraphRow `json:"rows"`
-	LaneCount int        `json:"lane_count"`
-}
-
-func (g Graph) String() string {
-	str := strings.Builder{}
-	str.WriteString(fmt.Sprintf("Lane Count: %v\n", g.LaneCount))
-	str.WriteString("Rows:\n")
-	for i := range g.Rows {
-		row := &g.Rows[i]
-		str.WriteString(fmt.Sprintf("  - NodeCol: %v\n", row.NodeCol))
-		str.WriteString(fmt.Sprintf("    Top: %v\n", row.Top))
-		str.WriteString(fmt.Sprintf("    Bottom: %v\n", row.Bottom))
-	}
-	str.WriteString("\n")
-	return str.String()
+type graph struct {
+	rows      []graphRow
+	laneCount int
 }
 
 const MAX_LANES = 24
 
-func computeGraph(commits []commit) Graph {
-	rows := make([]GraphRow, 0, len(commits))
+func computeGraph(commits []commit) graph {
+	rows := make([]graphRow, 0, len(commits))
 	lanes := []string{}
 	laneCount := 1
 
@@ -169,10 +155,10 @@ func computeGraph(commits []commit) Graph {
 		}
 		laneCount = max(laneCount, nodeCol+1, len(lanes))
 
-		rows = append(rows, GraphRow{NodeCol: nodeCol, Top: top, Bottom: bottom})
+		rows = append(rows, graphRow{nodeCol: nodeCol, top: top, bottom: bottom})
 	}
 
-	return Graph{Rows: rows, LaneCount: min(MAX_LANES, max(1, laneCount))}
+	return graph{rows: rows, laneCount: min(MAX_LANES, max(1, laneCount))}
 }
 
 func freeSlot(lanes []string) int {
@@ -253,12 +239,12 @@ func (c cell) glyphs() (line, conn string) {
 	}
 }
 
-func renderGraph(commits []commit, graph Graph) {
+func renderGraph(commits []commit, graph graph) {
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
 
-	for r, row := range graph.Rows {
-		cells := make([]cell, graph.LaneCount)
+	for r, row := range graph.rows {
+		cells := make([]cell, graph.laneCount)
 
 		inRange := func(i int) bool {
 			return i >= 0 && i < len(cells)
@@ -292,10 +278,10 @@ func renderGraph(commits []commit, graph Graph) {
 			}
 		}
 
-		for _, e := range row.Top {
+		for _, e := range row.top {
 			drawEdge(e[0], e[1], true)
 		}
-		for _, e := range row.Bottom {
+		for _, e := range row.bottom {
 			drawEdge(e[1], e[0], false)
 		}
 
@@ -303,7 +289,7 @@ func renderGraph(commits []commit, graph Graph) {
 		for i, c := range cells {
 			var char, conn string
 			charColor := c.vColor
-			if i == row.NodeCol {
+			if i == row.nodeCol {
 				char = "◯"
 				if len(commit.parents) > 1 {
 					char = "◎"
