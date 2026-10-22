@@ -27,158 +27,14 @@ func main() {
 	renderGraph(commits, computeGraph(commits))
 }
 
-const (
-	colorReset = "\x1b[0m"
-	colorHash  = "\x1b[33m"
-	colorRefs  = "\x1b[1;36m"
-)
-
-var laneColors = []string{
-	"\x1b[32m", // green
-	"\x1b[33m", // yellow
-	"\x1b[34m", // blue
-	"\x1b[35m", // magenta
-	"\x1b[36m", // cyan
-	"\x1b[31m", // red
-}
-
-func laneColor(lane int) string {
-	return laneColors[lane%len(laneColors)]
-}
-
-type cell struct {
-	up, down, left, right bool
-	vColor, hColor        string // 竖线颜色 / 横线颜色
-}
-
-// glyphs 返回 cell 的线条字符和其右侧的连接字符，规则基本与 lazygit 一致：横线穿过竖线时竖线优先；
-// 边汇入一条已存在的 lane 时用 ┤/├ 表示汇合点
-func (c cell) glyphs() (line, conn string) {
-	conn = " "
-	if c.right {
-		conn = "─"
-	}
-	switch {
-	case c.up && c.down && c.left && !c.right:
-		return "┤", conn
-	case c.up && c.down && c.right && !c.left:
-		return "├", conn
-	case c.up && c.down:
-		return "│", conn
-	case c.up && c.left && c.right:
-		return "┴", conn
-	case c.up && c.left:
-		return "╯", conn
-	case c.up && c.right:
-		return "╰", conn
-	case c.up:
-		return "╵", conn
-	case c.down && c.left && c.right:
-		return "┬", conn
-	case c.down && c.left:
-		return "╮", conn
-	case c.down && c.right:
-		return "╭", conn
-	case c.down:
-		return "╷", conn
-	case c.left:
-		return "─", conn
-	case c.right:
-		return "╶", conn
-	default:
-		return " ", conn
-	}
-}
-
-func renderGraph(commits []Commit, graph Graph) {
-	out := bufio.NewWriter(os.Stdout)
-	defer out.Flush()
-
-	for r, row := range graph.Rows {
-		cells := make([]cell, graph.LaneCount)
-
-		inRange := func(i int) bool {
-			return i >= 0 && i < len(cells)
-		}
-		// 在节点 node 与 lane end 之间画一条边；isTop 表示边从上方进入，否则向下方离开
-		drawEdge := func(end, node int, isTop bool) {
-			color := laneColor(end)
-			if inRange(end) {
-				if isTop {
-					cells[end].up = true
-				} else {
-					cells[end].down = true
-				}
-				cells[end].vColor = color
-			}
-			if end == node {
-				return
-			}
-			lo, hi := min(end, node), max(end, node)
-			for k := lo; k <= hi; k++ {
-				if !inRange(k) {
-					continue
-				}
-				if k > lo {
-					cells[k].left = true
-				}
-				if k < hi {
-					cells[k].right = true
-				}
-				cells[k].hColor = color
-			}
-		}
-
-		for _, e := range row.Top {
-			drawEdge(e[0], e[1], true)
-		}
-		for _, e := range row.Bottom {
-			drawEdge(e[1], e[0], false)
-		}
-
-		commit := commits[r]
-		for i, c := range cells {
-			var char, conn string
-			charColor := c.vColor
-			if i == row.NodeCol {
-				char = "◯"
-				if len(commit.parents) > 1 {
-					char = "◎"
-				}
-				charColor = laneColor(i)
-				conn = " "
-				if c.right {
-					conn = "─"
-				}
-			} else {
-				char, conn = c.glyphs()
-				if !c.up && !c.down {
-					charColor = c.hColor
-				}
-			}
-			fmt.Fprintf(out, "%s%s%s%s%s", charColor, char, c.hColor, conn, colorReset)
-		}
-
-		hash := commit.hash
-		if len(hash) > 7 {
-			hash = hash[:7]
-		}
-		fmt.Fprintf(out, " %s%s%s", colorHash, hash, colorReset)
-		if commit.refs != "" {
-			fmt.Fprintf(out, " %s(%s)%s", colorRefs, commit.refs, colorReset)
-		}
-		fmt.Fprintf(out, " %s\n", commit.subject)
-	}
-}
-
-type Commit struct {
+type commit struct {
 	hash    string
 	parents []string
 	refs    string // %D，如 "HEAD -> main, origin/main, tag: v1"
 	subject string
 }
 
-func gitCommits(repo string) ([]Commit, error) {
+func gitCommits(repo string) ([]commit, error) {
 	// 起点为 HEAD + 本地分支 + 远端分支 + 标签（不含 stash），未合并的分支也会被画出来
 	cmd := exec.Command("git", "log", "--date-order", "--branches", "--remotes", "--tags", "HEAD", "--format=%H%x00%P%x00%D%x00%s")
 	cmd.Dir = repo
@@ -188,7 +44,7 @@ func gitCommits(repo string) ([]Commit, error) {
 		return nil, fmt.Errorf("git log error: %w", err)
 	}
 
-	var commits []Commit
+	var commits []commit
 	for line := range strings.Lines(string(output)) {
 		line = strings.TrimRight(line, "\r\n")
 		if line == "" {
@@ -198,7 +54,7 @@ func gitCommits(repo string) ([]Commit, error) {
 		if len(parts) != 4 {
 			continue
 		}
-		commits = append(commits, Commit{
+		commits = append(commits, commit{
 			hash:    parts[0],
 			parents: strings.Fields(parts[1]),
 			refs:    parts[2],
@@ -235,7 +91,7 @@ func (g Graph) String() string {
 
 const MAX_LANES = 24
 
-func computeGraph(commits []Commit) Graph {
+func computeGraph(commits []commit) Graph {
 	rows := make([]GraphRow, 0, len(commits))
 	lanes := []string{}
 	laneCount := 1
@@ -332,4 +188,148 @@ func ensureLen(lanes []string, idx int) []string {
 		lanes = append(lanes, "")
 	}
 	return lanes
+}
+
+const (
+	colorReset = "\x1b[0m"
+	colorHash  = "\x1b[33m"
+	colorRefs  = "\x1b[1;36m"
+)
+
+var laneColors = []string{
+	"\x1b[32m", // green
+	"\x1b[33m", // yellow
+	"\x1b[34m", // blue
+	"\x1b[35m", // magenta
+	"\x1b[36m", // cyan
+	"\x1b[31m", // red
+}
+
+func laneColor(lane int) string {
+	return laneColors[lane%len(laneColors)]
+}
+
+type cell struct {
+	up, down, left, right bool
+	vColor, hColor        string // 竖线颜色 / 横线颜色
+}
+
+// glyphs 返回 cell 的线条字符和其右侧的连接字符，规则基本与 lazygit 一致：横线穿过竖线时竖线优先；
+// 边汇入一条已存在的 lane 时用 ┤/├ 表示汇合点
+func (c cell) glyphs() (line, conn string) {
+	conn = " "
+	if c.right {
+		conn = "─"
+	}
+	switch {
+	case c.up && c.down && c.left && !c.right:
+		return "┤", conn
+	case c.up && c.down && c.right && !c.left:
+		return "├", conn
+	case c.up && c.down:
+		return "│", conn
+	case c.up && c.left && c.right:
+		return "┴", conn
+	case c.up && c.left:
+		return "╯", conn
+	case c.up && c.right:
+		return "╰", conn
+	case c.up:
+		return "╵", conn
+	case c.down && c.left && c.right:
+		return "┬", conn
+	case c.down && c.left:
+		return "╮", conn
+	case c.down && c.right:
+		return "╭", conn
+	case c.down:
+		return "╷", conn
+	case c.left:
+		return "─", conn
+	case c.right:
+		return "╶", conn
+	default:
+		return " ", conn
+	}
+}
+
+func renderGraph(commits []commit, graph Graph) {
+	out := bufio.NewWriter(os.Stdout)
+	defer out.Flush()
+
+	for r, row := range graph.Rows {
+		cells := make([]cell, graph.LaneCount)
+
+		inRange := func(i int) bool {
+			return i >= 0 && i < len(cells)
+		}
+		// 在节点 node 与 lane end 之间画一条边；isTop 表示边从上方进入，否则向下方离开
+		drawEdge := func(end, node int, isTop bool) {
+			color := laneColor(end)
+			if inRange(end) {
+				if isTop {
+					cells[end].up = true
+				} else {
+					cells[end].down = true
+				}
+				cells[end].vColor = color
+			}
+			if end == node {
+				return
+			}
+			lo, hi := min(end, node), max(end, node)
+			for k := lo; k <= hi; k++ {
+				if !inRange(k) {
+					continue
+				}
+				if k > lo {
+					cells[k].left = true
+				}
+				if k < hi {
+					cells[k].right = true
+				}
+				cells[k].hColor = color
+			}
+		}
+
+		for _, e := range row.Top {
+			drawEdge(e[0], e[1], true)
+		}
+		for _, e := range row.Bottom {
+			drawEdge(e[1], e[0], false)
+		}
+
+		commit := commits[r]
+		for i, c := range cells {
+			var char, conn string
+			charColor := c.vColor
+			if i == row.NodeCol {
+				char = "◯"
+				if len(commit.parents) > 1 {
+					char = "◎"
+				}
+				charColor = laneColor(i)
+				conn = " "
+				if c.right {
+					conn = "─"
+				}
+			} else {
+				char, conn = c.glyphs()
+				if !c.up && !c.down {
+					charColor = c.hColor
+				}
+			}
+			fmt.Fprintf(out, "%s%s%s%s%s", charColor, char, c.hColor, conn, colorReset)
+		}
+
+		hash := commit.hash
+		if len(hash) > 7 {
+			hash = hash[:7]
+		}
+		fmt.Fprintf(out, " %s%s%s", colorHash, hash, colorReset)
+		if commit.refs != "" {
+			fmt.Fprintf(out, " %s(%s)%s", colorRefs, commit.refs, colorReset)
+		}
+		fmt.Fprintf(out, " %s\n", commit.subject)
+	}
 }
