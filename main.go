@@ -309,15 +309,15 @@ func ensureLen(lanes []string, idx int) []string {
 const (
 	colorReset = "[-]"
 	colorHash  = "[yellow]"
-	colorRefs  = "[cyan::b]"
+	colorRefs  = "[aqua::b]"
 )
 
 var laneColors = []string{
 	"[green]",
 	"[yellow]",
 	"[blue]",
-	"[magenta]",
-	"[cyan]",
+	"[fuchsia]",
+	"[aqua]",
 	"[red]",
 }
 
