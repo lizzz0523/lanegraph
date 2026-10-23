@@ -44,15 +44,20 @@ func tui(branches []branch, commits []commit) {
 
 	var app *tview.Application
 
+	// 灰色底，替代默认选中态的白底
+	listStyle := tcell.StyleDefault.
+		Foreground(tview.Styles.PrimaryTextColor). // 与未选中行一致，不再反色
+		Background(tcell.NewHexColor(0x4a4a4a))
+
 	headerStyle := tcell.StyleDefault.
 		Foreground(tcell.ColorGray).
 		Background(tcell.ColorNone).
 		Bold(true)
 
-	// 浅灰底，替代默认的白底
-	listStyle := tcell.StyleDefault.
-		Foreground(tview.Styles.PrimaryTextColor). // 与未选中行一致，不再反色
-		Background(tcell.NewHexColor(0x3a3a3a))
+	headerSelectedStyle := tcell.StyleDefault.
+		Foreground(tcell.ColorGray).
+		Background(tcell.ColorNone).
+		Bold(true)
 
 	commitList := tview.NewList().
 		SetSelectedStyle(listStyle).
@@ -66,6 +71,10 @@ func tui(branches []branch, commits []commit) {
 	// List 自带的滚轮只改视口偏移，且会被“保持选中项可见”的逻辑拉回，
 	// 因此这里改为移动选中项。
 	commitList.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		// capture 在 InRect 检查之前执行，这里自行限定范围，避免布局变化后吞掉其他面板的事件。
+		if !commitList.InRect(event.Position()) {
+			return action, event
+		}
 		switch action {
 		case tview.MouseScrollUp:
 			if cur := commitList.GetCurrentItem(); cur > 0 {
@@ -83,13 +92,13 @@ func tui(branches []branch, commits []commit) {
 		commitList.AddItem(line, "", 0, nil)
 	}
 
-	// 隐藏 root，用 Local / Remote 作为两个不可选的分组标题
+	// 隐藏 root，用 Local / Remote 作为分组标题。
 	localNode := tview.NewTreeNode("Local").
-		SetSelectable(false).
-		SetTextStyle(headerStyle)
+		SetTextStyle(headerStyle).
+		SetSelectedTextStyle(headerSelectedStyle)
 	remoteNode := tview.NewTreeNode("Remote").
-		SetSelectable(false).
-		SetTextStyle(headerStyle)
+		SetTextStyle(headerStyle).
+		SetSelectedTextStyle(headerSelectedStyle)
 	branchRoot := tview.NewTreeNode("").
 		AddChild(localNode).
 		AddChild(remoteNode)
@@ -131,9 +140,21 @@ func tui(branches []branch, commits []commit) {
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1)
 
+	// 默认选中第一个分支，而不是分组标题
+	if children := localNode.GetChildren(); len(children) > 0 {
+		branchList.SetCurrentNode(children[0])
+	} else if children := remoteNode.GetChildren(); len(children) > 0 {
+		branchList.SetCurrentNode(children[0])
+	}
+
 	// TreeView 自带的滚轮只改视口偏移，选中项会被滚出可视区；
 	// 因此这里改为移动选中项，与 commitList 保持一致。
 	branchList.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		// tview 先执行 capture、后检查 InRect，且 Flex 会把事件依次交给每个子项；
+		// 不判断范围，鼠标在 commitList 上滚动时事件也会被这里吞掉。
+		if !branchList.InRect(event.Position()) {
+			return action, event
+		}
 		switch action {
 		case tview.MouseScrollUp:
 			branchList.Move(-1)
@@ -229,7 +250,8 @@ func gitBranches(repo string) ([]branch, error) {
 			continue
 		}
 		parts := strings.Split(line, "\x00")
-		// %(symref) 非空表示符号引用（如 origin/HEAD），跳过以免重复
+		// %(symref) 非空表示符号引用（如 origin/HEAD）；
+		// 它的 short name 是 origin，不跳过会多出一条假分支
 		if len(parts) != 4 || parts[3] != "" {
 			continue
 		}
