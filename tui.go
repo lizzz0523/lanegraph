@@ -51,6 +51,27 @@ func tui(branches []branch, commits []commit) {
 
 	commitList.setLines(renderGraph(commits, computeGraph(commits)))
 
+	commitInfo := tview.NewBox().
+		SetTitle(" info ").
+		SetBorder(true)
+
+	fileList := tview.NewBox().
+		SetTitle(" changes ").
+		SetBorder(true)
+	fileDiff := tview.NewBox().
+		SetTitle(" /path/to/file ").
+		SetBorder(true)
+
+	commitDetail := tview.NewFlex().
+		AddItem(fileList, 40, 1, false).
+		AddItem(fileDiff, 0, 1, false)
+
+	commitPanel := tview.NewFlex()
+	commitPanel.SetDirection(tview.FlexRow).
+		AddItem(commitList, 0, 1, true).
+		AddItem(commitInfo, 4, 0, false).
+		AddItem(commitDetail, 20, 0, false)
+
 	// 隐藏 root，用 Local / Remote 作为分组标题。
 	localNode := tview.NewTreeNode("Local").
 		SetTextStyle(headerStyle).
@@ -131,7 +152,7 @@ func tui(branches []branch, commits []commit) {
 
 	root := tview.NewFlex().
 		AddItem(branchList, 40, 0, false).
-		AddItem(commitList, 0, 1, true)
+		AddItem(commitPanel, 0, 1, true)
 
 	// SetRoot 只会对 commitList 触发 focus 回调，branchList 需手动初始化为未聚焦
 	setFocusBorder(commitList.Box, true)
