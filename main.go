@@ -26,10 +26,15 @@ func main() {
 		log.Fatal(err)
 	}
 
-	tui(renderGraph(commits, computeGraph(commits)))
+	branches, err := gitBranches(repo)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	tui(branches, commits)
 }
 
-func tui(lines []string) {
+func tui(branches []branch, commits []commit) {
 	tview.Borders.TopLeft, tview.Borders.TopRight = '╭', '╮'
 	tview.Borders.BottomLeft, tview.Borders.BottomRight = '╰', '╯'
 	tview.Borders.TopLeftFocus, tview.Borders.TopRightFocus = '╭', '╮'
@@ -37,45 +42,83 @@ func tui(lines []string) {
 	tview.Borders.HorizontalFocus = tview.Borders.Horizontal
 	tview.Borders.VerticalFocus = tview.Borders.Vertical
 
-	app := tview.NewApplication()
-	app.EnableMouse(true)
+	var app *tview.Application
 
+	// 浅灰底，替代默认的白底
 	listStyle := tcell.StyleDefault.
 		Foreground(tview.Styles.PrimaryTextColor). // 与未选中行一致，不再反色
 		Background(tcell.NewHexColor(0x3a3a3a))
 
-	list := tview.NewList()
-	list.SetTitle(" lanegraph ")
-	list.SetBorder(true)
-	list.SetBorderPadding(0, 0, 1, 1)
-	list.SetSelectedStyle(listStyle) // 浅灰底，替代默认的白底
-	list.SetHighlightFullLine(true)
-	list.ShowSecondaryText(false)
-	// Esc 退出
-	list.SetDoneFunc(func() {
-		app.Stop()
-	})
+	commitList := tview.NewList().
+		SetSelectedStyle(listStyle).
+		SetHighlightFullLine(true).
+		ShowSecondaryText(false)
+
+	commitList.SetTitle(" commits ").
+		SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1)
+
 	// List 自带的滚轮只改视口偏移，且会被“保持选中项可见”的逻辑拉回，
 	// 因此这里改为移动选中项。
-	list.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+	commitList.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
 		switch action {
 		case tview.MouseScrollUp:
-			if cur := list.GetCurrentItem(); cur > 0 {
-				list.SetCurrentItem(cur - 1)
+			if cur := commitList.GetCurrentItem(); cur > 0 {
+				commitList.SetCurrentItem(cur - 1)
 			}
 			return tview.MouseConsumed, nil
 		case tview.MouseScrollDown:
-			list.SetCurrentItem(list.GetCurrentItem() + 1)
+			commitList.SetCurrentItem(commitList.GetCurrentItem() + 1)
 			return tview.MouseConsumed, nil
 		}
 		return action, event
 	})
 
-	for _, line := range lines {
-		list.AddItem(line, "", 0, nil)
+	for _, line := range renderGraph(commits, computeGraph(commits)) {
+		commitList.AddItem(line, "", 0, nil)
 	}
 
-	if err := app.SetRoot(list, true).Run(); err != nil {
+	// commit hash -> graph 行号，用于点击分支后跳转
+	rowOf := make(map[string]int, len(commits))
+	for i, c := range commits {
+		rowOf[c.hash] = i
+	}
+
+	branchList := tview.NewList().
+		SetSelectedStyle(listStyle).
+		SetHighlightFullLine(true).
+		ShowSecondaryText(false)
+
+	branchList.SetTitle(" branches ").
+		SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1)
+
+	for _, b := range branches {
+		branchList.AddItem(b.name, "", 0, func() {
+			if row, ok := rowOf[b.hash]; ok {
+				commitList.SetCurrentItem(row)
+			}
+			app.SetFocus(commitList)
+		})
+	}
+
+	root := tview.NewFlex().
+		AddItem(branchList, 40, 0, false).
+		AddItem(commitList, 0, 1, true)
+
+	app = tview.NewApplication().
+		EnableMouse(true).
+		SetRoot(root, true)
+
+	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEsc || event.Key() == tcell.KeyCtrlQ {
+			app.Stop()
+			return nil
+		}
+		return event
+	})
+
+	if err := app.Run(); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -115,6 +158,40 @@ func gitCommits(repo string) ([]commit, error) {
 		})
 	}
 	return commits, nil
+}
+
+type branch struct {
+	name string
+	hash string
+}
+
+func gitBranches(repo string) ([]branch, error) {
+	// 仅本地分支；按提交时间倒序，最新改动的排在前面
+	cmd := exec.Command("git", "for-each-ref", "--sort=-committerdate",
+		"--format=%(refname:short)%00%(objectname)", "refs/heads")
+	cmd.Dir = repo
+
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git for-each-ref error: %w", err)
+	}
+
+	var branches []branch
+	for line := range strings.Lines(string(output)) {
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "\x00")
+		if len(parts) != 2 {
+			continue
+		}
+		branches = append(branches, branch{
+			name: parts[0],
+			hash: parts[1],
+		})
+	}
+	return branches, nil
 }
 
 type graphRow struct {
