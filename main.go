@@ -1,13 +1,15 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"slices"
 	"strings"
+
+	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
 )
 
 func main() {
@@ -24,7 +26,58 @@ func main() {
 		log.Fatal(err)
 	}
 
-	renderGraph(commits, computeGraph(commits))
+	tui(renderGraph(commits, computeGraph(commits)))
+}
+
+func tui(lines []string) {
+	tview.Borders.TopLeft, tview.Borders.TopRight = '╭', '╮'
+	tview.Borders.BottomLeft, tview.Borders.BottomRight = '╰', '╯'
+	tview.Borders.TopLeftFocus, tview.Borders.TopRightFocus = '╭', '╮'
+	tview.Borders.BottomLeftFocus, tview.Borders.BottomRightFocus = '╰', '╯'
+	tview.Borders.HorizontalFocus = tview.Borders.Horizontal
+	tview.Borders.VerticalFocus = tview.Borders.Vertical
+
+	app := tview.NewApplication()
+	app.EnableMouse(true)
+
+	listStyle := tcell.StyleDefault.
+		Foreground(tview.Styles.PrimaryTextColor). // 与未选中行一致，不再反色
+		Background(tcell.NewHexColor(0x3a3a3a))
+
+	list := tview.NewList()
+	list.SetTitle(" lanegraph ")
+	list.SetBorder(true)
+	list.SetBorderPadding(0, 0, 1, 1)
+	list.SetSelectedStyle(listStyle) // 浅灰底，替代默认的白底
+	list.SetHighlightFullLine(true)
+	list.ShowSecondaryText(false)
+	// Esc 退出
+	list.SetDoneFunc(func() {
+		app.Stop()
+	})
+	// List 自带的滚轮只改视口偏移，且会被“保持选中项可见”的逻辑拉回，
+	// 因此这里改为移动选中项。
+	list.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		switch action {
+		case tview.MouseScrollUp:
+			if cur := list.GetCurrentItem(); cur > 0 {
+				list.SetCurrentItem(cur - 1)
+			}
+			return tview.MouseConsumed, nil
+		case tview.MouseScrollDown:
+			list.SetCurrentItem(list.GetCurrentItem() + 1)
+			return tview.MouseConsumed, nil
+		}
+		return action, event
+	})
+
+	for _, line := range lines {
+		list.AddItem(line, "", 0, nil)
+	}
+
+	if err := app.SetRoot(list, true).Run(); err != nil {
+		log.Fatal(err)
+	}
 }
 
 type commit struct {
@@ -177,18 +230,18 @@ func ensureLen(lanes []string, idx int) []string {
 }
 
 const (
-	colorReset = "\x1b[0m"
-	colorHash  = "\x1b[33m"
-	colorRefs  = "\x1b[1;36m"
+	colorReset = "[-]"
+	colorHash  = "[yellow]"
+	colorRefs  = "[cyan::b]"
 )
 
 var laneColors = []string{
-	"\x1b[32m", // green
-	"\x1b[33m", // yellow
-	"\x1b[34m", // blue
-	"\x1b[35m", // magenta
-	"\x1b[36m", // cyan
-	"\x1b[31m", // red
+	"[green]",
+	"[yellow]",
+	"[blue]",
+	"[magenta]",
+	"[cyan]",
+	"[red]",
 }
 
 func laneColor(lane int) string {
@@ -239,11 +292,11 @@ func (c cell) glyphs() (line, conn string) {
 	}
 }
 
-func renderGraph(commits []commit, graph graph) {
-	out := bufio.NewWriter(os.Stdout)
-	defer out.Flush()
+func renderGraph(commits []commit, graph graph) []string {
+	lines := make([]string, 0, len(graph.rows))
 
 	for r, row := range graph.rows {
+		var out strings.Builder
 		cells := make([]cell, graph.laneCount)
 
 		inRange := func(i int) bool {
@@ -305,17 +358,20 @@ func renderGraph(commits []commit, graph graph) {
 					charColor = c.hColor
 				}
 			}
-			fmt.Fprintf(out, "%s%s%s%s%s", charColor, char, c.hColor, conn, colorReset)
+			fmt.Fprintf(&out, "%s%s%s%s%s", charColor, char, c.hColor, conn, colorReset)
 		}
 
 		hash := commit.hash
 		if len(hash) > 7 {
 			hash = hash[:7]
 		}
-		fmt.Fprintf(out, " %s%s%s", colorHash, hash, colorReset)
+		fmt.Fprintf(&out, " %s%s%s", colorHash, hash, colorReset)
 		if commit.refs != "" {
-			fmt.Fprintf(out, " %s(%s)%s", colorRefs, commit.refs, colorReset)
+			fmt.Fprintf(&out, " %s(%s)%s", colorRefs, tview.Escape(commit.refs), colorReset)
 		}
-		fmt.Fprintf(out, " %s\n", commit.subject)
+		fmt.Fprintf(&out, " %s", tview.Escape(commit.subject))
+		lines = append(lines, out.String())
 	}
+
+	return lines
 }
