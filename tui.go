@@ -51,15 +51,22 @@ func tui(branches []branch, commits []commit) {
 
 	commitList.setLines(renderGraph(commits, computeGraph(commits)))
 
-	commitInfo := tview.NewBox().
-		SetTitle(" info ").
+	commitInfo := tview.NewTextView()
+
+	commitInfo.SetTitle(" info ").
+		SetTitleAlign(tview.AlignLeft).
 		SetBorder(true)
 
-	fileList := tview.NewBox().
-		SetTitle(" changes ").
+	fileList := tview.NewTreeView()
+
+	fileList.SetTitle(" changes ").
+		SetTitleAlign(tview.AlignLeft).
 		SetBorder(true)
-	fileDiff := tview.NewBox().
-		SetTitle(" /path/to/file ").
+
+	fileDiff := newDiffView()
+
+	fileDiff.SetTitle(" /path/to/file ").
+		SetTitleAlign(tview.AlignLeft).
 		SetBorder(true)
 
 	commitDetail := tview.NewFlex().
@@ -321,4 +328,8 @@ func (v *commitView) move(delta int) {
 		index = len(v.lines) - 1
 	}
 	v.setCurrentItem(index)
+}
+
+func newDiffView() *tview.Box {
+	return tview.NewBox()
 }
