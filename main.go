@@ -44,6 +44,11 @@ func tui(branches []branch, commits []commit) {
 
 	var app *tview.Application
 
+	headerStyle := tcell.StyleDefault.
+		Foreground(tcell.ColorGray).
+		Background(tcell.ColorNone).
+		Bold(true)
+
 	// 浅灰底，替代默认的白底
 	listStyle := tcell.StyleDefault.
 		Foreground(tview.Styles.PrimaryTextColor). // 与未选中行一致，不再反色
@@ -78,29 +83,67 @@ func tui(branches []branch, commits []commit) {
 		commitList.AddItem(line, "", 0, nil)
 	}
 
+	// 隐藏 root，用 Local / Remote 作为两个不可选的分组标题
+	localNode := tview.NewTreeNode("Local").
+		SetSelectable(false).
+		SetTextStyle(headerStyle)
+	remoteNode := tview.NewTreeNode("Remote").
+		SetSelectable(false).
+		SetTextStyle(headerStyle)
+	branchRoot := tview.NewTreeNode("").
+		AddChild(localNode).
+		AddChild(remoteNode)
+
 	// commit hash -> graph 行号，用于点击分支后跳转
 	rowOf := make(map[string]int, len(commits))
 	for i, c := range commits {
 		rowOf[c.hash] = i
 	}
 
-	branchList := tview.NewList().
-		SetSelectedStyle(listStyle).
-		SetHighlightFullLine(true).
-		ShowSecondaryText(false)
+	for _, b := range branches {
+		parent := localNode
+		if b.remote {
+			parent = remoteNode
+		}
+
+		child := tview.NewTreeNode(b.name).
+			SetSelectedTextStyle(listStyle).
+			SetSelectedFunc(func() {
+				if row, ok := rowOf[b.hash]; ok {
+					commitList.SetCurrentItem(row)
+				}
+				app.SetFocus(commitList)
+			})
+
+		parent.AddChild(child)
+	}
+
+	if len(remoteNode.GetChildren()) == 0 {
+		branchRoot.RemoveChild(remoteNode)
+	}
+
+	branchList := tview.NewTreeView().
+		SetRoot(branchRoot).
+		SetTopLevel(1).
+		SetGraphics(false)
 
 	branchList.SetTitle(" branches ").
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1)
 
-	for _, b := range branches {
-		branchList.AddItem(b.name, "", 0, func() {
-			if row, ok := rowOf[b.hash]; ok {
-				commitList.SetCurrentItem(row)
-			}
-			app.SetFocus(commitList)
-		})
-	}
+	// TreeView 自带的滚轮只改视口偏移，选中项会被滚出可视区；
+	// 因此这里改为移动选中项，与 commitList 保持一致。
+	branchList.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		switch action {
+		case tview.MouseScrollUp:
+			branchList.Move(-1)
+			return tview.MouseConsumed, nil
+		case tview.MouseScrollDown:
+			branchList.Move(1)
+			return tview.MouseConsumed, nil
+		}
+		return action, event
+	})
 
 	root := tview.NewFlex().
 		AddItem(branchList, 40, 0, false).
@@ -132,7 +175,8 @@ type commit struct {
 
 func gitCommits(repo string) ([]commit, error) {
 	// 起点为 HEAD + 本地分支 + 远端分支 + 标签（不含 stash），未合并的分支也会被画出来
-	cmd := exec.Command("git", "log", "--date-order", "--branches", "--remotes", "--tags", "HEAD", "--format=%H%x00%P%x00%D%x00%s")
+	cmd := exec.Command("git", "log", "--date-order", "--branches",
+		"--remotes", "--tags", "HEAD", "--format=%H%x00%P%x00%D%x00%s")
 	cmd.Dir = repo
 
 	output, err := cmd.Output()
@@ -161,14 +205,16 @@ func gitCommits(repo string) ([]commit, error) {
 }
 
 type branch struct {
-	name string
-	hash string
+	name   string
+	hash   string
+	remote bool
 }
 
 func gitBranches(repo string) ([]branch, error) {
-	// 仅本地分支；按提交时间倒序，最新改动的排在前面
+	// 本地 + 远端分支；按提交时间倒序，最新改动的排在前面
 	cmd := exec.Command("git", "for-each-ref", "--sort=-committerdate",
-		"--format=%(refname:short)%00%(objectname)", "refs/heads")
+		"--format=%(refname)%00%(refname:short)%00%(objectname)%00%(symref)",
+		"refs/heads", "refs/remotes")
 	cmd.Dir = repo
 
 	output, err := cmd.Output()
@@ -183,12 +229,14 @@ func gitBranches(repo string) ([]branch, error) {
 			continue
 		}
 		parts := strings.Split(line, "\x00")
-		if len(parts) != 2 {
+		// %(symref) 非空表示符号引用（如 origin/HEAD），跳过以免重复
+		if len(parts) != 4 || parts[3] != "" {
 			continue
 		}
 		branches = append(branches, branch{
-			name: parts[0],
-			hash: parts[1],
+			name:   parts[1],
+			hash:   parts[2],
+			remote: strings.HasPrefix(parts[0], "refs/remotes/"),
 		})
 	}
 	return branches, nil
