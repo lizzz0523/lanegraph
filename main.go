@@ -68,10 +68,7 @@ func tui(branches []branch, commits []commit) {
 		box.SetBorderColor(color).SetTitleColor(color)
 	}
 
-	commitList := tview.NewList().
-		SetSelectedStyle(listStyle).
-		SetHighlightFullLine(true).
-		ShowSecondaryText(false)
+	commitList := newCommitView(listStyle)
 
 	commitList.SetTitle(" commits ").
 		SetBorder(true).
@@ -79,36 +76,7 @@ func tui(branches []branch, commits []commit) {
 		SetFocusFunc(func() { setFocusBorder(commitList.Box, true) }).
 		SetBlurFunc(func() { setFocusBorder(commitList.Box, false) })
 
-	// List 自带的滚轮只改视口偏移，且会被“保持选中项可见”的逻辑拉回，
-	// 因此这里改为移动选中项。
-	commitList.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
-		// capture 在 InRect 检查之前执行，这里自行限定范围，避免布局变化后吞掉其他面板的事件。
-		if !commitList.InRect(event.Position()) {
-			return action, event
-		}
-		switch action {
-		case tview.MouseScrollUp:
-			// 滚轮不走默认 handler，不会触发 focus，这里手动切换
-			if !commitList.HasFocus() {
-				app.SetFocus(commitList)
-			}
-			if cur := commitList.GetCurrentItem(); cur > 0 {
-				commitList.SetCurrentItem(cur - 1)
-			}
-			return tview.MouseConsumed, nil
-		case tview.MouseScrollDown:
-			if !commitList.HasFocus() {
-				app.SetFocus(commitList)
-			}
-			commitList.SetCurrentItem(commitList.GetCurrentItem() + 1)
-			return tview.MouseConsumed, nil
-		}
-		return action, event
-	})
-
-	for _, line := range renderGraph(commits, computeGraph(commits)) {
-		commitList.AddItem(line, "", 0, nil)
-	}
+	commitList.setLines(renderGraph(commits, computeGraph(commits)))
 
 	// 隐藏 root，用 Local / Remote 作为分组标题。
 	localNode := tview.NewTreeNode("Local").
@@ -137,7 +105,7 @@ func tui(branches []branch, commits []commit) {
 			SetSelectedTextStyle(listStyle).
 			SetSelectedFunc(func() {
 				if row, ok := rowOf[b.hash]; ok {
-					commitList.SetCurrentItem(row)
+					commitList.setCurrentItem(row)
 				}
 				// app.SetFocus(commitList)
 			})
@@ -167,27 +135,23 @@ func tui(branches []branch, commits []commit) {
 		branchList.SetCurrentNode(children[0])
 	}
 
-	// TreeView 自带的滚轮只改视口偏移，选中项会被滚出可视区；
-	// 因此这里改为移动选中项，与 commitList 保持一致。
+	// TreeView 在按下鼠标后会重绘，并把视口外的选中项拉回可见范围，
+	// 导致随后的点击按新的 offsetY 命中错误的行。这里跳过 down 的默认处理，
+	// 避免这次重绘；点击仍由 TreeView 默认逻辑处理。
 	branchList.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
-		// tview 先执行 capture、后检查 InRect，且 Flex 会把事件依次交给每个子项；
-		// 不判断范围，鼠标在 commitList 上滚动时事件也会被这里吞掉。
 		if !branchList.InRect(event.Position()) {
 			return action, event
 		}
 		switch action {
-		case tview.MouseScrollUp:
+		case tview.MouseLeftDown:
 			if !branchList.HasFocus() {
 				app.SetFocus(branchList)
 			}
-			branchList.Move(-1)
-			return tview.MouseConsumed, nil
-		case tview.MouseScrollDown:
+			return tview.MouseMove, event
+		case tview.MouseScrollUp, tview.MouseScrollDown:
 			if !branchList.HasFocus() {
 				app.SetFocus(branchList)
 			}
-			branchList.Move(1)
-			return tview.MouseConsumed, nil
 		}
 		return action, event
 	})
