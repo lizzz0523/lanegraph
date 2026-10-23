@@ -175,8 +175,17 @@ func tui(branches []branch, commits []commit) {
 		SetRoot(root, true)
 
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEsc || event.Key() == tcell.KeyCtrlQ {
+		switch {
+		case event.Key() == tcell.KeyCtrlQ || (event.Key() == tcell.KeyRune && event.Rune() == 'q'):
 			app.Stop()
+			return nil
+		case event.Key() == tcell.KeyTab || event.Key() == tcell.KeyBacktab:
+			// 只有两个面板，Tab 与 Shift-Tab 都是互相切换
+			if commitList.HasFocus() {
+				app.SetFocus(branchList)
+			} else {
+				app.SetFocus(commitList)
+			}
 			return nil
 		}
 		return event
@@ -377,7 +386,7 @@ func ensureLen(lanes []string, idx int) []string {
 }
 
 const (
-	colorReset = "[-]"
+	colorReset = "[-::-]" // 同时重置前景色和属性，否则 refs 的粗体会延续到 subject
 	colorHash  = "[yellow]"
 	colorRefs  = "[aqua::b]"
 )
@@ -486,10 +495,12 @@ func renderGraph(commits []commit, graph graph) []string {
 		}
 
 		commit := commits[r]
+		// lane 数超过 MAX_LANES 时节点可能落在可视范围外，钳到最后一列保证每行都有节点
+		nodeCol := min(row.nodeCol, len(cells)-1)
 		for i, c := range cells {
 			var char, conn string
 			charColor := c.vColor
-			if i == row.nodeCol {
+			if i == nodeCol {
 				char = "◯"
 				if len(commit.parents) > 1 {
 					char = "◎"
