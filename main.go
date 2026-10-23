@@ -59,6 +59,15 @@ func tui(branches []branch, commits []commit) {
 		Background(tcell.ColorNone).
 		Bold(true)
 
+	// 聚焦时高亮边框与标题
+	setFocusBorder := func(box *tview.Box, focused bool) {
+		color := tcell.ColorGray
+		if focused {
+			color = tcell.ColorAqua
+		}
+		box.SetBorderColor(color).SetTitleColor(color)
+	}
+
 	commitList := tview.NewList().
 		SetSelectedStyle(listStyle).
 		SetHighlightFullLine(true).
@@ -66,7 +75,9 @@ func tui(branches []branch, commits []commit) {
 
 	commitList.SetTitle(" commits ").
 		SetBorder(true).
-		SetBorderPadding(0, 0, 1, 1)
+		SetBorderPadding(0, 0, 1, 1).
+		SetFocusFunc(func() { setFocusBorder(commitList.Box, true) }).
+		SetBlurFunc(func() { setFocusBorder(commitList.Box, false) })
 
 	// List 自带的滚轮只改视口偏移，且会被“保持选中项可见”的逻辑拉回，
 	// 因此这里改为移动选中项。
@@ -77,11 +88,18 @@ func tui(branches []branch, commits []commit) {
 		}
 		switch action {
 		case tview.MouseScrollUp:
+			// 滚轮不走默认 handler，不会触发 focus，这里手动切换
+			if !commitList.HasFocus() {
+				app.SetFocus(commitList)
+			}
 			if cur := commitList.GetCurrentItem(); cur > 0 {
 				commitList.SetCurrentItem(cur - 1)
 			}
 			return tview.MouseConsumed, nil
 		case tview.MouseScrollDown:
+			if !commitList.HasFocus() {
+				app.SetFocus(commitList)
+			}
 			commitList.SetCurrentItem(commitList.GetCurrentItem() + 1)
 			return tview.MouseConsumed, nil
 		}
@@ -121,7 +139,7 @@ func tui(branches []branch, commits []commit) {
 				if row, ok := rowOf[b.hash]; ok {
 					commitList.SetCurrentItem(row)
 				}
-				app.SetFocus(commitList)
+				// app.SetFocus(commitList)
 			})
 
 		parent.AddChild(child)
@@ -138,7 +156,9 @@ func tui(branches []branch, commits []commit) {
 
 	branchList.SetTitle(" branches ").
 		SetBorder(true).
-		SetBorderPadding(0, 0, 1, 1)
+		SetBorderPadding(0, 0, 1, 1).
+		SetFocusFunc(func() { setFocusBorder(branchList.Box, true) }).
+		SetBlurFunc(func() { setFocusBorder(branchList.Box, false) })
 
 	// 默认选中第一个分支，而不是分组标题
 	if children := localNode.GetChildren(); len(children) > 0 {
@@ -157,9 +177,15 @@ func tui(branches []branch, commits []commit) {
 		}
 		switch action {
 		case tview.MouseScrollUp:
+			if !branchList.HasFocus() {
+				app.SetFocus(branchList)
+			}
 			branchList.Move(-1)
 			return tview.MouseConsumed, nil
 		case tview.MouseScrollDown:
+			if !branchList.HasFocus() {
+				app.SetFocus(branchList)
+			}
 			branchList.Move(1)
 			return tview.MouseConsumed, nil
 		}
@@ -169,6 +195,10 @@ func tui(branches []branch, commits []commit) {
 	root := tview.NewFlex().
 		AddItem(branchList, 40, 0, false).
 		AddItem(commitList, 0, 1, true)
+
+	// SetRoot 只会对 commitList 触发 focus 回调，branchList 需手动初始化为未聚焦
+	setFocusBorder(commitList.Box, true)
+	setFocusBorder(branchList.Box, false)
 
 	app = tview.NewApplication().
 		EnableMouse(true).
