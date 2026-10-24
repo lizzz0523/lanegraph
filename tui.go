@@ -1,21 +1,44 @@
 package main
 
 import (
-	"log"
-
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
-func (a *app) setupUI() {
+func (c *client) run() error {
+	app := tview.NewApplication().
+		SetRoot(c.setupUI(), true).
+		EnableMouse(true)
+
+	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch {
+		case event.Key() == tcell.KeyCtrlQ || (event.Key() == tcell.KeyRune && event.Rune() == 'q'):
+			app.Stop()
+			return nil
+		case event.Key() == tcell.KeyTab || event.Key() == tcell.KeyBacktab:
+			// 只有两个面板，Tab 与 Shift-Tab 都是互相切换
+			if c.commitList.HasFocus() {
+				app.SetFocus(c.branchList)
+			} else {
+				app.SetFocus(c.commitList)
+			}
+			return nil
+		}
+		return event
+	})
+
+	c.app = app
+
+	return app.Run()
+}
+
+func (c *client) setupUI() tview.Primitive {
 	tview.Borders.TopLeft, tview.Borders.TopRight = '╭', '╮'
 	tview.Borders.BottomLeft, tview.Borders.BottomRight = '╰', '╯'
 	tview.Borders.TopLeftFocus, tview.Borders.TopRightFocus = '╭', '╮'
 	tview.Borders.BottomLeftFocus, tview.Borders.BottomRightFocus = '╰', '╯'
 	tview.Borders.HorizontalFocus = tview.Borders.Horizontal
 	tview.Borders.VerticalFocus = tview.Borders.Vertical
-
-	var app *tview.Application
 
 	// 灰色底，替代默认选中态的白底
 	listStyle := tcell.StyleDefault.
@@ -49,7 +72,7 @@ func (a *app) setupUI() {
 		SetFocusFunc(func() { setFocusBorder(commitList.Box, true) }).
 		SetBlurFunc(func() { setFocusBorder(commitList.Box, false) })
 
-	commitList.setLines(renderGraph(a.commits, computeGraph(a.commits)))
+	commitList.setLines(renderGraph(c.commits, computeGraph(c.commits)))
 
 	commitInfo := tview.NewTextView()
 
@@ -73,8 +96,8 @@ func (a *app) setupUI() {
 		AddItem(fileList, 40, 1, false).
 		AddItem(fileDiff, 0, 1, false)
 
-	commitPanel := tview.NewFlex()
-	commitPanel.SetDirection(tview.FlexRow).
+	commitPanel := tview.NewFlex().
+		SetDirection(tview.FlexRow).
 		AddItem(commitList, 0, 1, true).
 		AddItem(commitInfo, 4, 0, false).
 		AddItem(commitDetail, 20, 0, false)
@@ -91,12 +114,12 @@ func (a *app) setupUI() {
 		AddChild(remoteNode)
 
 	// commit hash -> graph 行号，用于点击分支后跳转
-	rowOf := make(map[string]int, len(a.commits))
-	for i, c := range a.commits {
+	rowOf := make(map[string]int, len(c.commits))
+	for i, c := range c.commits {
 		rowOf[c.hash] = i
 	}
 
-	for _, b := range a.branches {
+	for _, b := range c.branches {
 		parent := localNode
 		if b.remote {
 			parent = remoteNode
@@ -108,7 +131,6 @@ func (a *app) setupUI() {
 				if row, ok := rowOf[b.hash]; ok {
 					commitList.setCurrentItem(row)
 				}
-				// app.SetFocus(commitList)
 			})
 
 		parent.AddChild(child)
@@ -146,12 +168,12 @@ func (a *app) setupUI() {
 		switch action {
 		case tview.MouseLeftDown:
 			if !branchList.HasFocus() {
-				app.SetFocus(branchList)
+				c.app.SetFocus(branchList)
 			}
 			return tview.MouseMove, event
 		case tview.MouseScrollUp, tview.MouseScrollDown:
 			if !branchList.HasFocus() {
-				app.SetFocus(branchList)
+				c.app.SetFocus(branchList)
 			}
 		}
 		return action, event
@@ -162,33 +184,16 @@ func (a *app) setupUI() {
 		AddItem(commitPanel, 0, 1, true)
 
 	// SetRoot 只会对 commitList 触发 focus 回调，branchList 需手动初始化为未聚焦
-	setFocusBorder(commitList.Box, true)
 	setFocusBorder(branchList.Box, false)
+	setFocusBorder(commitList.Box, true)
 
-	app = tview.NewApplication().
-		EnableMouse(true).
-		SetRoot(root, true)
+	c.branchList = branchList
+	c.commitList = commitList
+	c.commitInfo = commitInfo
+	c.fileList = fileList
+	c.fileDiff = fileDiff
 
-	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		switch {
-		case event.Key() == tcell.KeyCtrlQ || (event.Key() == tcell.KeyRune && event.Rune() == 'q'):
-			app.Stop()
-			return nil
-		case event.Key() == tcell.KeyTab || event.Key() == tcell.KeyBacktab:
-			// 只有两个面板，Tab 与 Shift-Tab 都是互相切换
-			if commitList.HasFocus() {
-				app.SetFocus(branchList)
-			} else {
-				app.SetFocus(commitList)
-			}
-			return nil
-		}
-		return event
-	})
-
-	if err := app.Run(); err != nil {
-		log.Fatal(err)
-	}
+	return root
 }
 
 // laneView 把视口偏移和选中项分开，使滚轮只滚动内容。

@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/rivo/tview"
 )
 
 func main() {
@@ -27,54 +29,25 @@ func main() {
 		log.Fatal(err)
 	}
 
-	a := &app{
+	c := &client{
 		commits:  commits,
 		branches: branches,
 	}
-	a.setupUI()
+	if err := c.run(); err != nil {
+		log.Fatal(err)
+	}
 }
 
-type app struct {
-	commits  []commit
+type client struct {
+	app        *tview.Application
+	branchList *tview.TreeView
+	commitList *laneView
+	commitInfo *tview.TextView
+	fileList   *tview.TreeView
+	fileDiff   *diffView
+
 	branches []branch
-}
-
-type commit struct {
-	hash    string
-	parents []string
-	refs    string // %D，如 "HEAD -> main, origin/main, tag: v1"
-	subject string
-}
-
-func gitCommits(repo string) ([]commit, error) {
-	// 起点为 HEAD + 本地分支 + 远端分支 + 标签（不含 stash），未合并的分支也会被画出来
-	cmd := exec.Command("git", "log", "--date-order", "--branches",
-		"--remotes", "--tags", "HEAD", "--format=%H%x00%P%x00%D%x00%s")
-	cmd.Dir = repo
-
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("git log error: %w", err)
-	}
-
-	var commits []commit
-	for line := range strings.Lines(string(output)) {
-		line = strings.TrimRight(line, "\r\n")
-		if line == "" {
-			continue
-		}
-		parts := strings.Split(line, "\x00")
-		if len(parts) != 4 {
-			continue
-		}
-		commits = append(commits, commit{
-			hash:    parts[0],
-			parents: strings.Fields(parts[1]),
-			refs:    parts[2],
-			subject: parts[3],
-		})
-	}
-	return commits, nil
+	commits  []commit
 }
 
 type branch struct {
@@ -114,4 +87,42 @@ func gitBranches(repo string) ([]branch, error) {
 		})
 	}
 	return branches, nil
+}
+
+type commit struct {
+	hash    string
+	parents []string
+	refs    string // %D，如 "HEAD -> main, origin/main, tag: v1"
+	subject string
+}
+
+func gitCommits(repo string) ([]commit, error) {
+	// 起点为 HEAD + 本地分支 + 远端分支 + 标签（不含 stash），未合并的分支也会被画出来
+	cmd := exec.Command("git", "log", "--date-order", "--branches",
+		"--remotes", "--tags", "HEAD", "--format=%H%x00%P%x00%D%x00%s")
+	cmd.Dir = repo
+
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git log error: %w", err)
+	}
+
+	var commits []commit
+	for line := range strings.Lines(string(output)) {
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "\x00")
+		if len(parts) != 4 {
+			continue
+		}
+		commits = append(commits, commit{
+			hash:    parts[0],
+			parents: strings.Fields(parts[1]),
+			refs:    parts[2],
+			subject: parts[3],
+		})
+	}
+	return commits, nil
 }
