@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/gdamore/tcell/v2"
+	"github.com/mattn/go-runewidth"
 	"github.com/rivo/tview"
 )
 
@@ -30,7 +32,6 @@ func (c *client) run() error {
 	})
 
 	c.app = app
-	c.refresh()
 
 	return app.Run()
 }
@@ -79,12 +80,21 @@ func (c *client) setupUI() tview.Primitive {
 	commitList.setLines(renderGraph(c.commits, computeGraph(c.commits)))
 
 	commitInfo := tview.NewTextView().
+		SetWrap(false).
 		SetDynamicColors(true)
 
 	commitInfo.SetTitle(" commit ").
 		SetTitleAlign(tview.AlignLeft).
 		SetBorder(true).
-		SetBorderPadding(0, 0, 1, 1)
+		SetBorderPadding(0, 0, 1, 1).
+		SetDrawFunc(func(_ tcell.Screen, _, _, _, _ int) (int, int, int, int) {
+			x, y, width, height := commitInfo.GetInnerRect()
+			if width != c.infoWidth {
+				c.infoWidth = width
+				c.refresh()
+			}
+			return x, y, width, height
+		})
 
 	fileList := tview.NewTreeView()
 
@@ -205,7 +215,20 @@ func (c *client) setupUI() tview.Primitive {
 func (c *client) refresh() {
 	if row := c.commitList.currentItem(); row < len(c.commits) {
 		commit := c.commits[row]
-		c.commitInfo.SetText(fmt.Sprintf("[aqua]%v[-] [gray]%v[-]  [::b]%v[-::-]", tview.Escape(commit.author), commit.date.Format("2006-01-02 15:04:05"), tview.Escape(commit.subject)))
+		text := fmt.Sprintf("[aqua]%v[-] [gray]%v[-]  [::b]%v[-::-]", tview.Escape(commit.author), commit.date.Format("2006-01-02 15:04:05"), tview.Escape(commit.subject))
+		if body := strings.TrimLeft(commit.body, "\r\n"); body != "" {
+			first, _, more := strings.Cut(body, "\n")
+			if c.infoWidth > 4 {
+				if truncate := runewidth.Truncate(first, c.infoWidth-4, ""); truncate != first {
+					first, more = truncate, true
+				}
+			}
+			text += "\n" + tview.Escape(first)
+			if more {
+				text += " [gray]...[-]"
+			}
+		}
+		c.commitInfo.SetText(text)
 	}
 }
 

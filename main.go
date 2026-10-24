@@ -41,15 +41,19 @@ func main() {
 }
 
 type client struct {
-	app        *tview.Application
-	branchList *tview.TreeView
-	commitList *laneView
-	commitInfo *tview.TextView
-	fileList   *tview.TreeView
-	fileDiff   *diffView
+	app *tview.Application
 
-	branches []branch
-	commits  []commit
+	branches   []branch
+	branchList *tview.TreeView
+
+	commits    []commit
+	commitList *laneView
+
+	infoWidth  int
+	commitInfo *tview.TextView
+
+	fileList *tview.TreeView
+	fileDiff *diffView
 }
 
 type branch struct {
@@ -131,7 +135,7 @@ func gitCommits(repo string) ([]commit, error) {
 			author:  parts[i+3],
 			date:    date,
 			subject: strings.TrimRight(parts[i+5], "\r\n"),
-			body:    strings.TrimRight(parts[i+6], "\r\n"),
+			body:    strings.ReplaceAll(strings.TrimRight(parts[i+6], "\r\n"), "\r\n", "\n"),
 		})
 	}
 	return commits, nil
