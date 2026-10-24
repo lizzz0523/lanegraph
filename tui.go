@@ -114,9 +114,9 @@ func (c *client) setupUI() tview.Primitive {
 
 	commitPanel := tview.NewFlex().
 		SetDirection(tview.FlexRow).
-		AddItem(commitList, 0, 1, true).
+		AddItem(commitList, 20, 0, true).
 		AddItem(commitInfo, 4, 0, false).
-		AddItem(commitDetail, 20, 0, false)
+		AddItem(commitDetail, 0, 1, false)
 
 	// 隐藏 root，用 Local / Remote 作为分组标题。
 	localNode := tview.NewTreeNode("Local").
@@ -215,10 +215,10 @@ func (c *client) setupUI() tview.Primitive {
 		}
 		if row, ok := rowOf[c.headHash]; ok {
 			commitList.setCurrentItem(row)
-			c.app.SetFocus(commitList)
 		}
 		if headNode != nil {
 			branchList.SetCurrentNode(headNode)
+			c.app.SetFocus(branchList)
 		}
 		return tview.MouseConsumed, nil
 	})
