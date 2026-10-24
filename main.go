@@ -27,7 +27,16 @@ func main() {
 		log.Fatal(err)
 	}
 
-	tui(branches, commits)
+	a := &app{
+		commits:  commits,
+		branches: branches,
+	}
+	a.setupUI()
+}
+
+type app struct {
+	commits  []commit
+	branches []branch
 }
 
 type commit struct {

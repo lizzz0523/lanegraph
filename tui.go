@@ -7,7 +7,7 @@ import (
 	"github.com/rivo/tview"
 )
 
-func tui(branches []branch, commits []commit) {
+func (a *app) setupUI() {
 	tview.Borders.TopLeft, tview.Borders.TopRight = '╭', '╮'
 	tview.Borders.BottomLeft, tview.Borders.BottomRight = '╰', '╯'
 	tview.Borders.TopLeftFocus, tview.Borders.TopRightFocus = '╭', '╮'
@@ -41,7 +41,7 @@ func tui(branches []branch, commits []commit) {
 		box.SetBorderColor(color).SetTitleColor(color)
 	}
 
-	commitList := newCommitView(listStyle)
+	commitList := newLaneView(listStyle)
 
 	commitList.SetTitle(" commits ").
 		SetBorder(true).
@@ -49,7 +49,7 @@ func tui(branches []branch, commits []commit) {
 		SetFocusFunc(func() { setFocusBorder(commitList.Box, true) }).
 		SetBlurFunc(func() { setFocusBorder(commitList.Box, false) })
 
-	commitList.setLines(renderGraph(commits, computeGraph(commits)))
+	commitList.setLines(renderGraph(a.commits, computeGraph(a.commits)))
 
 	commitInfo := tview.NewTextView()
 
@@ -91,12 +91,12 @@ func tui(branches []branch, commits []commit) {
 		AddChild(remoteNode)
 
 	// commit hash -> graph 行号，用于点击分支后跳转
-	rowOf := make(map[string]int, len(commits))
-	for i, c := range commits {
+	rowOf := make(map[string]int, len(a.commits))
+	for i, c := range a.commits {
 		rowOf[c.hash] = i
 	}
 
-	for _, b := range branches {
+	for _, b := range a.branches {
 		parent := localNode
 		if b.remote {
 			parent = remoteNode
@@ -191,9 +191,9 @@ func tui(branches []branch, commits []commit) {
 	}
 }
 
-// commitView 把视口偏移和选中项分开，使滚轮只滚动内容。
+// laneView 把视口偏移和选中项分开，使滚轮只滚动内容。
 // tview.List 的 Draw 会强制让选中项保持可见，无法做到这一点。
-type commitView struct {
+type laneView struct {
 	*tview.Box
 
 	lines    []string
@@ -203,14 +203,14 @@ type commitView struct {
 	selectedStyle tcell.Style
 }
 
-func newCommitView(selectedStyle tcell.Style) *commitView {
-	return &commitView{
+func newLaneView(selectedStyle tcell.Style) *laneView {
+	return &laneView{
 		Box:           tview.NewBox(),
 		selectedStyle: selectedStyle,
 	}
 }
 
-func (v *commitView) Draw(screen tcell.Screen) {
+func (v *laneView) Draw(screen tcell.Screen) {
 	v.Box.DrawForSubclass(screen, v)
 
 	x, y, width, height := v.GetInnerRect()
@@ -233,7 +233,7 @@ func (v *commitView) Draw(screen tcell.Screen) {
 	}
 }
 
-func (v *commitView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+func (v *laneView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
 	return v.Box.WrapInputHandler(func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
 		if len(v.lines) == 0 {
 			return
@@ -256,7 +256,7 @@ func (v *commitView) InputHandler() func(event *tcell.EventKey, setFocus func(p 
 	})
 }
 
-func (v *commitView) MouseHandler() func(action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive)) (consumed bool, capture tview.Primitive) {
+func (v *laneView) MouseHandler() func(action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive)) (consumed bool, capture tview.Primitive) {
 	return v.Box.WrapMouseHandler(func(action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive)) (consumed bool, capture tview.Primitive) {
 		if !v.InRect(event.Position()) {
 			return false, nil
@@ -287,11 +287,11 @@ func (v *commitView) MouseHandler() func(action tview.MouseAction, event *tcell.
 	})
 }
 
-func (v *commitView) setLines(lines []string) {
+func (v *laneView) setLines(lines []string) {
 	v.lines = lines
 }
 
-func (v *commitView) setCurrentItem(index int) {
+func (v *laneView) setCurrentItem(index int) {
 	if len(v.lines) == 0 {
 		return
 	}
@@ -299,7 +299,7 @@ func (v *commitView) setCurrentItem(index int) {
 	v.ensureVisible()
 }
 
-func (v *commitView) ensureVisible() {
+func (v *laneView) ensureVisible() {
 	_, _, _, height := v.GetInnerRect()
 	if height <= 0 {
 		return
@@ -312,7 +312,7 @@ func (v *commitView) ensureVisible() {
 	v.clampOffset()
 }
 
-func (v *commitView) clampOffset() {
+func (v *laneView) clampOffset() {
 	_, _, _, height := v.GetInnerRect()
 	if height <= 0 {
 		return
@@ -320,7 +320,7 @@ func (v *commitView) clampOffset() {
 	v.offset = min(max(v.offset, 0), max(0, len(v.lines)-height))
 }
 
-func (v *commitView) move(delta int) {
+func (v *laneView) move(delta int) {
 	index := v.selected + delta
 	if delta == 1 && index >= len(v.lines) {
 		index = 0
@@ -330,6 +330,12 @@ func (v *commitView) move(delta int) {
 	v.setCurrentItem(index)
 }
 
-func newDiffView() *tview.Box {
-	return tview.NewBox()
+type diffView struct {
+	*tview.Box
+}
+
+func newDiffView() *diffView {
+	return &diffView{
+		Box: tview.NewBox(),
+	}
 }
