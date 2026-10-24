@@ -5,7 +5,9 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rivo/tview"
 )
@@ -93,13 +95,17 @@ type commit struct {
 	hash    string
 	parents []string
 	refs    string // %D，如 "HEAD -> main, origin/main, tag: v1"
+	author  string
+	date    time.Time
 	subject string
+	body    string
 }
 
 func gitCommits(repo string) ([]commit, error) {
 	// 起点为 HEAD + 本地分支 + 远端分支 + 标签（不含 stash），未合并的分支也会被画出来
-	cmd := exec.Command("git", "log", "--date-order", "--branches",
-		"--remotes", "--tags", "HEAD", "--format=%H%x00%P%x00%D%x00%s")
+	// -z 用 NUL 分隔记录，body 里的换行才不会把一条记录拆成多行
+	cmd := exec.Command("git", "log", "-z", "--date-order", "--branches",
+		"--remotes", "--tags", "HEAD", "--format=%H%x00%P%x00%D%x00%an%x00%ct%x00%s%x00%b")
 	cmd.Dir = repo
 
 	output, err := cmd.Output()
@@ -107,21 +113,25 @@ func gitCommits(repo string) ([]commit, error) {
 		return nil, fmt.Errorf("git log error: %w", err)
 	}
 
+	// 字段和记录都以 NUL 分隔，每 7 段是一个 commit；末尾终止符会多出一个空段
+	parts := strings.Split(string(output), "\x00")
 	var commits []commit
-	for line := range strings.Lines(string(output)) {
-		line = strings.TrimRight(line, "\r\n")
-		if line == "" {
+	for i := 0; i+7 <= len(parts); i += 7 {
+		if parts[i] == "" {
 			continue
 		}
-		parts := strings.Split(line, "\x00")
-		if len(parts) != 4 {
-			continue
+		date := time.Unix(0, 0)
+		if sec, err := strconv.ParseInt(parts[i+4], 10, 64); err == nil {
+			date = time.Unix(sec, 0)
 		}
 		commits = append(commits, commit{
-			hash:    parts[0],
-			parents: strings.Fields(parts[1]),
-			refs:    parts[2],
-			subject: parts[3],
+			hash:    parts[i],
+			parents: strings.Fields(parts[i+1]),
+			refs:    parts[i+2],
+			author:  parts[i+3],
+			date:    date,
+			subject: strings.TrimRight(parts[i+5], "\r\n"),
+			body:    strings.TrimRight(parts[i+6], "\r\n"),
 		})
 	}
 	return commits, nil

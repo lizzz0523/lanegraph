@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -28,6 +30,7 @@ func (c *client) run() error {
 	})
 
 	c.app = app
+	c.refresh()
 
 	return app.Run()
 }
@@ -65,8 +68,9 @@ func (c *client) setupUI() tview.Primitive {
 	}
 
 	commitList := newLaneView(listStyle)
+	commitList.setSelectedFunc(c.refresh)
 
-	commitList.SetTitle(" commits ").
+	commitList.SetTitle(" lanegraph ").
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
 		SetFocusFunc(func() { setFocusBorder(commitList.Box, true) }).
@@ -74,11 +78,13 @@ func (c *client) setupUI() tview.Primitive {
 
 	commitList.setLines(renderGraph(c.commits, computeGraph(c.commits)))
 
-	commitInfo := tview.NewTextView()
+	commitInfo := tview.NewTextView().
+		SetDynamicColors(true)
 
-	commitInfo.SetTitle(" info ").
+	commitInfo.SetTitle(" commit ").
 		SetTitleAlign(tview.AlignLeft).
-		SetBorder(true)
+		SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1)
 
 	fileList := tview.NewTreeView()
 
@@ -88,7 +94,7 @@ func (c *client) setupUI() tview.Primitive {
 
 	fileDiff := newDiffView()
 
-	fileDiff.SetTitle(" /path/to/file ").
+	fileDiff.SetTitle(" diffs ").
 		SetTitleAlign(tview.AlignLeft).
 		SetBorder(true)
 
@@ -196,15 +202,23 @@ func (c *client) setupUI() tview.Primitive {
 	return root
 }
 
+func (c *client) refresh() {
+	if row := c.commitList.currentItem(); row < len(c.commits) {
+		commit := c.commits[row]
+		c.commitInfo.SetText(fmt.Sprintf("[aqua]%v[-] [gray]%v[-]  [::b]%v[-::-]", tview.Escape(commit.author), commit.date.Format("2006-01-02 15:04:05"), tview.Escape(commit.subject)))
+	}
+}
+
 // laneView 把视口偏移和选中项分开，使滚轮只滚动内容。
 // tview.List 的 Draw 会强制让选中项保持可见，无法做到这一点。
 type laneView struct {
 	*tview.Box
 
-	lines    []string
-	offset   int
-	selected int
+	lines   []string
+	offset  int
+	current int
 
+	selected      func()
 	selectedStyle tcell.Style
 }
 
@@ -229,7 +243,7 @@ func (v *laneView) Draw(screen tcell.Screen) {
 		if index >= len(v.lines) {
 			break
 		}
-		if index == v.selected {
+		if index == v.current {
 			for bx := 0; bx < width; bx++ {
 				screen.SetContent(x+bx, y+row, ' ', nil, v.selectedStyle)
 			}
@@ -273,7 +287,8 @@ func (v *laneView) MouseHandler() func(action tview.MouseAction, event *tcell.Ev
 			mx, my := event.Position()
 			if mx >= x && mx < x+width && my >= y && my < y+height {
 				if index := v.offset + my - y; index < len(v.lines) {
-					v.selected = index
+					v.current = index
+					v.selected()
 				}
 			}
 			consumed = true
@@ -294,14 +309,24 @@ func (v *laneView) MouseHandler() func(action tview.MouseAction, event *tcell.Ev
 
 func (v *laneView) setLines(lines []string) {
 	v.lines = lines
+	v.current = min(v.current, max(0, len(lines)-1))
 }
 
 func (v *laneView) setCurrentItem(index int) {
 	if len(v.lines) == 0 {
 		return
 	}
-	v.selected = min(max(index, 0), len(v.lines)-1)
+	v.current = min(max(index, 0), len(v.lines)-1)
 	v.ensureVisible()
+	v.selected()
+}
+
+func (v *laneView) setSelectedFunc(handler func()) {
+	v.selected = handler
+}
+
+func (v *laneView) currentItem() int {
+	return v.current
 }
 
 func (v *laneView) ensureVisible() {
@@ -309,10 +334,10 @@ func (v *laneView) ensureVisible() {
 	if height <= 0 {
 		return
 	}
-	if v.selected < v.offset {
-		v.offset = v.selected
-	} else if v.selected >= v.offset+height {
-		v.offset = v.selected - height + 1
+	if v.current < v.offset {
+		v.offset = v.current
+	} else if v.current >= v.offset+height {
+		v.offset = v.current - height + 1
 	}
 	v.clampOffset()
 }
@@ -326,7 +351,7 @@ func (v *laneView) clampOffset() {
 }
 
 func (v *laneView) move(delta int) {
-	index := v.selected + delta
+	index := v.current + delta
 	if delta == 1 && index >= len(v.lines) {
 		index = 0
 	} else if delta == -1 && index < 0 {
