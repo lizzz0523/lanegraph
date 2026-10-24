@@ -135,6 +135,8 @@ func (c *client) setupUI() tview.Primitive {
 		rowOf[c.hash] = i
 	}
 
+	var headNode *tview.TreeNode
+
 	for _, b := range c.branches {
 		parent := localNode
 		if b.remote {
@@ -148,6 +150,10 @@ func (c *client) setupUI() tview.Primitive {
 					commitList.setCurrentItem(row)
 				}
 			})
+
+		if !b.remote && b.name == c.headRef {
+			headNode = child
+		}
 
 		parent.AddChild(child)
 	}
@@ -195,8 +201,35 @@ func (c *client) setupUI() tview.Primitive {
 		return action, event
 	})
 
+	branchHead := tview.NewTextView().
+		SetText(c.headRef)
+
+	branchHead.SetTitle(" "+c.repoName+" ").
+		SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1)
+
+	// 点击 branch head 定位到 HEAD 提交
+	branchHead.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if action != tview.MouseLeftClick || !branchHead.InRect(event.Position()) {
+			return action, event
+		}
+		if row, ok := rowOf[c.headHash]; ok {
+			commitList.setCurrentItem(row)
+			c.app.SetFocus(commitList)
+		}
+		if headNode != nil {
+			branchList.SetCurrentNode(headNode)
+		}
+		return tview.MouseConsumed, nil
+	})
+
+	branchPanel := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(branchHead, 3, 0, false).
+		AddItem(branchList, 0, 1, false)
+
 	root := tview.NewFlex().
-		AddItem(branchList, 40, 0, false).
+		AddItem(branchPanel, 40, 0, false).
 		AddItem(commitPanel, 0, 1, true)
 
 	// SetRoot 只会对 commitList 触发 focus 回调，branchList 需手动初始化为未聚焦

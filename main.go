@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -31,7 +32,12 @@ func main() {
 		log.Fatal(err)
 	}
 
+	headRef, headHash := gitHeadRef(repo)
+
 	c := &client{
+		repoName: gitRepoName(repo),
+		headRef:  headRef,
+		headHash: headHash,
 		commits:  commits,
 		branches: branches,
 	}
@@ -42,6 +48,10 @@ func main() {
 
 type client struct {
 	app *tview.Application
+
+	repoName string
+	headRef  string
+	headHash string
 
 	branches   []branch
 	branchList *tview.TreeView
@@ -62,20 +72,27 @@ type branch struct {
 	remote bool
 }
 
+func gitOutput(repo string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = repo
+	output, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
 func gitBranches(repo string) ([]branch, error) {
 	// 本地 + 远端分支；按提交时间倒序，最新改动的排在前面
-	cmd := exec.Command("git", "for-each-ref", "--sort=-committerdate",
+	output, err := gitOutput(repo, "for-each-ref", "--sort=-committerdate",
 		"--format=%(refname)%00%(refname:short)%00%(objectname)%00%(symref)",
 		"refs/heads", "refs/remotes")
-	cmd.Dir = repo
-
-	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("git for-each-ref error: %w", err)
 	}
 
 	var branches []branch
-	for line := range strings.Lines(string(output)) {
+	for line := range strings.Lines(output) {
 		line = strings.TrimRight(line, "\r\n")
 		if line == "" {
 			continue
@@ -95,6 +112,37 @@ func gitBranches(repo string) ([]branch, error) {
 	return branches, nil
 }
 
+func gitRepoName(repo string) string {
+	root, err := gitOutput(repo, "rev-parse", "--show-toplevel")
+	if err != nil || root == "" {
+		return filepath.Base(repo)
+	}
+	return filepath.Base(root)
+}
+
+func gitHeadRef(repo string) (string, string) {
+	hash, _ := gitOutput(repo, "rev-parse", "HEAD")
+
+	// HEAD 指向分支时直接显示分支名
+	if ref, err := gitOutput(repo, "symbolic-ref", "--short", "-q", "HEAD"); err == nil && ref != "" {
+		return ref, hash
+	}
+	// detached HEAD：优先显示指向该提交的 tag，其次本地分支
+	for _, pattern := range []string{"refs/tags", "refs/heads"} {
+		if ref, err := gitOutput(repo, "for-each-ref", "--points-at", "HEAD", "--count=1", "--format=%(refname:short)", pattern); err == nil && ref != "" {
+			return ref, hash
+		}
+	}
+	// 没有 ref 可显示时回退到 7 位短 hash
+	if len(hash) > 7 {
+		return hash[:7], hash
+	}
+	if hash != "" {
+		return hash, hash
+	}
+	return "HEAD", ""
+}
+
 type commit struct {
 	hash    string
 	parents []string
@@ -108,17 +156,14 @@ type commit struct {
 func gitCommits(repo string) ([]commit, error) {
 	// 起点为 HEAD + 本地分支 + 远端分支 + 标签（不含 stash），未合并的分支也会被画出来
 	// -z 用 NUL 分隔记录，body 里的换行才不会把一条记录拆成多行
-	cmd := exec.Command("git", "log", "-z", "--date-order", "--branches",
+	output, err := gitOutput(repo, "log", "-z", "--date-order", "--branches",
 		"--remotes", "--tags", "HEAD", "--format=%H%x00%P%x00%D%x00%an%x00%ct%x00%s%x00%b")
-	cmd.Dir = repo
-
-	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("git log error: %w", err)
 	}
 
 	// 字段和记录都以 NUL 分隔，每 7 段是一个 commit；末尾终止符会多出一个空段
-	parts := strings.Split(string(output), "\x00")
+	parts := strings.Split(output, "\x00")
 	var commits []commit
 	for i := 0; i+7 <= len(parts); i += 7 {
 		if parts[i] == "" {
