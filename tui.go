@@ -407,6 +407,13 @@ func (c *client) showFileDiff(node *tview.TreeNode) {
 		c.diffCache = make(map[string]string)
 	}
 	key := c.currentCommit.hash + "\x00" + change.path
+	// TreeView 在 Draw 中可能对同一节点再次触发 changed（鼠标点选时尤其如此）。
+	// 若在 diff 已绘制后再 SetText，会清空 TextView 的行索引，下一次滚轮就会
+	// 误判为已到底并打开 trackEnd，导致视口直接跳到末尾。同一份 diff 不重复渲染。
+	if key == c.diffShown {
+		return
+	}
+	c.diffShown = key
 	if text, ok := c.diffCache[key]; ok {
 		c.setFileDiff(change, text)
 		return
@@ -438,6 +445,7 @@ func (c *client) setFileDiff(change fileChange, text string) {
 }
 
 func (c *client) clearFileDiff(message string) {
+	c.diffShown = ""
 	c.fileDiff.SetTitle(" file diff ")
 	c.fileDiff.SetText("[gray]" + tview.Escape(message) + "[-]")
 	c.fileDiff.ScrollToBeginning()

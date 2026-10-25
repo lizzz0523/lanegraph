@@ -73,6 +73,7 @@ type client struct {
 
 	fileDiff  *tview.TextView
 	diffCache map[string]string
+	diffShown string // 当前已渲染 diff 的 key（commit hash + path），用于跳过重复渲染
 
 	currentCommit commit
 	selectedStyle tcell.Style
