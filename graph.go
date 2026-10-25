@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/rivo/tview"
 )
@@ -139,6 +140,40 @@ func laneColor(lane int) string {
 	return laneColors[lane%len(laneColors)]
 }
 
+// 作者色板与 lane 色板分开，避免作者的字母颜色和左侧 graph 线条混淆。
+var authorColors = []string{
+	"[#ff8700::b]",
+	"[#5fd7ff::b]",
+	"[#d787ff::b]",
+	"[#5faf5f::b]",
+	"[#ff87d7::b]",
+	"[#ffd75f::b]",
+	"[#87afff::b]",
+	"[#d7af87::b]",
+}
+
+// authorColorMap 按 commit 列表中作者首次出现的顺序分配颜色，
+// 保证同一作者在整个列表里颜色一致。
+func authorColorMap(commits []commit) map[string]string {
+	colors := make(map[string]string, len(commits))
+	for _, commit := range commits {
+		if _, ok := colors[commit.author]; ok {
+			continue
+		}
+		colors[commit.author] = authorColors[len(colors)%len(authorColors)]
+	}
+	return colors
+}
+
+// authorInitial 返回作者名的首字符并转为大写，空名回退为 "?"。
+func authorInitial(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "?"
+	}
+	return string(unicode.ToUpper([]rune(name)[0]))
+}
+
 type cell struct {
 	up, down, left, right bool
 	vColor, hColor        string // 竖线颜色 / 横线颜色
@@ -184,8 +219,9 @@ func (c cell) glyphs() (line, conn string) {
 }
 
 func renderGraph(commits []commit, graph graph) []string {
-	lines := make([]string, 0, len(graph.rows))
+	colorOf := authorColorMap(commits)
 
+	lines := make([]string, 0, len(graph.rows))
 	for r, row := range graph.rows {
 		var out strings.Builder
 		cells := make([]cell, graph.laneCount)
@@ -259,10 +295,12 @@ func renderGraph(commits []commit, graph graph) []string {
 			hash = hash[:7]
 		}
 		fmt.Fprintf(&out, " %s%s%s", colorHash, hash, colorReset)
+		fmt.Fprintf(&out, " %s%s%s", colorOf[commit.author], tview.Escape(authorInitial(commit.author)), colorReset)
 		if commit.refs != "" {
 			fmt.Fprintf(&out, " %s(%s)%s", colorRefs, tview.Escape(commit.refs), colorReset)
 		}
 		fmt.Fprintf(&out, " %s", tview.Escape(commit.subject))
+
 		lines = append(lines, out.String())
 	}
 

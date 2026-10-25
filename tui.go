@@ -1,13 +1,59 @@
 package main
 
 import (
-	"log"
+	"fmt"
+	"strings"
 
 	"github.com/gdamore/tcell/v2"
+	"github.com/mattn/go-runewidth"
 	"github.com/rivo/tview"
 )
 
-func tui(branches []branch, commits []commit) {
+func (c *client) run() error {
+	app := tview.NewApplication().
+		SetRoot(c.setupUI(), true).
+		EnableMouse(true)
+
+	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch {
+		case event.Key() == tcell.KeyCtrlQ || (event.Key() == tcell.KeyRune && event.Rune() == 'q'):
+			app.Stop()
+			return nil
+		case event.Key() == tcell.KeyTab:
+			switch {
+			case c.branchList.HasFocus():
+				app.SetFocus(c.commitList)
+			case c.commitList.HasFocus():
+				app.SetFocus(c.fileList)
+			case c.fileList.HasFocus():
+				app.SetFocus(c.fileDiff)
+			default:
+				app.SetFocus(c.branchList)
+			}
+			return nil
+		case event.Key() == tcell.KeyBacktab:
+			switch {
+			case c.branchList.HasFocus():
+				app.SetFocus(c.fileDiff)
+			case c.commitList.HasFocus():
+				app.SetFocus(c.branchList)
+			case c.fileList.HasFocus():
+				app.SetFocus(c.commitList)
+			default:
+				app.SetFocus(c.fileList)
+			}
+			return nil
+		}
+		return event
+	})
+
+	c.app = app
+	c.refresh()
+
+	return app.Run()
+}
+
+func (c *client) setupUI() tview.Primitive {
 	tview.Borders.TopLeft, tview.Borders.TopRight = '╭', '╮'
 	tview.Borders.BottomLeft, tview.Borders.BottomRight = '╰', '╯'
 	tview.Borders.TopLeftFocus, tview.Borders.TopRightFocus = '╭', '╮'
@@ -15,10 +61,8 @@ func tui(branches []branch, commits []commit) {
 	tview.Borders.HorizontalFocus = tview.Borders.Horizontal
 	tview.Borders.VerticalFocus = tview.Borders.Vertical
 
-	var app *tview.Application
-
 	// 灰色底，替代默认选中态的白底
-	listStyle := tcell.StyleDefault.
+	selectedStyle := tcell.StyleDefault.
 		Foreground(tview.Styles.PrimaryTextColor). // 与未选中行一致，不再反色
 		Background(tcell.NewHexColor(0x4a4a4a))
 
@@ -41,15 +85,104 @@ func tui(branches []branch, commits []commit) {
 		box.SetBorderColor(color).SetTitleColor(color)
 	}
 
-	commitList := newCommitView(listStyle)
+	setFolderExpanded := func(node *tview.TreeNode, expanded bool) {
+		node.SetExpanded(expanded)
+		if name, ok := node.GetReference().(string); ok {
+			node.SetText(folderLabel(name, expanded))
+		}
+	}
 
-	commitList.SetTitle(" commits ").
+	commitList := newLaneView(selectedStyle)
+	commitList.setSelectedFunc(c.refresh)
+
+	commitList.SetTitle(" lanegraph ").
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
 		SetFocusFunc(func() { setFocusBorder(commitList.Box, true) }).
 		SetBlurFunc(func() { setFocusBorder(commitList.Box, false) })
 
-	commitList.setLines(renderGraph(commits, computeGraph(commits)))
+	commitList.setLines(renderGraph(c.commits, computeGraph(c.commits)))
+
+	commitInfo := tview.NewTextView().
+		SetWrap(false).
+		SetDynamicColors(true)
+
+	commitInfo.SetTitle(" commit ").
+		SetTitleAlign(tview.AlignLeft).
+		SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1).
+		SetDrawFunc(func(_ tcell.Screen, _, _, _, _ int) (int, int, int, int) {
+			x, y, width, height := commitInfo.GetInnerRect()
+			if width != c.infoWidth {
+				c.infoWidth = width
+				c.refresh()
+			}
+			return x, y, width, height
+		})
+
+	fileRoot := buildFileTree(nil, selectedStyle)
+
+	fileList := tview.NewTreeView().
+		SetRoot(fileRoot).
+		SetTopLevel(1).
+		SetGraphics(false)
+
+	fileList.SetTitle(" file changes ").
+		SetTitleAlign(tview.AlignLeft).
+		SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1).
+		SetFocusFunc(func() { setFocusBorder(fileList.Box, true) }).
+		SetBlurFunc(func() { setFocusBorder(fileList.Box, false) })
+
+	fileList.SetSelectedFunc(func(node *tview.TreeNode) {
+		if len(node.GetChildren()) == 0 {
+			c.showFileDiff(node)
+			return
+		}
+		setFolderExpanded(node, !node.IsExpanded())
+	})
+
+	fileList.SetChangedFunc(func(node *tview.TreeNode) {
+		c.showFileDiff(node)
+	})
+
+	// 长行不换行，交给 TextView 横向滚动
+	fileDiff := tview.NewTextView().
+		SetDynamicColors(true).
+		SetScrollable(true).
+		SetWrap(false).
+		SetText("[gray]select a file[-]")
+
+	fileDiff.SetTitle(" file diff ").
+		SetTitleAlign(tview.AlignLeft).
+		SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1).
+		SetFocusFunc(func() { setFocusBorder(fileDiff.Box, true) }).
+		SetBlurFunc(func() { setFocusBorder(fileDiff.Box, false) })
+
+	// 滚轮滚动 diff 时同步聚焦，边框状态保持一致
+	fileDiff.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if !fileDiff.InRect(event.Position()) {
+			return action, event
+		}
+		switch action {
+		case tview.MouseScrollUp, tview.MouseScrollDown:
+			if !fileDiff.HasFocus() {
+				c.app.SetFocus(fileDiff)
+			}
+		}
+		return action, event
+	})
+
+	commitDetail := tview.NewFlex().
+		AddItem(fileList, 40, 1, false).
+		AddItem(fileDiff, 0, 1, false)
+
+	commitPanel := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(commitList, 20, 0, true).
+		AddItem(commitInfo, 4, 0, false).
+		AddItem(commitDetail, 0, 1, false)
 
 	// 隐藏 root，用 Local / Remote 作为分组标题。
 	localNode := tview.NewTreeNode("Local").
@@ -63,25 +196,30 @@ func tui(branches []branch, commits []commit) {
 		AddChild(remoteNode)
 
 	// commit hash -> graph 行号，用于点击分支后跳转
-	rowOf := make(map[string]int, len(commits))
-	for i, c := range commits {
+	rowOf := make(map[string]int, len(c.commits))
+	for i, c := range c.commits {
 		rowOf[c.hash] = i
 	}
 
-	for _, b := range branches {
+	var headNode *tview.TreeNode
+
+	for _, b := range c.branches {
 		parent := localNode
 		if b.remote {
 			parent = remoteNode
 		}
 
 		child := tview.NewTreeNode(b.name).
-			SetSelectedTextStyle(listStyle).
+			SetSelectedTextStyle(selectedStyle).
 			SetSelectedFunc(func() {
 				if row, ok := rowOf[b.hash]; ok {
 					commitList.setCurrentItem(row)
 				}
-				// app.SetFocus(commitList)
 			})
+
+		if !b.remote && b.name == c.headRef {
+			headNode = child
+		}
 
 		parent.AddChild(child)
 	}
@@ -118,71 +256,214 @@ func tui(branches []branch, commits []commit) {
 		switch action {
 		case tview.MouseLeftDown:
 			if !branchList.HasFocus() {
-				app.SetFocus(branchList)
+				c.app.SetFocus(branchList)
 			}
 			return tview.MouseMove, event
 		case tview.MouseScrollUp, tview.MouseScrollDown:
 			if !branchList.HasFocus() {
-				app.SetFocus(branchList)
+				c.app.SetFocus(branchList)
 			}
 		}
 		return action, event
 	})
 
-	root := tview.NewFlex().
-		AddItem(branchList, 40, 0, false).
-		AddItem(commitList, 0, 1, true)
+	branchHead := tview.NewTextView().
+		SetText(c.headRef)
 
-	// SetRoot 只会对 commitList 触发 focus 回调，branchList 需手动初始化为未聚焦
-	setFocusBorder(commitList.Box, true)
-	setFocusBorder(branchList.Box, false)
+	branchHead.SetTitle(" "+c.repoName+" ").
+		SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1)
 
-	app = tview.NewApplication().
-		EnableMouse(true).
-		SetRoot(root, true)
-
-	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		switch {
-		case event.Key() == tcell.KeyCtrlQ || (event.Key() == tcell.KeyRune && event.Rune() == 'q'):
-			app.Stop()
-			return nil
-		case event.Key() == tcell.KeyTab || event.Key() == tcell.KeyBacktab:
-			// 只有两个面板，Tab 与 Shift-Tab 都是互相切换
-			if commitList.HasFocus() {
-				app.SetFocus(branchList)
-			} else {
-				app.SetFocus(commitList)
-			}
-			return nil
+	// 点击 branch head 定位到 HEAD 提交
+	branchHead.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if action != tview.MouseLeftClick || !branchHead.InRect(event.Position()) {
+			return action, event
 		}
-		return event
+		if row, ok := rowOf[c.headHash]; ok {
+			commitList.setCurrentItem(row)
+		}
+		if headNode != nil {
+			branchList.SetCurrentNode(headNode)
+			c.app.SetFocus(branchList)
+		}
+		return tview.MouseConsumed, nil
 	})
 
-	if err := app.Run(); err != nil {
-		log.Fatal(err)
+	branchPanel := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(branchHead, 3, 0, false).
+		AddItem(branchList, 0, 1, false)
+
+	root := tview.NewFlex().
+		AddItem(branchPanel, 40, 0, false).
+		AddItem(commitPanel, 0, 1, true)
+
+	// SetRoot 只会对 commitList 触发 focus 回调，branchList 需手动初始化为未聚焦
+	setFocusBorder(branchList.Box, false)
+	setFocusBorder(commitList.Box, true)
+	setFocusBorder(fileList.Box, false)
+	setFocusBorder(fileDiff.Box, false)
+
+	c.branchList = branchList
+	c.commitList = commitList
+	c.commitInfo = commitInfo
+	c.fileList = fileList
+	c.fileDiff = fileDiff
+	c.selectedStyle = selectedStyle
+
+	return root
+}
+
+func (c *client) refresh() {
+	if row := c.commitList.currentItem(); row < len(c.commits) {
+		commit := c.commits[row]
+		text := fmt.Sprintf("[aqua]%v[-] [gray]%v[-]  [::b]%v[-::-]", tview.Escape(commit.author), commit.date.Format("2006-01-02 15:04:05"), tview.Escape(commit.subject))
+		if body := strings.TrimLeft(commit.body, "\r\n"); body != "" {
+			first, _, more := strings.Cut(body, "\n")
+			if c.infoWidth > 4 {
+				if truncate := runewidth.Truncate(first, c.infoWidth-4, ""); truncate != first {
+					first, more = truncate, true
+				}
+			}
+			text += "\n" + tview.Escape(first)
+			if more {
+				text += " [gray]...[-]"
+			}
+		}
+		c.commitInfo.SetText(text)
+		c.refreshFiles(commit)
 	}
 }
 
-// commitView 把视口偏移和选中项分开，使滚轮只滚动内容。
+// refreshFiles 在选中的 commit 变化时重建文件变更树。
+func (c *client) refreshFiles(commit commit) {
+	c.currentCommit = commit
+	if commit.hash == c.filesHash {
+		return
+	}
+
+	changes, ok := c.fileCache[commit.hash]
+	var err error
+	if !ok {
+		changes, err = gitCommitFiles(c.repo, commit)
+		if err == nil {
+			if c.fileCache == nil {
+				c.fileCache = make(map[string][]fileChange)
+			}
+			c.fileCache[commit.hash] = changes
+		}
+	}
+
+	title := " file changes "
+	var fileRoot *tview.TreeNode
+	switch {
+	case err != nil:
+		fileRoot = tview.NewTreeNode("")
+		fileRoot.AddChild(tview.NewTreeNode("[red]error[-] " + tview.Escape(err.Error())))
+	case len(changes) == 0:
+		title = " file changes (0) "
+		fileRoot = tview.NewTreeNode("")
+		fileRoot.AddChild(tview.NewTreeNode("[gray](no changes)[-]"))
+	default:
+		title = fmt.Sprintf(" file changes (%d) ", len(changes))
+		fileRoot = buildFileTree(changes, c.selectedStyle)
+	}
+	if err == nil {
+		c.filesHash = commit.hash
+	} else {
+		c.filesHash = "" // 下次刷新/重新选中时重试
+	}
+	c.fileList.SetTitle(title)
+	c.fileList.SetRoot(fileRoot)
+
+	switch {
+	case err != nil:
+		c.clearFileDiff("failed to load file changes")
+	case len(changes) == 0:
+		c.clearFileDiff("no changes")
+	default:
+		first := firstFileNode(fileRoot)
+		if first == nil {
+			c.clearFileDiff("select a file")
+			return
+		}
+		c.fileList.SetCurrentNode(first)
+		c.showFileDiff(first)
+	}
+}
+
+// showFileDiff 渲染文件树当前节点的 diff；目录等非文件节点只显示提示。
+func (c *client) showFileDiff(node *tview.TreeNode) {
+	change, ok := node.GetReference().(fileChange)
+	if !ok {
+		// 目录节点提示选择文件；错误/无变更占位节点保留 refreshFiles 设置的内容
+		if _, isFolder := node.GetReference().(string); isFolder {
+			c.clearFileDiff("select a file")
+		}
+		return
+	}
+
+	if c.diffCache == nil {
+		c.diffCache = make(map[string]string)
+	}
+	key := c.currentCommit.hash + "\x00" + change.path
+	if text, ok := c.diffCache[key]; ok {
+		c.setFileDiff(change, text)
+		return
+	}
+
+	output, err := gitFileDiff(c.repo, c.currentCommit, change)
+	var text string
+	switch {
+	case err != nil && output == "":
+		text = "[red]error[-] " + tview.Escape(err.Error())
+	case err != nil:
+		// git-delta 默认可用；万一执行失败，回退到原始 diff 的简单着色
+		text = buildPlainDiff(output)
+	default:
+		text = buildDeltaDiff(output)
+	}
+	if text == "" {
+		text = "[gray](no diff)[-]"
+	}
+
+	c.diffCache[key] = text
+	c.setFileDiff(change, text)
+}
+
+func (c *client) setFileDiff(change fileChange, text string) {
+	c.fileDiff.SetTitle(" file diff: " + tview.Escape(change.path) + " ")
+	c.fileDiff.SetText(text)
+	c.fileDiff.ScrollToBeginning()
+}
+
+func (c *client) clearFileDiff(message string) {
+	c.fileDiff.SetTitle(" file diff ")
+	c.fileDiff.SetText("[gray]" + tview.Escape(message) + "[-]")
+	c.fileDiff.ScrollToBeginning()
+}
+
+// laneView 把视口偏移和选中项分开，使滚轮只滚动内容。
 // tview.List 的 Draw 会强制让选中项保持可见，无法做到这一点。
-type commitView struct {
+type laneView struct {
 	*tview.Box
 
-	lines    []string
-	offset   int
-	selected int
+	lines   []string
+	offset  int
+	current int
 
+	selected      func()
 	selectedStyle tcell.Style
 }
 
-func newCommitView(selectedStyle tcell.Style) *commitView {
-	return &commitView{
+func newLaneView(selectedStyle tcell.Style) *laneView {
+	return &laneView{
 		Box:           tview.NewBox(),
 		selectedStyle: selectedStyle,
 	}
 }
 
-func (v *commitView) Draw(screen tcell.Screen) {
+func (v *laneView) Draw(screen tcell.Screen) {
 	v.Box.DrawForSubclass(screen, v)
 
 	x, y, width, height := v.GetInnerRect()
@@ -196,7 +477,7 @@ func (v *commitView) Draw(screen tcell.Screen) {
 		if index >= len(v.lines) {
 			break
 		}
-		if index == v.selected {
+		if index == v.current {
 			for bx := 0; bx < width; bx++ {
 				screen.SetContent(x+bx, y+row, ' ', nil, v.selectedStyle)
 			}
@@ -205,7 +486,7 @@ func (v *commitView) Draw(screen tcell.Screen) {
 	}
 }
 
-func (v *commitView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+func (v *laneView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
 	return v.Box.WrapInputHandler(func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
 		if len(v.lines) == 0 {
 			return
@@ -228,7 +509,17 @@ func (v *commitView) InputHandler() func(event *tcell.EventKey, setFocus func(p 
 	})
 }
 
-func (v *commitView) MouseHandler() func(action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive)) (consumed bool, capture tview.Primitive) {
+func (v *laneView) move(delta int) {
+	index := v.current + delta
+	if delta == 1 && index >= len(v.lines) {
+		index = 0
+	} else if delta == -1 && index < 0 {
+		index = len(v.lines) - 1
+	}
+	v.setCurrentItem(index)
+}
+
+func (v *laneView) MouseHandler() func(action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive)) (consumed bool, capture tview.Primitive) {
 	return v.Box.WrapMouseHandler(func(action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive)) (consumed bool, capture tview.Primitive) {
 		if !v.InRect(event.Position()) {
 			return false, nil
@@ -240,7 +531,8 @@ func (v *commitView) MouseHandler() func(action tview.MouseAction, event *tcell.
 			mx, my := event.Position()
 			if mx >= x && mx < x+width && my >= y && my < y+height {
 				if index := v.offset + my - y; index < len(v.lines) {
-					v.selected = index
+					v.current = index
+					v.selected()
 				}
 			}
 			consumed = true
@@ -259,45 +551,45 @@ func (v *commitView) MouseHandler() func(action tview.MouseAction, event *tcell.
 	})
 }
 
-func (v *commitView) setLines(lines []string) {
+func (v *laneView) setLines(lines []string) {
 	v.lines = lines
+	v.current = min(v.current, max(0, len(lines)-1))
 }
 
-func (v *commitView) setCurrentItem(index int) {
+func (v *laneView) setCurrentItem(index int) {
 	if len(v.lines) == 0 {
 		return
 	}
-	v.selected = min(max(index, 0), len(v.lines)-1)
+	v.current = min(max(index, 0), len(v.lines)-1)
 	v.ensureVisible()
+	v.selected()
 }
 
-func (v *commitView) ensureVisible() {
+func (v *laneView) setSelectedFunc(handler func()) {
+	v.selected = handler
+}
+
+func (v *laneView) currentItem() int {
+	return v.current
+}
+
+func (v *laneView) ensureVisible() {
 	_, _, _, height := v.GetInnerRect()
 	if height <= 0 {
 		return
 	}
-	if v.selected < v.offset {
-		v.offset = v.selected
-	} else if v.selected >= v.offset+height {
-		v.offset = v.selected - height + 1
+	if v.current < v.offset {
+		v.offset = v.current
+	} else if v.current >= v.offset+height {
+		v.offset = v.current - height + 1
 	}
 	v.clampOffset()
 }
 
-func (v *commitView) clampOffset() {
+func (v *laneView) clampOffset() {
 	_, _, _, height := v.GetInnerRect()
 	if height <= 0 {
 		return
 	}
 	v.offset = min(max(v.offset, 0), max(0, len(v.lines)-height))
-}
-
-func (v *commitView) move(delta int) {
-	index := v.selected + delta
-	if delta == 1 && index >= len(v.lines) {
-		index = 0
-	} else if delta == -1 && index < 0 {
-		index = len(v.lines) - 1
-	}
-	v.setCurrentItem(index)
 }
