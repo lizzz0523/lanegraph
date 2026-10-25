@@ -61,9 +61,9 @@ func (c *client) setupUI() tview.Primitive {
 	tview.Borders.HorizontalFocus = tview.Borders.Horizontal
 	tview.Borders.VerticalFocus = tview.Borders.Vertical
 
-	// 灰色底，替代默认选中态的白底
+	// 选中态用灰底代替 tview 默认的白底反色；前景色与未选中行一致
 	selectedStyle := tcell.StyleDefault.
-		Foreground(tview.Styles.PrimaryTextColor). // 与未选中行一致，不再反色
+		Foreground(tview.Styles.PrimaryTextColor).
 		Background(tcell.NewHexColor(0x4a4a4a))
 
 	headerStyle := tcell.StyleDefault.
@@ -76,7 +76,6 @@ func (c *client) setupUI() tview.Primitive {
 		Background(tcell.ColorNone).
 		Bold(true)
 
-	// 聚焦时高亮边框与标题
 	setFocusBorder := func(box *tview.Box, focused bool) {
 		color := tcell.ColorGray
 		if focused {
@@ -146,7 +145,6 @@ func (c *client) setupUI() tview.Primitive {
 		c.showFileDiff(node)
 	})
 
-	// 长行不换行，交给 TextView 横向滚动
 	fileDiff := tview.NewTextView().
 		SetDynamicColors(true).
 		SetScrollable(true).
@@ -274,7 +272,6 @@ func (c *client) setupUI() tview.Primitive {
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1)
 
-	// 点击 branch head 定位到 HEAD 提交
 	branchHead.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
 		if action != tview.MouseLeftClick || !branchHead.InRect(event.Position()) {
 			return action, event
@@ -335,7 +332,6 @@ func (c *client) refresh() {
 	}
 }
 
-// refreshFiles 在选中的 commit 变化时重建文件变更树。
 func (c *client) refreshFiles(commit commit) {
 	c.currentCommit = commit
 	if commit.hash == c.filesHash {
@@ -392,7 +388,6 @@ func (c *client) refreshFiles(commit commit) {
 	}
 }
 
-// showFileDiff 渲染文件树当前节点的 diff；目录等非文件节点只显示提示。
 func (c *client) showFileDiff(node *tview.TreeNode) {
 	change, ok := node.GetReference().(fileChange)
 	if !ok {

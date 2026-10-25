@@ -6,7 +6,6 @@ import (
 	"strings"
 )
 
-// ansiStyle 记录 delta 输出中的 SGR 状态，用于生成 tview 颜色标签。
 type ansiStyle struct {
 	fg, bg             string
 	bold, dim, italic  bool
@@ -59,7 +58,7 @@ func (s *ansiStyle) tag() string {
 	return "[" + fg + ":" + bg + ":" + string(attrs[:n]) + "]"
 }
 
-// consumeEscape 处理一个转义序列，返回消耗的字节数；SGR 会更新 style。
+// consumeEscape 返回消耗的字节数；SGR 会就地更新 style。
 func consumeEscape(s string, style *ansiStyle) int {
 	if len(s) < 2 {
 		return len(s)
@@ -94,7 +93,6 @@ func consumeEscape(s string, style *ansiStyle) int {
 	}
 }
 
-// applySGR 按顺序应用 CSI m 的参数。
 func applySGR(params string, style *ansiStyle) {
 	if params == "" {
 		*style = ansiStyle{}
@@ -173,7 +171,6 @@ var ansiPalette = [16]string{
 
 var colorCube = [6]int{0, 95, 135, 175, 215, 255}
 
-// paletteHex 把 xterm 256 色索引转成 #rrggbb。
 func paletteHex(index int) string {
 	switch {
 	case index < 16:

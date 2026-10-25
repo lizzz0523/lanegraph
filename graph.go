@@ -122,7 +122,7 @@ func ensureLen(lanes []string, idx int) []string {
 }
 
 const (
-	colorReset = "[-::-]" // 同时重置前景色和属性，否则 refs 的粗体会延续到 subject
+	colorReset = "[-::-]" // 重置前景色、背景色和属性，否则 refs 的粗体会延续到 subject
 	colorHash  = "[yellow]"
 	colorRefs  = "[aqua::b]"
 )
@@ -165,7 +165,6 @@ func authorColorMap(commits []commit) map[string]string {
 	return colors
 }
 
-// authorInitial 返回作者名的首字符并转为大写，空名回退为 "?"。
 func authorInitial(name string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -176,10 +175,10 @@ func authorInitial(name string) string {
 
 type cell struct {
 	up, down, left, right bool
-	vColor, hColor        string // 竖线颜色 / 横线颜色
+	vColor, hColor        string
 }
 
-// glyphs 返回 cell 的线条字符和其右侧的连接字符，规则基本与 lazygit 一致：横线穿过竖线时竖线优先；
+// glyphs 返回 cell 的线条字符和其右侧的连接字符，规则参考 lazygit：横线穿过竖线时竖线优先；
 // 边汇入一条已存在的 lane 时用 ┤/├ 表示汇合点
 func (c cell) glyphs() (line, conn string) {
 	conn = " "

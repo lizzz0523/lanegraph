@@ -208,14 +208,13 @@ func gitCommits(repo string) ([]commit, error) {
 	return commits, nil
 }
 
-// fileChange 表示一个 commit 中单个文件的变更。
 type fileChange struct {
 	status  string // git name-status，如 A、M、D、R100
-	path    string // 变更后的路径
-	oldPath string // 重命名/复制时的原路径
+	path    string
+	oldPath string
 }
 
-// gitCommitFiles 返回 commit 相对第一个 parent 的文件变更；根提交直接展示其内容。
+// gitCommitFiles 相对第一个 parent 计算文件变更；根提交没有 parent，只能把全部文件视为新增。
 func gitCommitFiles(repo string, commit commit) ([]fileChange, error) {
 	var args []string
 	if len(commit.parents) > 0 {
@@ -254,8 +253,8 @@ func gitCommitFiles(repo string, commit commit) ([]fileChange, error) {
 	return changes, nil
 }
 
-// gitFileDiff 返回单个文件在 commit 中相对第一个 parent 的 diff，并交给 git-delta 着色。
-// delta 执行失败时返回未着色的原始 diff，调用方可以回退到 buildPlainDiff。
+// gitFileDiff 相对第一个 parent 计算单个文件的 diff，并交给 git-delta 着色。
+// git-delta 失败时返回原始 diff，由调用方回退到 buildPlainDiff。
 func gitFileDiff(repo string, commit commit, change fileChange) (string, error) {
 	var args []string
 	if len(commit.parents) > 0 {

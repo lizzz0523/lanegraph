@@ -47,7 +47,6 @@ func fileLabel(name string, status string) string {
 	return fmt.Sprintf("%s%s[-] %s", changeColor(status), changeLabel(status), tview.Escape(name))
 }
 
-// buildFileTree 按目录层级把文件变更组织成树。
 func buildFileTree(changes []fileChange, selectedStyle tcell.Style) *tview.TreeNode {
 	rootNode := tview.NewTreeNode("")
 
@@ -87,7 +86,7 @@ func buildFileTree(changes []fileChange, selectedStyle tcell.Style) *tview.TreeN
 	return rootNode
 }
 
-// sortFoldersFirst 让同一层里的目录排在文件前面，组内保持原有顺序。
+// sortFoldersFirst 使用稳定排序，保证同一层内的原有顺序不变。
 func sortFoldersFirst(node *tview.TreeNode) {
 	children := node.GetChildren()
 	sort.SliceStable(children, func(i, j int) bool {
@@ -102,7 +101,6 @@ func sortFoldersFirst(node *tview.TreeNode) {
 	}
 }
 
-// firstFileNode 返回树中第一个文件节点，用于刷新后默认预览。
 func firstFileNode(node *tview.TreeNode) *tview.TreeNode {
 	for _, child := range node.GetChildren() {
 		if _, ok := child.GetReference().(fileChange); ok {
@@ -115,10 +113,9 @@ func firstFileNode(node *tview.TreeNode) *tview.TreeNode {
 	return nil
 }
 
-// buildDeltaDiff 把 git-delta 的 ANSI 输出转换成 tview 可识别的颜色标签。
 func buildDeltaDiff(output string) string {
 	output = strings.ReplaceAll(output, "\r", "")
-	// delta 会在文件头前多输出一个空行；末尾换行会在 TextView 中多出一行
+	// delta 输出首尾可能带空行；末尾空行会在 TextView 中多出一行
 	output = strings.Trim(output, "\n")
 
 	var out strings.Builder
@@ -156,7 +153,7 @@ func buildDeltaDiff(output string) string {
 	return out.String()
 }
 
-// buildPlainDiff 在 git-delta 不可用时，为 git 原始 diff 提供简单着色。
+// buildPlainDiff 是 git-delta 不可用时的兜底着色。
 func buildPlainDiff(diff string) string {
 	if diff == "" {
 		return ""
