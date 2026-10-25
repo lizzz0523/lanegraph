@@ -19,12 +19,28 @@ func (c *client) run() error {
 		case event.Key() == tcell.KeyCtrlQ || (event.Key() == tcell.KeyRune && event.Rune() == 'q'):
 			app.Stop()
 			return nil
-		case event.Key() == tcell.KeyTab || event.Key() == tcell.KeyBacktab:
-			// 只有两个面板，Tab 与 Shift-Tab 都是互相切换
-			if c.commitList.HasFocus() {
-				app.SetFocus(c.branchList)
-			} else {
+		case event.Key() == tcell.KeyTab:
+			switch {
+			case c.branchList.HasFocus():
 				app.SetFocus(c.commitList)
+			case c.commitList.HasFocus():
+				app.SetFocus(c.fileList)
+			case c.fileList.HasFocus():
+				app.SetFocus(c.fileDiff)
+			default:
+				app.SetFocus(c.branchList)
+			}
+			return nil
+		case event.Key() == tcell.KeyBacktab:
+			switch {
+			case c.branchList.HasFocus():
+				app.SetFocus(c.fileDiff)
+			case c.commitList.HasFocus():
+				app.SetFocus(c.branchList)
+			case c.fileList.HasFocus():
+				app.SetFocus(c.commitList)
+			default:
+				app.SetFocus(c.fileList)
 			}
 			return nil
 		}
@@ -114,7 +130,9 @@ func (c *client) setupUI() tview.Primitive {
 	fileList.SetTitle(" file changes ").
 		SetTitleAlign(tview.AlignLeft).
 		SetBorder(true).
-		SetBorderPadding(0, 0, 1, 1)
+		SetBorderPadding(0, 0, 1, 1).
+		SetFocusFunc(func() { setFocusBorder(fileList.Box, true) }).
+		SetBlurFunc(func() { setFocusBorder(fileList.Box, false) })
 
 	fileList.SetSelectedFunc(func(node *tview.TreeNode) {
 		if len(node.GetChildren()) == 0 {
@@ -138,7 +156,23 @@ func (c *client) setupUI() tview.Primitive {
 	fileDiff.SetTitle(" file diff ").
 		SetTitleAlign(tview.AlignLeft).
 		SetBorder(true).
-		SetBorderPadding(0, 0, 1, 1)
+		SetBorderPadding(0, 0, 1, 1).
+		SetFocusFunc(func() { setFocusBorder(fileDiff.Box, true) }).
+		SetBlurFunc(func() { setFocusBorder(fileDiff.Box, false) })
+
+	// 滚轮滚动 diff 时同步聚焦，边框状态保持一致
+	fileDiff.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if !fileDiff.InRect(event.Position()) {
+			return action, event
+		}
+		switch action {
+		case tview.MouseScrollUp, tview.MouseScrollDown:
+			if !fileDiff.HasFocus() {
+				c.app.SetFocus(fileDiff)
+			}
+		}
+		return action, event
+	})
 
 	commitDetail := tview.NewFlex().
 		AddItem(fileList, 40, 1, false).
@@ -267,6 +301,8 @@ func (c *client) setupUI() tview.Primitive {
 	// SetRoot 只会对 commitList 触发 focus 回调，branchList 需手动初始化为未聚焦
 	setFocusBorder(branchList.Box, false)
 	setFocusBorder(commitList.Box, true)
+	setFocusBorder(fileList.Box, false)
+	setFocusBorder(fileDiff.Box, false)
 
 	c.branchList = branchList
 	c.commitList = commitList
