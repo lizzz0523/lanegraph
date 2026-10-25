@@ -66,12 +66,6 @@ type client struct {
 	fileDiff *diffView
 }
 
-type branch struct {
-	name   string
-	hash   string
-	remote bool
-}
-
 func gitOutput(repo string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = repo
@@ -80,36 +74,6 @@ func gitOutput(repo string, args ...string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(output)), nil
-}
-
-func gitBranches(repo string) ([]branch, error) {
-	// 本地 + 远端分支；按提交时间倒序，最新改动的排在前面
-	output, err := gitOutput(repo, "for-each-ref", "--sort=-committerdate",
-		"--format=%(refname)%00%(refname:short)%00%(objectname)%00%(symref)",
-		"refs/heads", "refs/remotes")
-	if err != nil {
-		return nil, fmt.Errorf("git for-each-ref error: %w", err)
-	}
-
-	var branches []branch
-	for line := range strings.Lines(output) {
-		line = strings.TrimRight(line, "\r\n")
-		if line == "" {
-			continue
-		}
-		parts := strings.Split(line, "\x00")
-		// %(symref) 非空表示符号引用（如 origin/HEAD）；
-		// 它的 short name 是 origin，不跳过会多出一条假分支
-		if len(parts) != 4 || parts[3] != "" {
-			continue
-		}
-		branches = append(branches, branch{
-			name:   parts[1],
-			hash:   parts[2],
-			remote: strings.HasPrefix(parts[0], "refs/remotes/"),
-		})
-	}
-	return branches, nil
 }
 
 func gitRepoName(repo string) string {
@@ -141,6 +105,42 @@ func gitHeadRef(repo string) (string, string) {
 		return hash, hash
 	}
 	return "HEAD", ""
+}
+
+type branch struct {
+	name   string
+	hash   string
+	remote bool
+}
+
+func gitBranches(repo string) ([]branch, error) {
+	// 本地 + 远端分支；按提交时间倒序，最新改动的排在前面
+	output, err := gitOutput(repo, "for-each-ref", "--sort=-committerdate",
+		"--format=%(refname)%00%(refname:short)%00%(objectname)%00%(symref)",
+		"refs/heads", "refs/remotes")
+	if err != nil {
+		return nil, fmt.Errorf("git for-each-ref error: %w", err)
+	}
+
+	var branches []branch
+	for line := range strings.Lines(output) {
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "\x00")
+		// %(symref) 非空表示符号引用（如 origin/HEAD）；
+		// 它的 short name 是 origin，不跳过会多出一条假分支
+		if len(parts) != 4 || parts[3] != "" {
+			continue
+		}
+		branches = append(branches, branch{
+			name:   parts[1],
+			hash:   parts[2],
+			remote: strings.HasPrefix(parts[0], "refs/remotes/"),
+		})
+	}
+	return branches, nil
 }
 
 type commit struct {

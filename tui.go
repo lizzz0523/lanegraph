@@ -331,6 +331,16 @@ func (v *laneView) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 	})
 }
 
+func (v *laneView) move(delta int) {
+	index := v.current + delta
+	if delta == 1 && index >= len(v.lines) {
+		index = 0
+	} else if delta == -1 && index < 0 {
+		index = len(v.lines) - 1
+	}
+	v.setCurrentItem(index)
+}
+
 func (v *laneView) MouseHandler() func(action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive)) (consumed bool, capture tview.Primitive) {
 	return v.Box.WrapMouseHandler(func(action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive)) (consumed bool, capture tview.Primitive) {
 		if !v.InRect(event.Position()) {
@@ -404,16 +414,6 @@ func (v *laneView) clampOffset() {
 		return
 	}
 	v.offset = min(max(v.offset, 0), max(0, len(v.lines)-height))
-}
-
-func (v *laneView) move(delta int) {
-	index := v.current + delta
-	if delta == 1 && index >= len(v.lines) {
-		index = 0
-	} else if delta == -1 && index < 0 {
-		index = len(v.lines) - 1
-	}
-	v.setCurrentItem(index)
 }
 
 type diffView struct {
