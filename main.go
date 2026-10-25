@@ -43,6 +43,7 @@ func main() {
 		commits:   commits,
 		branches:  branches,
 		fileCache: make(map[string][]fileChange),
+		diffCache: make(map[string]string),
 	}
 	if err := c.run(); err != nil {
 		log.Fatal(err)
@@ -70,8 +71,10 @@ type client struct {
 	fileCache map[string][]fileChange
 	filesHash string
 
-	fileDiff *diffView
+	fileDiff  *tview.TextView
+	diffCache map[string]string
 
+	currentCommit commit
 	selectedStyle tcell.Style
 }
 
@@ -248,4 +251,40 @@ func gitCommitFiles(repo string, commit commit) ([]fileChange, error) {
 		changes = append(changes, change)
 	}
 	return changes, nil
+}
+
+// gitFileDiff 返回单个文件在 commit 中相对第一个 parent 的 diff，并交给 git-delta 着色。
+// delta 执行失败时返回未着色的原始 diff，调用方可以回退到 buildPlainDiff。
+func gitFileDiff(repo string, commit commit, change fileChange) (string, error) {
+	var args []string
+	if len(commit.parents) > 0 {
+		args = []string{"diff", "-M", "--no-color", "--no-ext-diff", commit.parents[0], commit.hash, "--"}
+	} else {
+		args = []string{"show", "--format=", "-M", "--no-color", "--no-ext-diff", commit.hash, "--"}
+	}
+	// 重命名/复制需要同时限制新旧路径，否则 git 会把新路径识别成新增文件
+	if change.oldPath != "" {
+		args = append(args, change.oldPath)
+	}
+	args = append(args, change.path)
+
+	diff, err := gitOutputUntrimmed(repo, args...)
+	if err != nil {
+		return "", fmt.Errorf("git file diff error: %w", err)
+	}
+
+	delta := exec.Command("delta",
+		"--paging=never", "--no-gitconfig", "--width=variable", "--true-color=always",
+		"--line-numbers", "--file-style=omit",
+		"--hunk-header-decoration-style=gray box",
+		"--hunk-header-line-number-style=gray",
+		"--line-numbers-left-style=gray",
+		"--line-numbers-right-style=gray",
+		"--line-numbers-zero-style=gray")
+	delta.Stdin = strings.NewReader(diff)
+	out, err := delta.Output()
+	if err != nil {
+		return diff, fmt.Errorf("git-delta error: %w", err)
+	}
+	return string(out), nil
 }

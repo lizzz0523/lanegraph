@@ -118,16 +118,27 @@ func (c *client) setupUI() tview.Primitive {
 
 	fileList.SetSelectedFunc(func(node *tview.TreeNode) {
 		if len(node.GetChildren()) == 0 {
+			c.showFileDiff(node)
 			return
 		}
 		setFolderExpanded(node, !node.IsExpanded())
 	})
 
-	fileDiff := newDiffView()
+	fileList.SetChangedFunc(func(node *tview.TreeNode) {
+		c.showFileDiff(node)
+	})
 
-	fileDiff.SetTitle(" file diffs ").
+	// 长行不换行，交给 TextView 横向滚动
+	fileDiff := tview.NewTextView().
+		SetDynamicColors(true).
+		SetScrollable(true).
+		SetWrap(false).
+		SetText("[gray]select a file[-]")
+
+	fileDiff.SetTitle(" file diff ").
 		SetTitleAlign(tview.AlignLeft).
-		SetBorder(true)
+		SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1)
 
 	commitDetail := tview.NewFlex().
 		AddItem(fileList, 40, 1, false).
@@ -290,6 +301,7 @@ func (c *client) refresh() {
 
 // refreshFiles 在选中的 commit 变化时重建文件变更树。
 func (c *client) refreshFiles(commit commit) {
+	c.currentCommit = commit
 	if commit.hash == c.filesHash {
 		return
 	}
@@ -327,6 +339,72 @@ func (c *client) refreshFiles(commit commit) {
 	}
 	c.fileList.SetTitle(title)
 	c.fileList.SetRoot(fileRoot)
+
+	switch {
+	case err != nil:
+		c.clearFileDiff("failed to load file changes")
+	case len(changes) == 0:
+		c.clearFileDiff("no changes")
+	default:
+		first := firstFileNode(fileRoot)
+		if first == nil {
+			c.clearFileDiff("select a file")
+			return
+		}
+		c.fileList.SetCurrentNode(first)
+		c.showFileDiff(first)
+	}
+}
+
+// showFileDiff 渲染文件树当前节点的 diff；目录等非文件节点只显示提示。
+func (c *client) showFileDiff(node *tview.TreeNode) {
+	change, ok := node.GetReference().(fileChange)
+	if !ok {
+		// 目录节点提示选择文件；错误/无变更占位节点保留 refreshFiles 设置的内容
+		if _, isFolder := node.GetReference().(string); isFolder {
+			c.clearFileDiff("select a file")
+		}
+		return
+	}
+
+	if c.diffCache == nil {
+		c.diffCache = make(map[string]string)
+	}
+	key := c.currentCommit.hash + "\x00" + change.path
+	if text, ok := c.diffCache[key]; ok {
+		c.setFileDiff(change, text)
+		return
+	}
+
+	output, err := gitFileDiff(c.repo, c.currentCommit, change)
+	var text string
+	switch {
+	case err != nil && output == "":
+		text = "[red]error[-] " + tview.Escape(err.Error())
+	case err != nil:
+		// git-delta 默认可用；万一执行失败，回退到原始 diff 的简单着色
+		text = buildPlainDiff(output)
+	default:
+		text = buildDeltaDiff(output)
+	}
+	if text == "" {
+		text = "[gray](no diff)[-]"
+	}
+
+	c.diffCache[key] = text
+	c.setFileDiff(change, text)
+}
+
+func (c *client) setFileDiff(change fileChange, text string) {
+	c.fileDiff.SetTitle(" file diff: " + tview.Escape(change.path) + " ")
+	c.fileDiff.SetText(text)
+	c.fileDiff.ScrollToBeginning()
+}
+
+func (c *client) clearFileDiff(message string) {
+	c.fileDiff.SetTitle(" file diff ")
+	c.fileDiff.SetText("[gray]" + tview.Escape(message) + "[-]")
+	c.fileDiff.ScrollToBeginning()
 }
 
 // laneView 把视口偏移和选中项分开，使滚轮只滚动内容。
@@ -478,14 +556,4 @@ func (v *laneView) clampOffset() {
 		return
 	}
 	v.offset = min(max(v.offset, 0), max(0, len(v.lines)-height))
-}
-
-type diffView struct {
-	*tview.Box
-}
-
-func newDiffView() *diffView {
-	return &diffView{
-		Box: tview.NewBox(),
-	}
 }

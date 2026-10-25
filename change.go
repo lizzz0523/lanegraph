@@ -101,3 +101,103 @@ func sortFoldersFirst(node *tview.TreeNode) {
 		sortFoldersFirst(child)
 	}
 }
+
+// firstFileNode 返回树中第一个文件节点，用于刷新后默认预览。
+func firstFileNode(node *tview.TreeNode) *tview.TreeNode {
+	for _, child := range node.GetChildren() {
+		if _, ok := child.GetReference().(fileChange); ok {
+			return child
+		}
+		if found := firstFileNode(child); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+// buildDeltaDiff 把 git-delta 的 ANSI 输出转换成 tview 可识别的颜色标签。
+func buildDeltaDiff(output string) string {
+	output = strings.ReplaceAll(output, "\r", "")
+	// delta 会在文件头前多输出一个空行；末尾换行会在 TextView 中多出一行
+	output = strings.Trim(output, "\n")
+
+	var out strings.Builder
+	out.Grow(len(output))
+
+	var style ansiStyle
+	pending := true
+	for i := 0; i < len(output); {
+		switch output[i] {
+		case '\x1b':
+			n := consumeEscape(output[i:], &style)
+			if n <= 0 {
+				n = 1
+			}
+			i += n
+			pending = true
+		case '\n':
+			out.WriteByte('\n')
+			i++
+			// 每行重新输出一次当前样式，避免 tview 跨行保留的状态和这里不一致
+			pending = true
+		default:
+			end := i
+			for end < len(output) && output[end] != '\x1b' && output[end] != '\n' {
+				end++
+			}
+			if pending {
+				out.WriteString(style.tag())
+				pending = false
+			}
+			out.WriteString(tview.Escape(output[i:end]))
+			i = end
+		}
+	}
+	return out.String()
+}
+
+// buildPlainDiff 在 git-delta 不可用时，为 git 原始 diff 提供简单着色。
+func buildPlainDiff(diff string) string {
+	if diff == "" {
+		return ""
+	}
+	diff = strings.ReplaceAll(diff, "\r\n", "\n")
+	// 末尾换行会在 TextView 中多出一行
+	diff = strings.TrimRight(diff, "\n")
+
+	var out strings.Builder
+	out.Grow(len(diff) + len(diff)/16)
+
+	for line := range strings.Lines(diff) {
+		line = strings.TrimRight(line, "\n")
+		color := ""
+		switch {
+		case strings.HasPrefix(line, "+++"), strings.HasPrefix(line, "---"):
+			color = "[gray]"
+		case strings.HasPrefix(line, "+"):
+			color = "[green]"
+		case strings.HasPrefix(line, "-"):
+			color = "[red]"
+		case strings.HasPrefix(line, "@@"):
+			color = "[aqua]"
+		case strings.HasPrefix(line, "diff "),
+			strings.HasPrefix(line, "index "),
+			strings.HasPrefix(line, "new file"),
+			strings.HasPrefix(line, "deleted file"),
+			strings.HasPrefix(line, "similarity"),
+			strings.HasPrefix(line, "rename"),
+			strings.HasPrefix(line, "Binary files"),
+			strings.HasPrefix(line, "\\"):
+			color = "[gray]"
+		}
+		if color != "" {
+			out.WriteString(color)
+		}
+		out.WriteString(tview.Escape(line))
+		if color != "" {
+			out.WriteString("[-:-:-]")
+		}
+		out.WriteByte('\n')
+	}
+	return out.String()
+}
