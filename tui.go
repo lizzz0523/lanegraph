@@ -32,6 +32,7 @@ func (c *client) run() error {
 	})
 
 	c.app = app
+	c.refresh()
 
 	return app.Run()
 }
@@ -45,7 +46,7 @@ func (c *client) setupUI() tview.Primitive {
 	tview.Borders.VerticalFocus = tview.Borders.Vertical
 
 	// 灰色底，替代默认选中态的白底
-	listStyle := tcell.StyleDefault.
+	selectedStyle := tcell.StyleDefault.
 		Foreground(tview.Styles.PrimaryTextColor). // 与未选中行一致，不再反色
 		Background(tcell.NewHexColor(0x4a4a4a))
 
@@ -68,7 +69,14 @@ func (c *client) setupUI() tview.Primitive {
 		box.SetBorderColor(color).SetTitleColor(color)
 	}
 
-	commitList := newLaneView(listStyle)
+	setFolderExpanded := func(node *tview.TreeNode, expanded bool) {
+		node.SetExpanded(expanded)
+		if name, ok := node.GetReference().(string); ok {
+			node.SetText(folderLabel(name, expanded))
+		}
+	}
+
+	commitList := newLaneView(selectedStyle)
 	commitList.setSelectedFunc(c.refresh)
 
 	commitList.SetTitle(" lanegraph ").
@@ -96,15 +104,28 @@ func (c *client) setupUI() tview.Primitive {
 			return x, y, width, height
 		})
 
-	fileList := tview.NewTreeView()
+	fileRoot := buildFileTree(nil, selectedStyle)
 
-	fileList.SetTitle(" changes ").
+	fileList := tview.NewTreeView().
+		SetRoot(fileRoot).
+		SetTopLevel(1).
+		SetGraphics(false)
+
+	fileList.SetTitle(" file changes ").
 		SetTitleAlign(tview.AlignLeft).
-		SetBorder(true)
+		SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1)
+
+	fileList.SetSelectedFunc(func(node *tview.TreeNode) {
+		if len(node.GetChildren()) == 0 {
+			return
+		}
+		setFolderExpanded(node, !node.IsExpanded())
+	})
 
 	fileDiff := newDiffView()
 
-	fileDiff.SetTitle(" diffs ").
+	fileDiff.SetTitle(" file diffs ").
 		SetTitleAlign(tview.AlignLeft).
 		SetBorder(true)
 
@@ -144,7 +165,7 @@ func (c *client) setupUI() tview.Primitive {
 		}
 
 		child := tview.NewTreeNode(b.name).
-			SetSelectedTextStyle(listStyle).
+			SetSelectedTextStyle(selectedStyle).
 			SetSelectedFunc(func() {
 				if row, ok := rowOf[b.hash]; ok {
 					commitList.setCurrentItem(row)
@@ -241,6 +262,7 @@ func (c *client) setupUI() tview.Primitive {
 	c.commitInfo = commitInfo
 	c.fileList = fileList
 	c.fileDiff = fileDiff
+	c.selectedStyle = selectedStyle
 
 	return root
 }
@@ -262,7 +284,49 @@ func (c *client) refresh() {
 			}
 		}
 		c.commitInfo.SetText(text)
+		c.refreshFiles(commit)
 	}
+}
+
+// refreshFiles 在选中的 commit 变化时重建文件变更树。
+func (c *client) refreshFiles(commit commit) {
+	if commit.hash == c.filesHash {
+		return
+	}
+
+	changes, ok := c.fileCache[commit.hash]
+	var err error
+	if !ok {
+		changes, err = gitCommitFiles(c.repo, commit)
+		if err == nil {
+			if c.fileCache == nil {
+				c.fileCache = make(map[string][]fileChange)
+			}
+			c.fileCache[commit.hash] = changes
+		}
+	}
+
+	title := " file changes "
+	var fileRoot *tview.TreeNode
+	switch {
+	case err != nil:
+		fileRoot = tview.NewTreeNode("")
+		fileRoot.AddChild(tview.NewTreeNode("[red]error[-] " + tview.Escape(err.Error())))
+	case len(changes) == 0:
+		title = " file changes (0) "
+		fileRoot = tview.NewTreeNode("")
+		fileRoot.AddChild(tview.NewTreeNode("[gray](no changes)[-]"))
+	default:
+		title = fmt.Sprintf(" file changes (%d) ", len(changes))
+		fileRoot = buildFileTree(changes, c.selectedStyle)
+	}
+	if err == nil {
+		c.filesHash = commit.hash
+	} else {
+		c.filesHash = "" // 下次刷新/重新选中时重试
+	}
+	c.fileList.SetTitle(title)
+	c.fileList.SetRoot(fileRoot)
 }
 
 // laneView 把视口偏移和选中项分开，使滚轮只滚动内容。

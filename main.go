@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
@@ -35,11 +36,13 @@ func main() {
 	headRef, headHash := gitHeadRef(repo)
 
 	c := &client{
-		repoName: gitRepoName(repo),
-		headRef:  headRef,
-		headHash: headHash,
-		commits:  commits,
-		branches: branches,
+		repo:      repo,
+		repoName:  gitRepoName(repo),
+		headRef:   headRef,
+		headHash:  headHash,
+		commits:   commits,
+		branches:  branches,
+		fileCache: make(map[string][]fileChange),
 	}
 	if err := c.run(); err != nil {
 		log.Fatal(err)
@@ -49,6 +52,7 @@ func main() {
 type client struct {
 	app *tview.Application
 
+	repo     string
 	repoName string
 	headRef  string
 	headHash string
@@ -62,18 +66,32 @@ type client struct {
 	infoWidth  int
 	commitInfo *tview.TextView
 
-	fileList *tview.TreeView
+	fileList  *tview.TreeView
+	fileCache map[string][]fileChange
+	filesHash string
+
 	fileDiff *diffView
+
+	selectedStyle tcell.Style
 }
 
 func gitOutput(repo string, args ...string) (string, error) {
+	output, err := gitOutputUntrimmed(repo, args...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(output), nil
+}
+
+// gitOutputUntrimmed 保留原始输出，供 -z 分隔的路径解析使用，避免 TrimSpace 破坏文件名。
+func gitOutputUntrimmed(repo string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = repo
 	output, err := cmd.Output()
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(output)), nil
+	return string(output), nil
 }
 
 func gitRepoName(repo string) string {
@@ -184,4 +202,50 @@ func gitCommits(repo string) ([]commit, error) {
 		})
 	}
 	return commits, nil
+}
+
+// fileChange 表示一个 commit 中单个文件的变更。
+type fileChange struct {
+	status  string // git name-status，如 A、M、D、R100
+	path    string // 变更后的路径
+	oldPath string // 重命名/复制时的原路径
+}
+
+// gitCommitFiles 返回 commit 相对第一个 parent 的文件变更；根提交直接展示其内容。
+func gitCommitFiles(repo string, commit commit) ([]fileChange, error) {
+	var args []string
+	if len(commit.parents) > 0 {
+		args = []string{"diff", "--name-status", "-z", "-M", commit.parents[0], commit.hash}
+	} else {
+		args = []string{"show", "--format=", "--name-status", "-z", "-M", commit.hash}
+	}
+	output, err := gitOutputUntrimmed(repo, args...)
+	if err != nil {
+		return nil, fmt.Errorf("git commit files error: %w", err)
+	}
+	fields := strings.Split(output, "\x00")
+	var changes []fileChange
+	// 解析 git --name-status -z 的输出：
+	// 每项为 status\0path\0，R/C 状态后跟 oldPath\0newPath\0。
+	for i := 0; i < len(fields); {
+		status := fields[i]
+		i++
+		if status == "" || i >= len(fields) {
+			continue
+		}
+
+		change := fileChange{status: status, path: fields[i]}
+		i++
+		if status[0] == 'R' || status[0] == 'C' {
+			if i >= len(fields) {
+				break
+			}
+			change.oldPath = change.path
+			change.path = fields[i]
+			i++
+		}
+
+		changes = append(changes, change)
+	}
+	return changes, nil
 }
