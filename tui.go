@@ -9,9 +9,23 @@ import (
 	"github.com/rivo/tview"
 )
 
-func (c *client) run() error {
+type tui struct {
+	state
+	app           *tview.Application
+	branchList    *tview.TreeView
+	commitList    *laneView
+	commitInfo    *tview.TextView
+	fileList      *tview.TreeView
+	fileDiff      *tview.TextView
+	infoWidth     int
+	filesHash     string // 当前文件树对应的 commit，用于跳过重复刷新
+	diffShown     string // 当前已渲染 diff 的 key（commit hash + path），用于跳过重复渲染
+	selectedStyle tcell.Style
+}
+
+func (t *tui) run() error {
 	app := tview.NewApplication().
-		SetRoot(c.setupUI(), true).
+		SetRoot(t.setupUI(), true).
 		EnableMouse(true)
 
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -21,39 +35,39 @@ func (c *client) run() error {
 			return nil
 		case event.Key() == tcell.KeyTab:
 			switch {
-			case c.branchList.HasFocus():
-				app.SetFocus(c.commitList)
-			case c.commitList.HasFocus():
-				app.SetFocus(c.fileList)
-			case c.fileList.HasFocus():
-				app.SetFocus(c.fileDiff)
+			case t.branchList.HasFocus():
+				app.SetFocus(t.commitList)
+			case t.commitList.HasFocus():
+				app.SetFocus(t.fileList)
+			case t.fileList.HasFocus():
+				app.SetFocus(t.fileDiff)
 			default:
-				app.SetFocus(c.branchList)
+				app.SetFocus(t.branchList)
 			}
 			return nil
 		case event.Key() == tcell.KeyBacktab:
 			switch {
-			case c.branchList.HasFocus():
-				app.SetFocus(c.fileDiff)
-			case c.commitList.HasFocus():
-				app.SetFocus(c.branchList)
-			case c.fileList.HasFocus():
-				app.SetFocus(c.commitList)
+			case t.branchList.HasFocus():
+				app.SetFocus(t.fileDiff)
+			case t.commitList.HasFocus():
+				app.SetFocus(t.branchList)
+			case t.fileList.HasFocus():
+				app.SetFocus(t.commitList)
 			default:
-				app.SetFocus(c.fileList)
+				app.SetFocus(t.fileList)
 			}
 			return nil
 		}
 		return event
 	})
 
-	c.app = app
-	c.refresh()
+	t.app = app
+	t.refresh()
 
 	return app.Run()
 }
 
-func (c *client) setupUI() tview.Primitive {
+func (t *tui) setupUI() tview.Primitive {
 	tview.Borders.TopLeft, tview.Borders.TopRight = '╭', '╮'
 	tview.Borders.BottomLeft, tview.Borders.BottomRight = '╰', '╯'
 	tview.Borders.TopLeftFocus, tview.Borders.TopRightFocus = '╭', '╮'
@@ -92,7 +106,7 @@ func (c *client) setupUI() tview.Primitive {
 	}
 
 	commitList := newLaneView(selectedStyle)
-	commitList.setSelectedFunc(c.refresh)
+	commitList.setSelectedFunc(t.refresh)
 
 	commitList.SetTitle(" lanegraph ").
 		SetBorder(true).
@@ -100,7 +114,7 @@ func (c *client) setupUI() tview.Primitive {
 		SetFocusFunc(func() { setFocusBorder(commitList.Box, true) }).
 		SetBlurFunc(func() { setFocusBorder(commitList.Box, false) })
 
-	commitList.setLines(renderGraph(c.commits, computeGraph(c.commits)))
+	commitList.setLines(renderGraph(t.commits, computeGraph(t.commits)))
 
 	commitInfo := tview.NewTextView().
 		SetWrap(false).
@@ -112,9 +126,9 @@ func (c *client) setupUI() tview.Primitive {
 		SetBorderPadding(0, 0, 1, 1).
 		SetDrawFunc(func(_ tcell.Screen, _, _, _, _ int) (int, int, int, int) {
 			x, y, width, height := commitInfo.GetInnerRect()
-			if width != c.infoWidth {
-				c.infoWidth = width
-				c.refresh()
+			if width != t.infoWidth {
+				t.infoWidth = width
+				t.refresh()
 			}
 			return x, y, width, height
 		})
@@ -135,14 +149,14 @@ func (c *client) setupUI() tview.Primitive {
 
 	fileList.SetSelectedFunc(func(node *tview.TreeNode) {
 		if len(node.GetChildren()) == 0 {
-			c.showFileDiff(node)
+			t.showFileDiff(node)
 			return
 		}
 		setFolderExpanded(node, !node.IsExpanded())
 	})
 
 	fileList.SetChangedFunc(func(node *tview.TreeNode) {
-		c.showFileDiff(node)
+		t.showFileDiff(node)
 	})
 
 	fileDiff := tview.NewTextView().
@@ -166,7 +180,7 @@ func (c *client) setupUI() tview.Primitive {
 		switch action {
 		case tview.MouseScrollUp, tview.MouseScrollDown:
 			if !fileDiff.HasFocus() {
-				c.app.SetFocus(fileDiff)
+				t.app.SetFocus(fileDiff)
 			}
 		}
 		return action, event
@@ -194,14 +208,14 @@ func (c *client) setupUI() tview.Primitive {
 		AddChild(remoteNode)
 
 	// commit hash -> graph 行号，用于点击分支后跳转
-	rowOf := make(map[string]int, len(c.commits))
-	for i, c := range c.commits {
+	rowOf := make(map[string]int, len(t.commits))
+	for i, c := range t.commits {
 		rowOf[c.hash] = i
 	}
 
 	var headNode *tview.TreeNode
 
-	for _, b := range c.branches {
+	for _, b := range t.branches {
 		parent := localNode
 		if b.remote {
 			parent = remoteNode
@@ -215,7 +229,7 @@ func (c *client) setupUI() tview.Primitive {
 				}
 			})
 
-		if !b.remote && b.name == c.headRef {
+		if !b.remote && b.name == t.headRef {
 			headNode = child
 		}
 
@@ -254,21 +268,21 @@ func (c *client) setupUI() tview.Primitive {
 		switch action {
 		case tview.MouseLeftDown:
 			if !branchList.HasFocus() {
-				c.app.SetFocus(branchList)
+				t.app.SetFocus(branchList)
 			}
 			return tview.MouseMove, event
 		case tview.MouseScrollUp, tview.MouseScrollDown:
 			if !branchList.HasFocus() {
-				c.app.SetFocus(branchList)
+				t.app.SetFocus(branchList)
 			}
 		}
 		return action, event
 	})
 
 	branchHead := tview.NewTextView().
-		SetText(c.headRef)
+		SetText(t.headRef)
 
-	branchHead.SetTitle(" "+c.repoName+" ").
+	branchHead.SetTitle(" "+t.repoName+" ").
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1)
 
@@ -276,12 +290,12 @@ func (c *client) setupUI() tview.Primitive {
 		if action != tview.MouseLeftClick || !branchHead.InRect(event.Position()) {
 			return action, event
 		}
-		if row, ok := rowOf[c.headHash]; ok {
+		if row, ok := rowOf[t.headHash]; ok {
 			commitList.setCurrentItem(row)
 		}
 		if headNode != nil {
 			branchList.SetCurrentNode(headNode)
-			c.app.SetFocus(branchList)
+			t.app.SetFocus(branchList)
 		}
 		return tview.MouseConsumed, nil
 	})
@@ -301,24 +315,24 @@ func (c *client) setupUI() tview.Primitive {
 	setFocusBorder(fileList.Box, false)
 	setFocusBorder(fileDiff.Box, false)
 
-	c.branchList = branchList
-	c.commitList = commitList
-	c.commitInfo = commitInfo
-	c.fileList = fileList
-	c.fileDiff = fileDiff
-	c.selectedStyle = selectedStyle
+	t.branchList = branchList
+	t.commitList = commitList
+	t.commitInfo = commitInfo
+	t.fileList = fileList
+	t.fileDiff = fileDiff
+	t.selectedStyle = selectedStyle
 
 	return root
 }
 
-func (c *client) refresh() {
-	if row := c.commitList.currentItem(); row < len(c.commits) {
-		commit := c.commits[row]
+func (t *tui) refresh() {
+	if row := t.commitList.currentItem(); row < len(t.commits) {
+		commit := t.commits[row]
 		text := fmt.Sprintf("[aqua]%v[-] [gray]%v[-]  [::b]%v[-::-]", tview.Escape(commit.author), commit.date.Format("2006-01-02 15:04:05"), tview.Escape(commit.subject))
 		if body := strings.TrimLeft(commit.body, "\r\n"); body != "" {
 			first, _, more := strings.Cut(body, "\n")
-			if c.infoWidth > 4 {
-				if truncate := runewidth.Truncate(first, c.infoWidth-4, ""); truncate != first {
+			if t.infoWidth > 4 {
+				if truncate := runewidth.Truncate(first, t.infoWidth-4, ""); truncate != first {
 					first, more = truncate, true
 				}
 			}
@@ -327,28 +341,18 @@ func (c *client) refresh() {
 				text += " [gray]...[-]"
 			}
 		}
-		c.commitInfo.SetText(text)
-		c.refreshFiles(commit)
+		t.commitInfo.SetText(text)
+		t.refreshFiles(commit)
 	}
 }
 
-func (c *client) refreshFiles(commit commit) {
-	c.currentCommit = commit
-	if commit.hash == c.filesHash {
+func (t *tui) refreshFiles(commit commit) {
+	t.currentCommit = commit
+	if commit.hash == t.filesHash {
 		return
 	}
 
-	changes, ok := c.fileCache[commit.hash]
-	var err error
-	if !ok {
-		changes, err = gitCommitFiles(c.repo, commit)
-		if err == nil {
-			if c.fileCache == nil {
-				c.fileCache = make(map[string][]fileChange)
-			}
-			c.fileCache[commit.hash] = changes
-		}
-	}
+	changes, err := t.files(commit)
 
 	title := " file changes "
 	var fileRoot *tview.TreeNode
@@ -362,59 +366,52 @@ func (c *client) refreshFiles(commit commit) {
 		fileRoot.AddChild(tview.NewTreeNode("[gray](no changes)[-]"))
 	default:
 		title = fmt.Sprintf(" file changes (%d) ", len(changes))
-		fileRoot = buildFileTree(changes, c.selectedStyle)
+		fileRoot = buildFileTree(changes, t.selectedStyle)
 	}
 	if err == nil {
-		c.filesHash = commit.hash
+		t.filesHash = commit.hash
 	} else {
-		c.filesHash = "" // 下次刷新/重新选中时重试
+		t.filesHash = "" // 下次刷新/重新选中时重试
 	}
-	c.fileList.SetTitle(title)
-	c.fileList.SetRoot(fileRoot)
+	t.fileList.SetTitle(title)
+	t.fileList.SetRoot(fileRoot)
 
 	switch {
 	case err != nil:
-		c.clearFileDiff("failed to load file changes")
+		t.clearFileDiff("failed to load file changes")
 	case len(changes) == 0:
-		c.clearFileDiff("no changes")
+		t.clearFileDiff("no changes")
 	default:
 		first := firstFileNode(fileRoot)
 		if first == nil {
-			c.clearFileDiff("select a file")
+			t.clearFileDiff("select a file")
 			return
 		}
-		c.fileList.SetCurrentNode(first)
-		c.showFileDiff(first)
+		t.fileList.SetCurrentNode(first)
+		t.showFileDiff(first)
 	}
 }
 
-func (c *client) showFileDiff(node *tview.TreeNode) {
+func (t *tui) showFileDiff(node *tview.TreeNode) {
 	change, ok := node.GetReference().(fileChange)
 	if !ok {
 		// 目录节点提示选择文件；错误/无变更占位节点保留 refreshFiles 设置的内容
 		if _, isFolder := node.GetReference().(string); isFolder {
-			c.clearFileDiff("select a file")
+			t.clearFileDiff("select a file")
 		}
 		return
 	}
 
-	if c.diffCache == nil {
-		c.diffCache = make(map[string]string)
-	}
-	key := c.currentCommit.hash + "\x00" + change.path
+	key := t.currentCommit.hash + "\x00" + change.path
 	// TreeView 在 Draw 中可能对同一节点再次触发 changed（鼠标点选时尤其如此）。
 	// 若在 diff 已绘制后再 SetText，会清空 TextView 的行索引，下一次滚轮就会
 	// 误判为已到底并打开 trackEnd，导致视口直接跳到末尾。同一份 diff 不重复渲染。
-	if key == c.diffShown {
+	if key == t.diffShown {
 		return
 	}
-	c.diffShown = key
-	if text, ok := c.diffCache[key]; ok {
-		c.setFileDiff(change, text)
-		return
-	}
+	t.diffShown = key
 
-	output, err := gitFileDiff(c.repo, c.currentCommit, change)
+	output, err := t.diff(t.currentCommit, change)
 	var text string
 	switch {
 	case err != nil && output == "":
@@ -429,19 +426,18 @@ func (c *client) showFileDiff(node *tview.TreeNode) {
 		text = "[gray](no diff)[-]"
 	}
 
-	c.diffCache[key] = text
-	c.setFileDiff(change, text)
+	t.setFileDiff(change, text)
 }
 
-func (c *client) setFileDiff(change fileChange, text string) {
-	c.fileDiff.SetTitle(" file diff: " + tview.Escape(change.path) + " ")
-	c.fileDiff.SetText(text)
-	c.fileDiff.ScrollToBeginning()
+func (t *tui) setFileDiff(change fileChange, text string) {
+	t.fileDiff.SetTitle(" file diff: " + tview.Escape(change.path) + " ")
+	t.fileDiff.SetText(text)
+	t.fileDiff.ScrollToBeginning()
 }
 
-func (c *client) clearFileDiff(message string) {
-	c.diffShown = ""
-	c.fileDiff.SetTitle(" file diff ")
-	c.fileDiff.SetText("[gray]" + tview.Escape(message) + "[-]")
-	c.fileDiff.ScrollToBeginning()
+func (t *tui) clearFileDiff(message string) {
+	t.diffShown = ""
+	t.fileDiff.SetTitle(" file diff ")
+	t.fileDiff.SetText("[gray]" + tview.Escape(message) + "[-]")
+	t.fileDiff.ScrollToBeginning()
 }
