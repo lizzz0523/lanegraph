@@ -21,31 +21,37 @@ const (
 
 type TUI struct {
 	*core.State
-	app            *tview.Application
-	mainPanels     *tview.Pages
-	changeTab      *tview.Button
-	commitTab      *tview.Button
-	branchList     *tview.TreeView
-	commitPanel    *tview.Flex
-	changePanel    *tview.Flex
-	commitList     *laneView
-	commitInfo     *tview.TextView
-	fileList       *tview.TreeView
-	fileDiff       *tview.TextView
-	changeList     *tview.Box
-	changeDiff     *tview.Box
-	activeTab      string // 当前显示的主面板 tab
-	infoWidth      int
-	statusBar      *tview.TextView
-	statusBusy     map[string]string // statusBar 当前展示的 loading 项，key 为槽位
-	statusMsg      string            // 最近一次操作结果，loading 结束后保留
+
+	app *tview.Application
+
+	branchList *tview.TreeView
+	changeTab  *tview.Button
+	commitTab  *tview.Button
+	mainPanels *tview.Pages
+	statusBar  *tview.TextView
+
+	commitPanel *tview.Flex
+	commitList  *laneView
+	commitInfo  *tview.TextView
+	fileList    *tview.TreeView
+	fileDiff    *tview.TextView
+
+	changePanel *tview.Flex
+	changeList  *tview.Box
+	changeDiff  *tview.Box
+
+	activeTab  string // 当前显示的主面板 tab
+	infoWidth  int
+	statusMsg  string            // 最近一次操作结果，loading 结束后保留
+	statusBusy map[string]string // statusBar 当前展示的 loading 项，key 为槽位
+
 	tabStyle       tcell.Style
 	tabActiveStyle tcell.Style
 	selectedStyle  tcell.Style
 
+	diff         *async.Loader[string, diffRequest]
 	files        *async.Loader[[]core.FileChange, filesRequest]
 	filesLoading bool // 文件列表加载中：保留旧树并忽略交互
-	diff         *async.Loader[string, diffRequest]
 }
 
 type filesRequest struct {
