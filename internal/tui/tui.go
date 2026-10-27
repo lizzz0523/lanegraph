@@ -973,7 +973,7 @@ func (t *TUI) clearDiff(view *tview.TextView, slot, message string) {
 	if message == "" {
 		view.SetText("")
 	} else {
-		view.SetText("[gray]" + tview.Escape(message) + "[-]")
+		view.SetText("[gray](" + tview.Escape(message) + ")[-]")
 	}
 	view.ScrollToBeginning()
 }
