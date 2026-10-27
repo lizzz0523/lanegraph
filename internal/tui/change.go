@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -88,6 +89,44 @@ func buildFileTree(changes []core.FileChange, selectedStyle tcell.Style) *tview.
 	return rootNode
 }
 
+var localChangeGroups = []struct {
+	scopes []core.ChangeScope
+	name   string
+}{
+	{[]core.ChangeScope{core.ScopeStaged}, "Staged Changes"},
+	// 未暂存和未跟踪都属于“工作区里还没 add 的改动”，放在同一组。
+	{[]core.ChangeScope{core.ScopeUnstaged, core.ScopeUntracked}, "Unstaged Changes"},
+}
+
+// buildLocalTree 把本地变更分成暂存区和工作区两组，每组内部复用 buildFileTree 的目录树。
+func buildLocalTree(changes []core.FileChange, selectedStyle tcell.Style) *tview.TreeNode {
+	rootNode := tview.NewTreeNode("")
+
+	for _, group := range localChangeGroups {
+		var files []core.FileChange
+		for _, change := range changes {
+			if slices.Contains(group.scopes, change.Scope) {
+				files = append(files, change)
+			}
+		}
+		if len(files) == 0 {
+			continue
+		}
+
+		name := fmt.Sprintf("%s (%d)", group.name, len(files))
+		groupNode := tview.NewTreeNode(folderLabel(name, true)).
+			SetReference(name).
+			SetExpanded(true).
+			SetSelectedTextStyle(selectedStyle)
+		for _, child := range buildFileTree(files, selectedStyle).GetChildren() {
+			groupNode.AddChild(child)
+		}
+		rootNode.AddChild(groupNode)
+	}
+
+	return rootNode
+}
+
 // sortFoldersFirst 使用稳定排序，保证同一层内的原有顺序不变。
 func sortFoldersFirst(node *tview.TreeNode) {
 	children := node.GetChildren()
@@ -109,6 +148,25 @@ func firstFileNode(node *tview.TreeNode) *tview.TreeNode {
 			return child
 		}
 		if found := firstFileNode(child); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+// findLocalNode 在重建后的树里按来源和路径找回之前选中的文件。
+func findLocalNode(node *tview.TreeNode, target core.FileChange) *tview.TreeNode {
+	if target.Path == "" {
+		return nil
+	}
+	for _, child := range node.GetChildren() {
+		if change, ok := child.GetReference().(core.FileChange); ok {
+			if change.Scope == target.Scope && change.Path == target.Path {
+				return child
+			}
+			continue
+		}
+		if found := findLocalNode(child, target); found != nil {
 			return found
 		}
 	}

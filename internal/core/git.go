@@ -10,28 +10,6 @@ import (
 	"time"
 )
 
-func gitOutput(ctx context.Context, repo string, args ...string) (string, error) {
-	output, err := gitOutputUntrimmed(ctx, repo, args...)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(output), nil
-}
-
-// gitOutputUntrimmed 保留原始输出，供 -z 分隔的路径解析使用，避免 TrimSpace 破坏文件名。
-func gitOutputUntrimmed(ctx context.Context, repo string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = repo
-	output, err := cmd.Output()
-	if err != nil {
-		if ctx.Err() != nil {
-			return "", ctx.Err()
-		}
-		return "", err
-	}
-	return string(output), nil
-}
-
 func GitRepoName(ctx context.Context, repo string) string {
 	root, err := gitOutput(ctx, repo, "rev-parse", "--show-toplevel")
 	if err != nil || root == "" {
@@ -142,10 +120,21 @@ func GitCommits(ctx context.Context, repo string) ([]Commit, error) {
 	return commits, nil
 }
 
+// ChangeScope 标记变更的来源；同一文件可能同时出现在暂存区和未暂存区。
+type ChangeScope uint8
+
+const (
+	ScopeCommit ChangeScope = iota // commit diff 用零值，保持原有行为
+	ScopeStaged
+	ScopeUnstaged
+	ScopeUntracked
+)
+
 type FileChange struct {
-	Status  string // git name-status，如 A、M、D、R100
+	Status  string // git name-status，如 A、M、D、R100；未跟踪文件为 ?
 	Path    string
 	OldPath string
+	Scope   ChangeScope
 }
 
 // GitCommitFiles 相对第一个 parent 计算文件变更；根提交没有 parent，只能把全部文件视为新增。
@@ -160,10 +149,43 @@ func GitCommitFiles(ctx context.Context, repo string, commit Commit) ([]FileChan
 	if err != nil {
 		return nil, fmt.Errorf("git commit files error: %w", err)
 	}
+	return parseNameStatus(output, ScopeCommit), nil
+}
+
+// GitLocalChanges 返回本地工作区的全部变更：
+// 暂存区（index vs HEAD）、未暂存（worktree vs index）和未跟踪文件。
+func GitLocalChanges(ctx context.Context, repo string) ([]FileChange, error) {
+	staged, err := gitOutputUntrimmed(ctx, repo, "diff", "--cached", "--name-status", "-z", "-M")
+	if err != nil {
+		return nil, fmt.Errorf("git staged changes error: %w", err)
+	}
+
+	unstaged, err := gitOutputUntrimmed(ctx, repo, "diff", "--name-status", "-z", "-M")
+	if err != nil {
+		return nil, fmt.Errorf("git unstaged changes error: %w", err)
+	}
+
+	untracked, err := gitOutputUntrimmed(ctx, repo, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, fmt.Errorf("git untracked files error: %w", err)
+	}
+
+	changes := parseNameStatus(staged, ScopeStaged)
+	changes = append(changes, parseNameStatus(unstaged, ScopeUnstaged)...)
+	for _, path := range strings.Split(untracked, "\x00") {
+		if path == "" {
+			continue
+		}
+		changes = append(changes, FileChange{Status: "?", Path: path, Scope: ScopeUntracked})
+	}
+	return changes, nil
+}
+
+// parseNameStatus 解析 git --name-status -z 的输出：
+// 每项为 status\0path\0，R/C 状态后跟 oldPath\0newPath\0。
+func parseNameStatus(output string, scope ChangeScope) []FileChange {
 	fields := strings.Split(output, "\x00")
 	var changes []FileChange
-	// 解析 git --name-status -z 的输出：
-	// 每项为 status\0path\0，R/C 状态后跟 oldPath\0newPath\0。
 	for i := 0; i < len(fields); {
 		status := fields[i]
 		i++
@@ -171,7 +193,7 @@ func GitCommitFiles(ctx context.Context, repo string, commit Commit) ([]FileChan
 			continue
 		}
 
-		change := FileChange{Status: status, Path: fields[i]}
+		change := FileChange{Status: status, Path: fields[i], Scope: scope}
 		i++
 		if status[0] == 'R' || status[0] == 'C' {
 			if i >= len(fields) {
@@ -184,7 +206,7 @@ func GitCommitFiles(ctx context.Context, repo string, commit Commit) ([]FileChan
 
 		changes = append(changes, change)
 	}
-	return changes, nil
+	return changes
 }
 
 // GitFileDiff 相对第一个 parent 计算单个文件的 diff，并交给 git-delta 着色。
@@ -209,7 +231,87 @@ func GitFileDiff(ctx context.Context, repo string, commit Commit, change FileCha
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
+	return colorizeDiff(ctx, diff)
+}
 
+// GitLocalFileDiff 计算本地单个文件的 diff：暂存区相对 HEAD、工作区相对暂存区，
+// 未跟踪文件则与 /dev/null 对比，生成可直接展示的新增 diff。
+func GitLocalFileDiff(ctx context.Context, repo string, change FileChange) (string, error) {
+	var diff string
+	var err error
+
+	switch change.Scope {
+	case ScopeStaged:
+		diff, err = gitWorkingDiff(ctx, repo, change, "diff", "--cached", "-M")
+	case ScopeUnstaged:
+		diff, err = gitWorkingDiff(ctx, repo, change, "diff", "-M")
+	case ScopeUntracked:
+		diff, err = gitDiffNoIndex(ctx, repo, change.Path)
+	default:
+		return "", fmt.Errorf("unknown change scope: %d", change.Scope)
+	}
+	if err != nil {
+		return "", fmt.Errorf("git local diff error: %w", err)
+	}
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	return colorizeDiff(ctx, diff)
+}
+
+// gitWorkingDiff 限制到单个文件；重命名/复制需要同时传入旧路径，否则会被识别成新增文件。
+func gitWorkingDiff(ctx context.Context, repo string, change FileChange, base ...string) (string, error) {
+	args := append(base, "--no-color", "--no-ext-diff", "--")
+	if change.OldPath != "" {
+		args = append(args, change.OldPath)
+	}
+	args = append(args, change.Path)
+	return gitOutputUntrimmed(ctx, repo, args...)
+}
+
+// gitDiffNoIndex 生成未跟踪文件相对 /dev/null 的 diff。
+// git diff --no-index 在文件有差异时退出码为 1，这属于正常结果。
+func gitDiffNoIndex(ctx context.Context, repo, path string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "diff", "--no-index", "--no-color", "/dev/null", "--", path)
+	cmd.Dir = repo
+	output, err := cmd.Output()
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return string(output), nil
+		}
+		return "", err
+	}
+	return string(output), nil
+}
+
+func gitOutput(ctx context.Context, repo string, args ...string) (string, error) {
+	output, err := gitOutputUntrimmed(ctx, repo, args...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(output), nil
+}
+
+// gitOutputUntrimmed 保留原始输出，供 -z 分隔的路径解析使用，避免 TrimSpace 破坏文件名。
+func gitOutputUntrimmed(ctx context.Context, repo string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = repo
+	output, err := cmd.Output()
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", err
+	}
+	return string(output), nil
+}
+
+// colorizeDiff 把原始 diff 交给 git-delta 着色；
+// git-delta 失败时返回原始 diff，由调用方决定如何展示。
+func colorizeDiff(ctx context.Context, diff string) (string, error) {
 	delta := exec.CommandContext(ctx, "delta",
 		"--paging=never", "--no-gitconfig", "--width=variable", "--true-color=always",
 		"--line-numbers", "--file-style=omit",

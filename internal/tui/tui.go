@@ -37,8 +37,8 @@ type TUI struct {
 	fileDiff    *tview.TextView
 
 	changePanel *tview.Flex
-	changeList  *tview.Box
-	changeDiff  *tview.Box
+	changeList  *tview.TreeView
+	changeDiff  *tview.TextView
 
 	activeTab  string // 当前显示的主面板 tab
 	infoWidth  int
@@ -52,6 +52,10 @@ type TUI struct {
 	diff         *async.Loader[string, diffRequest]
 	files        *async.Loader[[]core.FileChange, filesRequest]
 	filesLoading bool // 文件列表加载中：保留旧树并忽略交互
+
+	localDiff         *async.Loader[string, localDiffRequest]
+	localFiles        *async.Loader[[]core.FileChange, localFilesRequest]
+	localFilesLoading bool // 本地变更列表加载中：保留旧树并忽略交互
 }
 
 type filesRequest struct {
@@ -60,6 +64,12 @@ type filesRequest struct {
 
 type diffRequest struct {
 	commit core.Commit
+	change core.FileChange
+}
+
+type localFilesRequest struct{}
+
+type localDiffRequest struct {
 	change core.FileChange
 }
 
@@ -92,6 +102,8 @@ func (t *TUI) Run() error {
 	t.initAsync()
 	defer t.files.Close()
 	defer t.diff.Close()
+	defer t.localFiles.Close()
+	defer t.localDiff.Close()
 
 	t.refreshCommit(true)
 
@@ -116,20 +128,46 @@ func (t *TUI) initAsync() {
 			return req.commit.Hash + "\x00" + req.change.Path
 		},
 		Load: func(ctx context.Context, req diffRequest) (string, error) {
-			output, err := t.Diff(ctx, req.commit, req.change)
-			switch {
-			case err != nil && output == "":
-				return "", err
-			case err != nil:
-				return buildPlainDiff(output), nil
-			default:
-				return buildDeltaDiff(output), nil
-			}
+			return loadDiff(t.Diff(ctx, req.commit, req.change))
 		},
 		Post:      post,
 		OnLoading: t.showDiffLoading,
 		OnResult:  t.showDiff,
 	})
+
+	t.localFiles = async.New(async.Config[[]core.FileChange, localFilesRequest]{
+		Key: func(localFilesRequest) string { return "local" },
+		Load: func(ctx context.Context, _ localFilesRequest) ([]core.FileChange, error) {
+			return t.LocalChanges(ctx)
+		},
+		Post:      post,
+		OnLoading: t.showLocalFilesLoading,
+		OnResult:  t.showLocalFiles,
+	})
+
+	t.localDiff = async.New(async.Config[string, localDiffRequest]{
+		Key: func(req localDiffRequest) string {
+			return fmt.Sprintf("%d\x00%s", req.change.Scope, req.change.Path)
+		},
+		Load: func(ctx context.Context, req localDiffRequest) (string, error) {
+			return loadDiff(t.LocalDiff(ctx, req.change))
+		},
+		Post:      post,
+		OnLoading: t.showLocalDiffLoading,
+		OnResult:  t.showLocalDiff,
+	})
+}
+
+// loadDiff 统一处理 git-delta 的输出；delta 不可用时退回到原始 diff。
+func loadDiff(output string, err error) (string, error) {
+	switch {
+	case err != nil && output == "":
+		return "", err
+	case err != nil:
+		return buildPlainDiff(output), nil
+	default:
+		return buildDeltaDiff(output), nil
+	}
 }
 
 func (t *TUI) setupUI() tview.Primitive {
@@ -172,6 +210,22 @@ func (t *TUI) setupUI() tview.Primitive {
 		if name, ok := node.GetReference().(string); ok {
 			node.SetText(folderLabel(name, expanded))
 		}
+	}
+
+	// focusOnScroll 让滚轮滚动 diff 时同步聚焦，边框状态保持一致。
+	focusOnScroll := func(view *tview.TextView) {
+		view.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+			if !view.InRect(event.Position()) {
+				return action, event
+			}
+			switch action {
+			case tview.MouseScrollUp, tview.MouseScrollDown:
+				if !view.HasFocus() {
+					t.app.SetFocus(view)
+				}
+			}
+			return action, event
+		})
 	}
 
 	commitList := newLaneView(selectedStyle)
@@ -245,19 +299,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetFocusFunc(func() { setFocusBorder(fileDiff.Box, true) }).
 		SetBlurFunc(func() { setFocusBorder(fileDiff.Box, false) })
 
-	// 滚轮滚动 diff 时同步聚焦，边框状态保持一致
-	fileDiff.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
-		if !fileDiff.InRect(event.Position()) {
-			return action, event
-		}
-		switch action {
-		case tview.MouseScrollUp, tview.MouseScrollDown:
-			if !fileDiff.HasFocus() {
-				t.app.SetFocus(fileDiff)
-			}
-		}
-		return action, event
-	})
+	focusOnScroll(fileDiff)
 
 	commitDetail := tview.NewFlex().
 		AddItem(fileList, 40, 1, false).
@@ -269,23 +311,47 @@ func (t *TUI) setupUI() tview.Primitive {
 		AddItem(commitInfo, 4, 0, false).
 		AddItem(commitDetail, 0, 1, false)
 
-	changeList := tview.NewBox()
+	changeList := tview.NewTreeView().
+		SetRoot(buildLocalTree(nil, selectedStyle)).
+		SetTopLevel(1).
+		SetGraphics(false)
 
 	changeList.SetTitle(" local changes ").
 		SetTitleAlign(tview.AlignLeft).
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
-		SetFocusFunc(func() { setFocusBorder(changeList, true) }).
-		SetBlurFunc(func() { setFocusBorder(changeList, false) })
+		SetFocusFunc(func() { setFocusBorder(changeList.Box, true) }).
+		SetBlurFunc(func() { setFocusBorder(changeList.Box, false) })
 
-	changeDiff := tview.NewBox()
+	changeList.SetSelectedFunc(func(node *tview.TreeNode) {
+		if t.localFilesLoading {
+			return
+		}
+		if len(node.GetChildren()) == 0 {
+			t.showLocalFileDiff(node)
+			return
+		}
+		setFolderExpanded(node, !node.IsExpanded())
+	})
+
+	changeList.SetChangedFunc(func(node *tview.TreeNode) {
+		t.showLocalFileDiff(node)
+	})
+
+	changeDiff := tview.NewTextView().
+		SetDynamicColors(true).
+		SetScrollable(true).
+		SetWrap(false).
+		SetText("[gray]select a file[-]")
 
 	changeDiff.SetTitle(" file diff ").
 		SetTitleAlign(tview.AlignLeft).
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
-		SetFocusFunc(func() { setFocusBorder(changeDiff, true) }).
-		SetBlurFunc(func() { setFocusBorder(changeDiff, false) })
+		SetFocusFunc(func() { setFocusBorder(changeDiff.Box, true) }).
+		SetBlurFunc(func() { setFocusBorder(changeDiff.Box, false) })
+
+	focusOnScroll(changeDiff)
 
 	changePanel := tview.NewFlex().
 		AddItem(changeList, 40, 1, true).
@@ -455,8 +521,8 @@ func (t *TUI) setupUI() tview.Primitive {
 	setFocusBorder(commitList.Box, true)
 	setFocusBorder(fileList.Box, false)
 	setFocusBorder(fileDiff.Box, false)
-	setFocusBorder(changeList, false)
-	setFocusBorder(changeDiff, false)
+	setFocusBorder(changeList.Box, false)
+	setFocusBorder(changeDiff.Box, false)
 
 	t.branchList = branchList
 	t.changeTab = changeTab
@@ -506,6 +572,10 @@ func (t *TUI) focusChain() []tview.Primitive {
 
 func (t *TUI) switchTab(tag string) {
 	if tag == t.activeTab {
+		// 再点一次 change tab 也刷新，方便在工作区变化后重新读取索引。
+		if tag == tabChange {
+			t.refreshLocal()
+		}
 		return
 	}
 
@@ -519,6 +589,7 @@ func (t *TUI) switchTab(tag string) {
 	switch {
 	case tag == tabChange:
 		t.app.SetFocus(t.changeList)
+		t.refreshLocal()
 	case changeFocused:
 		// 切回 commit 页时焦点不能留在已隐藏的面板里。
 		t.app.SetFocus(t.commitList)
@@ -657,25 +728,147 @@ func (t *TUI) showDiff(req diffRequest, text string, err error) {
 		text = "[gray](no diff)[-]"
 		message = "no diff: " + req.change.Path
 	}
-	t.setFileDiff(req.change, text, message)
-}
-
-func (t *TUI) setFileDiff(change core.FileChange, text, message string) {
-	t.statusDone("diff", message)
-	t.fileDiff.SetTitle(" file diff: " + tview.Escape(change.Path) + " ")
-	t.fileDiff.SetText(text)
-	t.fileDiff.ScrollToBeginning()
+	t.setDiff(t.fileDiff, "diff", req.change, text, message)
 }
 
 // clearFileDiff 清空 diff 并让在途请求失效；Loader 会取消对应的 git 进程。
 func (t *TUI) clearFileDiff(message string) {
 	t.diff.Cancel()
-	t.statusDone("diff", message)
-	t.fileDiff.SetTitle(" file diff ")
-	if message == "" {
-		t.fileDiff.SetText("")
-	} else {
-		t.fileDiff.SetText("[gray]" + tview.Escape(message) + "[-]")
+	t.clearDiff(t.fileDiff, "diff", message)
+}
+
+func (t *TUI) refreshLocal() {
+	t.localFiles.Reload(localFilesRequest{})
+}
+
+// showLocalFilesLoading 保留旧变更树，只通过 statusBar 提示加载。
+func (t *TUI) showLocalFilesLoading(_ localFilesRequest) {
+	// 保留旧 diff 内容，但停掉在途请求并丢弃缓存：
+	// 文件内容可能已经变化，不能再用 scope+path 命中旧结果。
+	t.localDiff.Reset()
+	t.statusDone("local-diff", "")
+
+	t.localFilesLoading = true
+	t.statusStart("local", "local changes")
+}
+
+func (t *TUI) showLocalFiles(_ localFilesRequest, changes []core.FileChange, err error) {
+	t.localFilesLoading = false
+
+	// 刷新后尽量恢复原来的选中文件，避免每次切 tab 都跳回第一项。
+	previous := t.currentLocalChange()
+
+	title := " local changes "
+	var root *tview.TreeNode
+	switch {
+	case err != nil:
+		root = tview.NewTreeNode("")
+		root.AddChild(tview.NewTreeNode("[red]error[-] " + tview.Escape(err.Error())))
+	case len(changes) == 0:
+		title = " local changes (0) "
+		root = tview.NewTreeNode("")
+		root.AddChild(tview.NewTreeNode("[gray](no changes)[-]"))
+	default:
+		title = fmt.Sprintf(" local changes (%d) ", len(changes))
+		root = buildLocalTree(changes, t.selectedStyle)
 	}
-	t.fileDiff.ScrollToBeginning()
+	t.changeList.SetTitle(title)
+	t.changeList.SetRoot(root)
+
+	switch {
+	case err != nil:
+		t.clearLocalDiff("failed to load local changes")
+		t.localFiles.Cancel() // 下次切回时重试
+	case len(changes) == 0:
+		t.clearLocalDiff("no changes")
+	default:
+		node := findLocalNode(root, previous)
+		if node == nil {
+			node = firstFileNode(root)
+		}
+		if node == nil {
+			t.clearLocalDiff("select a file")
+			break
+		}
+		t.changeList.SetCurrentNode(node)
+		if change, ok := node.GetReference().(core.FileChange); ok {
+			t.showLocalDiffFor(change)
+		}
+	}
+	t.statusDone("local", "")
+}
+
+// currentLocalChange 返回当前选中项对应的文件变更；目录/分组节点返回零值。
+func (t *TUI) currentLocalChange() core.FileChange {
+	if t.changeList == nil {
+		return core.FileChange{}
+	}
+	node := t.changeList.GetCurrentNode()
+	if node == nil {
+		return core.FileChange{}
+	}
+	change, _ := node.GetReference().(core.FileChange)
+	return change
+}
+
+func (t *TUI) showLocalFileDiff(node *tview.TreeNode) {
+	// 列表加载中时，旧树节点属于旧数据，不能拿来发起新的 diff 请求。
+	if t.localFilesLoading {
+		return
+	}
+	change, ok := node.GetReference().(core.FileChange)
+	if !ok {
+		// 目录/分组节点提示选择文件；错误/无变更占位节点保留当前内容
+		if _, isFolder := node.GetReference().(string); isFolder {
+			t.clearLocalDiff("select a file")
+		}
+		return
+	}
+	t.showLocalDiffFor(change)
+}
+
+func (t *TUI) showLocalDiffFor(change core.FileChange) {
+	t.localDiff.Request(localDiffRequest{change: change})
+}
+
+// showLocalDiffLoading 保留旧 diff，只通过 statusBar 提示加载。
+func (t *TUI) showLocalDiffLoading(req localDiffRequest) {
+	t.statusStart("local-diff", "diff "+req.change.Path)
+}
+
+func (t *TUI) showLocalDiff(req localDiffRequest, text string, err error) {
+	message := "diff: " + req.change.Path
+	switch {
+	case err != nil:
+		text = "[red]error[-] " + tview.Escape(err.Error())
+		message = "diff failed: " + req.change.Path
+	case text == "":
+		text = "[gray](no diff)[-]"
+		message = "no diff: " + req.change.Path
+	}
+	t.setDiff(t.changeDiff, "local-diff", req.change, text, message)
+}
+
+// clearLocalDiff 清空 diff 并让在途请求失效；Loader 会取消对应的 git 进程。
+func (t *TUI) clearLocalDiff(message string) {
+	t.localDiff.Cancel()
+	t.clearDiff(t.changeDiff, "local-diff", message)
+}
+
+func (t *TUI) setDiff(view *tview.TextView, slot string, change core.FileChange, text, message string) {
+	t.statusDone(slot, message)
+	view.SetTitle(" file diff: " + tview.Escape(change.Path) + " ")
+	view.SetText(text)
+	view.ScrollToBeginning()
+}
+
+func (t *TUI) clearDiff(view *tview.TextView, slot, message string) {
+	t.statusDone(slot, message)
+	view.SetTitle(" file diff ")
+	if message == "" {
+		view.SetText("")
+	} else {
+		view.SetText("[gray]" + tview.Escape(message) + "[-]")
+	}
+	view.ScrollToBeginning()
 }
