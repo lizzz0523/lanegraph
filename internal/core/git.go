@@ -215,6 +215,7 @@ func GitFileDiff(ctx context.Context, repo string, commit Commit, change FileCha
 		"--line-numbers", "--file-style=omit",
 		"--hunk-header-decoration-style=gray box",
 		"--hunk-header-line-number-style=gray",
+		"--whitespace-error-style=magenta dim",
 		"--line-numbers-left-style=gray",
 		"--line-numbers-right-style=gray",
 		"--line-numbers-zero-style=gray")
