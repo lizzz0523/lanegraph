@@ -62,7 +62,7 @@ func (t *tui) run() error {
 	})
 
 	t.app = app
-	t.refresh()
+	t.refresh(true)
 
 	return app.Run()
 }
@@ -106,7 +106,7 @@ func (t *tui) setupUI() tview.Primitive {
 	}
 
 	commitList := newLaneView(selectedStyle)
-	commitList.setSelectedFunc(t.refresh)
+	commitList.setSelectedFunc(func() { t.refresh(false) })
 
 	commitList.SetTitle(" lanegraph ").
 		SetBorder(true).
@@ -128,7 +128,7 @@ func (t *tui) setupUI() tview.Primitive {
 			x, y, width, height := commitInfo.GetInnerRect()
 			if width != t.infoWidth {
 				t.infoWidth = width
-				t.refresh()
+				t.refresh(true)
 			}
 			return x, y, width, height
 		})
@@ -325,9 +325,19 @@ func (t *tui) setupUI() tview.Primitive {
 	return root
 }
 
-func (t *tui) refresh() {
-	if row := t.commitList.currentItem(); row < len(t.commits) {
-		commit := t.commits[row]
+// refresh 同步 commit 面板、commit 信息和文件列表。
+// force 用于宽度变化等必须重绘 commitInfo 的场景；否则仅在选中 commit 变化时重绘。
+func (t *tui) refresh(force bool) {
+	row := t.commitList.currentItem()
+	if row >= len(t.commits) {
+		return
+	}
+
+	commit := t.commits[row]
+	changed := commit.hash != t.currentCommit.hash
+	t.currentCommit = commit
+
+	if force || changed {
 		text := fmt.Sprintf("[aqua]%v[-] [gray]%v[-]  [::b]%v[-::-]", tview.Escape(commit.author), commit.date.Format("2006-01-02 15:04:05"), tview.Escape(commit.subject))
 		if body := strings.TrimLeft(commit.body, "\r\n"); body != "" {
 			first, _, more := strings.Cut(body, "\n")
@@ -342,12 +352,12 @@ func (t *tui) refresh() {
 			}
 		}
 		t.commitInfo.SetText(text)
-		t.refreshFiles(commit)
 	}
+
+	t.refreshFiles(commit)
 }
 
 func (t *tui) refreshFiles(commit commit) {
-	t.currentCommit = commit
 	if commit.hash == t.filesHash {
 		return
 	}
