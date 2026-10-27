@@ -145,8 +145,8 @@ func (t *TUI) initAsync() {
 			return loadDiff(t.Diff(ctx, req.commit, req.change))
 		},
 		Post:      post,
-		OnLoading: t.showDiffLoading,
-		OnResult:  t.showDiff,
+		OnLoading: t.showFileDiffLoading,
+		OnResult:  t.showFileDiff,
 	})
 
 	t.localFiles = async.New(async.Config[[]core.FileChange, localFilesRequest]{
@@ -323,14 +323,14 @@ func (t *TUI) setupUI() tview.Primitive {
 			return
 		}
 		if len(node.GetChildren()) == 0 {
-			t.showFileDiff(node)
+			t.selectFile(node)
 			return
 		}
 		setFolderExpanded(node, !node.IsExpanded())
 	})
 
 	fileList.SetChangedFunc(func(node *tview.TreeNode) {
-		t.showFileDiff(node)
+		t.selectFile(node)
 	})
 
 	fileDiff := tview.NewTextView().
@@ -377,14 +377,14 @@ func (t *TUI) setupUI() tview.Primitive {
 			return
 		}
 		if len(node.GetChildren()) == 0 {
-			t.showLocalFileDiff(node)
+			t.selectLocalFile(node)
 			return
 		}
 		setFolderExpanded(node, !node.IsExpanded())
 	})
 
 	changeList.SetChangedFunc(func(node *tview.TreeNode) {
-		t.showLocalFileDiff(node)
+		t.selectLocalFile(node)
 	})
 
 	changeDiff := tview.NewTextView().
@@ -601,9 +601,9 @@ func (t *TUI) switchTab(tag string) {
 		// 再点一次当前 tab 也刷新，方便在外部 git 操作后重新读取数据。
 		switch tag {
 		case tabChange:
-			t.refreshLocal()
+			t.reloadLocal()
 		case tabCommit:
-			t.refreshCommits()
+			t.reloadCommits()
 		}
 		return
 	}
@@ -622,7 +622,7 @@ func (t *TUI) switchTab(tag string) {
 	t.switchTabStyles()
 
 	if tag == tabChange {
-		t.refreshLocal()
+		t.reloadLocal()
 		// 焦点原本在左侧分支列表时保留，避免切 tab 抢走焦点。
 		if hiddenFocused {
 			t.app.SetFocus(t.changeList)
@@ -630,7 +630,7 @@ func (t *TUI) switchTab(tag string) {
 		return
 	}
 
-	t.refreshCommits()
+	t.reloadCommits()
 	if hiddenFocused {
 		t.app.SetFocus(t.commitList)
 	}
@@ -649,8 +649,8 @@ func (t *TUI) setTabStyle(button *tview.Button, active bool) {
 	button.SetStyle(style).SetActivatedStyle(style)
 }
 
-// refreshCommits 重新读取 git log；加载期间保留旧列表，避免切 tab 时闪空。
-func (t *TUI) refreshCommits() {
+// reloadCommits 重新读取 git log；加载期间保留旧列表，避免切 tab 时闪空。
+func (t *TUI) reloadCommits() {
 	t.commits.Reload(commitsRequest{})
 }
 
@@ -738,10 +738,11 @@ func (t *TUI) refreshCommit(force bool) {
 		t.commitInfo.SetText(text)
 	}
 
-	t.refreshFiles(commit)
+	t.requestFiles(commit)
 }
 
-func (t *TUI) refreshFiles(commit core.Commit) {
+// requestFiles 请求 commit 的文件列表；同一 commit 的重复请求由 Loader 去重。
+func (t *TUI) requestFiles(commit core.Commit) {
 	t.files.Request(filesRequest{commit: commit})
 }
 
@@ -788,20 +789,20 @@ func (t *TUI) showFiles(req filesRequest, changes []core.FileChange, err error) 
 			break
 		}
 		t.fileList.SetCurrentNode(node)
-		t.showFileDiffFor(req.commit, node)
+		t.requestFileDiff(req.commit, node)
 	}
 	t.statusDone("files", "")
 }
 
-func (t *TUI) showFileDiff(node *tview.TreeNode) {
+func (t *TUI) selectFile(node *tview.TreeNode) {
 	// 文件列表加载中时，旧树节点属于旧 commit，不能拿来请求新 commit 的 diff。
 	if t.filesLoading {
 		return
 	}
-	t.showFileDiffFor(t.CurrentCommit, node)
+	t.requestFileDiff(t.CurrentCommit, node)
 }
 
-func (t *TUI) showFileDiffFor(commit core.Commit, node *tview.TreeNode) {
+func (t *TUI) requestFileDiff(commit core.Commit, node *tview.TreeNode) {
 	change, ok := node.GetReference().(core.FileChange)
 	if !ok {
 		// 目录节点提示选择文件；错误/无变更占位节点保留当前内容
@@ -813,12 +814,12 @@ func (t *TUI) showFileDiffFor(commit core.Commit, node *tview.TreeNode) {
 	t.diff.Request(diffRequest{commit: commit, change: change})
 }
 
-// showDiffLoading 保留旧 diff，只通过 statusBar 提示加载。
-func (t *TUI) showDiffLoading(req diffRequest) {
+// showFileDiffLoading 保留旧 diff，只通过 statusBar 提示加载。
+func (t *TUI) showFileDiffLoading(req diffRequest) {
 	t.statusStart("diff", "diff "+req.change.Path)
 }
 
-func (t *TUI) showDiff(req diffRequest, text string, err error) {
+func (t *TUI) showFileDiff(req diffRequest, text string, err error) {
 	message := "diff: " + req.change.Path
 	switch {
 	case err != nil:
@@ -837,7 +838,8 @@ func (t *TUI) clearFileDiff(message string) {
 	t.clearDiff(t.fileDiff, "diff", message)
 }
 
-func (t *TUI) refreshLocal() {
+// reloadLocal 重新读取本地变更；加载期间保留旧列表，避免切 tab 时闪空。
+func (t *TUI) reloadLocal() {
 	t.localFiles.Reload(localFilesRequest{})
 }
 
@@ -856,7 +858,7 @@ func (t *TUI) showLocalFiles(_ localFilesRequest, changes []core.FileChange, err
 	t.localFilesLoading = false
 
 	// 刷新后尽量恢复原来的选中文件，避免每次切 tab 都跳回第一项。
-	previous := t.currentLocalChange()
+	previous := t.localChange()
 
 	title := " local changes "
 	var changeRoot *tview.TreeNode
@@ -891,13 +893,13 @@ func (t *TUI) showLocalFiles(_ localFilesRequest, changes []core.FileChange, err
 			break
 		}
 		t.changeList.SetCurrentNode(node)
-		t.showLocalDiffFor(node)
+		t.requestLocalDiff(node)
 	}
 	t.statusDone("local", "")
 }
 
-// currentLocalChange 返回当前选中项对应的文件变更；目录/分组节点返回零值。
-func (t *TUI) currentLocalChange() core.FileChange {
+// localChange 返回当前选中项对应的文件变更；目录/分组节点返回零值。
+func (t *TUI) localChange() core.FileChange {
 	if t.changeList == nil {
 		return core.FileChange{}
 	}
@@ -909,15 +911,15 @@ func (t *TUI) currentLocalChange() core.FileChange {
 	return change
 }
 
-func (t *TUI) showLocalFileDiff(node *tview.TreeNode) {
+func (t *TUI) selectLocalFile(node *tview.TreeNode) {
 	// 列表加载中时，旧树节点属于旧数据，不能拿来发起新的 diff 请求。
 	if t.localFilesLoading {
 		return
 	}
-	t.showLocalDiffFor(node)
+	t.requestLocalDiff(node)
 }
 
-func (t *TUI) showLocalDiffFor(node *tview.TreeNode) {
+func (t *TUI) requestLocalDiff(node *tview.TreeNode) {
 	change, ok := node.GetReference().(core.FileChange)
 	if !ok {
 		// 目录/分组节点提示选择文件；错误/无变更占位节点保留当前内容
