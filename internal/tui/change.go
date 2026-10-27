@@ -99,7 +99,8 @@ var localChangeGroups = []struct {
 }
 
 // buildLocalTree 把本地变更分成暂存区和工作区两组，每组内部复用 buildFileTree 的目录树。
-func buildLocalTree(changes []core.FileChange, selectedStyle tcell.Style) *tview.TreeNode {
+// 分组标题只作为 header 展示：不可选中，因此无法被折叠；即使该组没有文件也会显示，计数为 0。
+func buildLocalTree(changes []core.FileChange, selectedStyle, headerStyle tcell.Style) *tview.TreeNode {
 	rootNode := tview.NewTreeNode("")
 
 	for _, group := range localChangeGroups {
@@ -109,15 +110,14 @@ func buildLocalTree(changes []core.FileChange, selectedStyle tcell.Style) *tview
 				files = append(files, change)
 			}
 		}
-		if len(files) == 0 {
-			continue
-		}
 
-		name := fmt.Sprintf("%s (%d)", group.name, len(files))
-		groupNode := tview.NewTreeNode(folderLabel(name, true)).
-			SetReference(name).
+		title := fmt.Sprintf("%s (%d)", group.name, len(files))
+		groupNode := tview.NewTreeNode(tview.Escape(title)).
+			SetReference(group.name).
+			SetTextStyle(headerStyle).
+			SetSelectedTextStyle(headerStyle).
 			SetExpanded(true).
-			SetSelectedTextStyle(selectedStyle)
+			SetSelectable(false)
 		for _, child := range buildFileTree(files, selectedStyle).GetChildren() {
 			groupNode.AddChild(child)
 		}

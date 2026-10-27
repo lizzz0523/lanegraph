@@ -49,7 +49,7 @@ type Branch struct {
 
 func GitBranches(ctx context.Context, repo string) ([]Branch, error) {
 	// 本地 + 远端分支；按提交时间倒序，最新改动的排在前面
-	output, err := gitOutput(ctx, repo, "for-each-ref", "--sort=-committerdate",
+	refs, err := gitOutput(ctx, repo, "for-each-ref", "--sort=-committerdate",
 		"--format=%(refname)%00%(refname:short)%00%(objectname)%00%(symref)",
 		"refs/heads", "refs/remotes")
 	if err != nil {
@@ -57,7 +57,7 @@ func GitBranches(ctx context.Context, repo string) ([]Branch, error) {
 	}
 
 	var branches []Branch
-	for line := range strings.Lines(output) {
+	for line := range strings.Lines(refs) {
 		line = strings.TrimRight(line, "\r\n")
 		if line == "" {
 			continue
@@ -90,14 +90,14 @@ type Commit struct {
 func GitCommits(ctx context.Context, repo string) ([]Commit, error) {
 	// 起点为 HEAD + 本地分支 + 远端分支 + 标签（不含 stash），未合并的分支也会被画出来
 	// -z 用 NUL 分隔记录，body 里的换行才不会把一条记录拆成多行
-	output, err := gitOutput(ctx, repo, "log", "-z", "--date-order", "--branches",
+	log, err := gitOutput(ctx, repo, "log", "-z", "--date-order", "--branches",
 		"--remotes", "--tags", "HEAD", "--format=%H%x00%P%x00%D%x00%an%x00%ct%x00%s%x00%b")
 	if err != nil {
 		return nil, fmt.Errorf("git log error: %w", err)
 	}
 
 	// 字段和记录都以 NUL 分隔，每 7 段是一个 commit；末尾终止符会多出一个空段
-	parts := strings.Split(output, "\x00")
+	parts := strings.Split(log, "\x00")
 	var commits []Commit
 	for i := 0; i+7 <= len(parts); i += 7 {
 		if parts[i] == "" {
@@ -145,11 +145,11 @@ func GitCommitFiles(ctx context.Context, repo string, commit Commit) ([]FileChan
 	} else {
 		args = []string{"show", "--format=", "--name-status", "-z", "-M", commit.Hash}
 	}
-	output, err := gitOutputUntrimmed(ctx, repo, args...)
+	diff, err := gitOutputUntrimmed(ctx, repo, args...)
 	if err != nil {
 		return nil, fmt.Errorf("git commit files error: %w", err)
 	}
-	return parseNameStatus(output, ScopeCommit), nil
+	return parseNameStatus(diff, ScopeCommit), nil
 }
 
 // GitLocalChanges 返回本地工作区的全部变更：
@@ -312,7 +312,7 @@ func gitOutputUntrimmed(ctx context.Context, repo string, args ...string) (strin
 // colorizeDiff 把原始 diff 交给 git-delta 着色；
 // git-delta 失败时返回原始 diff，由调用方决定如何展示。
 func colorizeDiff(ctx context.Context, diff string) (string, error) {
-	delta := exec.CommandContext(ctx, "delta",
+	cmd := exec.CommandContext(ctx, "delta",
 		"--paging=never", "--no-gitconfig", "--width=variable", "--true-color=always",
 		"--line-numbers", "--file-style=omit",
 		"--hunk-header-decoration-style=gray box",
@@ -321,13 +321,13 @@ func colorizeDiff(ctx context.Context, diff string) (string, error) {
 		"--line-numbers-left-style=gray",
 		"--line-numbers-right-style=gray",
 		"--line-numbers-zero-style=gray")
-	delta.Stdin = strings.NewReader(diff)
-	out, err := delta.Output()
+	cmd.Stdin = strings.NewReader(diff)
+	output, err := cmd.Output()
 	if err != nil {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
 		return diff, fmt.Errorf("git-delta error: %w", err)
 	}
-	return string(out), nil
+	return string(output), nil
 }

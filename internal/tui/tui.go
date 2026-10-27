@@ -48,6 +48,7 @@ type TUI struct {
 	tabStyle       tcell.Style
 	tabActiveStyle tcell.Style
 	selectedStyle  tcell.Style
+	headerStyle    tcell.Style
 
 	commits      *async.Loader[[]core.Commit, commitsRequest]
 	diff         *async.Loader[string, diffRequest]
@@ -352,7 +353,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		AddItem(commitDetail, 0, 1, false)
 
 	changeList := tview.NewTreeView().
-		SetRoot(buildLocalTree(nil, selectedStyle)).
+		SetRoot(buildLocalTree(nil, selectedStyle, headerStyle)).
 		SetTopLevel(1).
 		SetGraphics(false)
 
@@ -561,6 +562,7 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.tabStyle = defaultStyle
 	t.tabActiveStyle = selectedStyle
 	t.selectedStyle = selectedStyle
+	t.headerStyle = headerStyle
 	t.switchTabStyles()
 
 	return root
@@ -894,7 +896,7 @@ func (t *TUI) showLocal(_ localFilesRequest, changes []core.FileChange, err erro
 		changeRoot.AddChild(tview.NewTreeNode("[gray](no changes)[-]"))
 	default:
 		title = fmt.Sprintf(" local changes (%d) ", len(changes))
-		changeRoot = buildLocalTree(changes, t.selectedStyle)
+		changeRoot = buildLocalTree(changes, t.selectedStyle, t.headerStyle)
 	}
 	t.changeList.SetTitle(title)
 	t.changeList.SetRoot(changeRoot)
@@ -973,7 +975,7 @@ func (t *TUI) clearDiff(view *tview.TextView, slot, message string) {
 	if message == "" {
 		view.SetText("")
 	} else {
-		view.SetText("[gray]" + tview.Escape(message) + "[-]")
+		view.SetText("[gray](" + tview.Escape(message) + ")[-]")
 	}
 	view.ScrollToBeginning()
 }
