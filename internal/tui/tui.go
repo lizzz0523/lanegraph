@@ -38,9 +38,11 @@ type TUI struct {
 	fileList    *tview.TreeView
 	fileDiff    *tview.TextView
 
-	changePanel *tview.Flex
-	changeList  *tview.TreeView
-	changeDiff  *tview.TextView
+	changePanel       *tview.Flex
+	changeList        *tview.TreeView
+	changeDiff        *tview.TextView
+	commitSubject     *tview.TextArea
+	commitDescription *tview.TextArea
 
 	activeTab     string // 当前显示的主面板 tab
 	infoWidth     int
@@ -470,9 +472,67 @@ func (t *TUI) setupUI() tview.Primitive {
 
 	focusOnScroll(changeDiff)
 
+	commitSubject := tview.NewTextArea()
+
+	commitSubject.SetTitle(" commit subject ").
+		SetTitleAlign(tview.AlignLeft).
+		SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1).
+		SetFocusFunc(func() { setFocusBorder(commitSubject.Box, true) }).
+		SetBlurFunc(func() { setFocusBorder(commitSubject.Box, false) })
+
+	commitDescription := tview.NewTextArea()
+
+	commitDescription.SetTitle(" description ").
+		SetTitleAlign(tview.AlignLeft).
+		SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1).
+		SetFocusFunc(func() { setFocusBorder(commitDescription.Box, true) }).
+		SetBlurFunc(func() { setFocusBorder(commitDescription.Box, false) })
+
+	commitButton := tview.NewButton("Commit").
+		SetStyle(selectedStyle).
+		SetActivatedStyle(selectedStyle)
+
+	amendCheck := tview.NewCheckbox().
+		SetUncheckedStyle(selectedStyle).
+		SetCheckedStyle(selectedStyle).
+		SetActivatedStyle(selectedStyle)
+
+	amendLabel := tview.NewTextView().
+		SetText("Amend")
+
+	amendLabel.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if !amendLabel.InRect(event.Position()) {
+			return action, event
+		}
+		if action == tview.MouseLeftDown {
+			amendCheck.SetChecked(!amendCheck.IsChecked())
+			return tview.MouseMove, event
+		}
+		return action, event
+	})
+
+	commitAction := tview.NewFlex().
+		AddItem(nil, 1, 0, false).
+		AddItem(amendCheck, 1, 0, false).
+		AddItem(nil, 1, 0, false).
+		AddItem(amendLabel, 5, 0, false).
+		AddItem(nil, 0, 1, false).
+		AddItem(commitButton, 16, 0, false).
+		AddItem(nil, 1, 0, false)
+
+	changeInfo := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(changeDiff, 0, 1, false).
+		AddItem(commitSubject, 3, 0, false).
+		AddItem(commitDescription, 5, 0, false).
+		AddItem(commitAction, 1, 0, false).
+		AddItem(nil, 1, 0, false)
+
 	changePanel := tview.NewFlex().
 		AddItem(changeList, 40, 1, true).
-		AddItem(changeDiff, 0, 1, false)
+		AddItem(changeInfo, 0, 1, false)
 
 	filterText := tview.NewTextArea()
 
@@ -594,6 +654,8 @@ func (t *TUI) setupUI() tview.Primitive {
 	setFocusBorder(fileDiff.Box, false)
 	setFocusBorder(changeList.Box, false)
 	setFocusBorder(changeDiff.Box, false)
+	setFocusBorder(commitSubject.Box, false)
+	setFocusBorder(commitDescription.Box, false)
 
 	t.repoHead = repoHead
 	t.changeTab = changeTab
@@ -612,6 +674,8 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.changePanel = changePanel
 	t.changeList = changeList
 	t.changeDiff = changeDiff
+	t.commitSubject = commitSubject
+	t.commitDescription = commitDescription
 
 	t.activeTab = tabCommit
 	t.statusBusy = make(map[string]string)
@@ -643,7 +707,7 @@ func (t *TUI) nextFocus(step int) tview.Primitive {
 // focusChain 是当前 tab 下 Tab/Backtab 的循环顺序。
 func (t *TUI) focusChain() []tview.Primitive {
 	if t.activeTab == tabChange {
-		return []tview.Primitive{t.filterText, t.branchList, t.changeList, t.changeDiff}
+		return []tview.Primitive{t.filterText, t.branchList, t.changeList, t.changeDiff, t.commitSubject, t.commitDescription}
 	}
 	return []tview.Primitive{t.filterText, t.branchList, t.commitList, t.fileList, t.fileDiff}
 }
