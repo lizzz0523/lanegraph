@@ -470,30 +470,9 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.tabStyle = defaultStyle
 	t.tabActiveStyle = selectedStyle
 	t.selectedStyle = selectedStyle
-	t.applyTabStyles()
+	t.switchTabStyles()
 
 	return root
-}
-
-func (t *TUI) switchTab(tag string) {
-	if tag == t.activeTab {
-		return
-	}
-
-	// 先记下焦点是否在 change 页，SwitchToPage 之后就不准了。
-	changeFocused := t.changePanel.HasFocus()
-
-	t.activeTab = tag
-	t.mainPanels.SwitchToPage(tag)
-	t.applyTabStyles()
-
-	switch {
-	case tag == tabChange:
-		t.app.SetFocus(t.changeList)
-	case changeFocused:
-		// 切回 commit 页时焦点不能留在已隐藏的面板里。
-		t.app.SetFocus(t.commitList)
-	}
 }
 
 // nextFocus 在当前 tab 的循环顺序里前进 step（±1）。
@@ -519,7 +498,28 @@ func (t *TUI) focusChain() []tview.Primitive {
 	return []tview.Primitive{t.branchList, t.commitList, t.fileList, t.fileDiff}
 }
 
-func (t *TUI) applyTabStyles() {
+func (t *TUI) switchTab(tag string) {
+	if tag == t.activeTab {
+		return
+	}
+
+	// 先记下焦点是否在 change 页，SwitchToPage 之后就不准了。
+	changeFocused := t.changePanel.HasFocus()
+
+	t.activeTab = tag
+	t.mainPanels.SwitchToPage(tag)
+	t.switchTabStyles()
+
+	switch {
+	case tag == tabChange:
+		t.app.SetFocus(t.changeList)
+	case changeFocused:
+		// 切回 commit 页时焦点不能留在已隐藏的面板里。
+		t.app.SetFocus(t.commitList)
+	}
+}
+
+func (t *TUI) switchTabStyles() {
 	t.setTabStyle(t.changeTab, t.activeTab == tabChange)
 	t.setTabStyle(t.commitTab, t.activeTab == tabCommit)
 }
