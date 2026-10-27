@@ -440,10 +440,11 @@ func (t *TUI) refreshFiles(commit core.Commit) {
 
 // showFilesLoading 保留旧文件树，只通过 statusBar 提示加载。
 func (t *TUI) showFilesLoading(_ filesRequest) {
-	t.filesLoading = true
 	// 保留旧 diff 内容，但停掉在途请求，避免旧结果在文件加载期间回写面板。
 	t.diff.Cancel()
 	t.statusDone("diff", "")
+
+	t.filesLoading = true
 	t.statusStart("files", "file changes")
 }
 
