@@ -682,13 +682,13 @@ func (t *TUI) showFiles(req filesRequest, changes []core.FileChange, err error) 
 	case len(changes) == 0:
 		t.clearFileDiff("no changes")
 	default:
-		first := firstFileNode(fileRoot)
-		if first == nil {
+		node := firstFileNode(fileRoot)
+		if node == nil {
 			t.clearFileDiff("select a file")
 			break
 		}
-		t.fileList.SetCurrentNode(first)
-		t.showFileDiffFor(req.commit, first)
+		t.fileList.SetCurrentNode(node)
+		t.showFileDiffFor(req.commit, node)
 	}
 	t.statusDone("files", "")
 }
@@ -759,21 +759,21 @@ func (t *TUI) showLocalFiles(_ localFilesRequest, changes []core.FileChange, err
 	previous := t.currentLocalChange()
 
 	title := " local changes "
-	var root *tview.TreeNode
+	var changeRoot *tview.TreeNode
 	switch {
 	case err != nil:
-		root = tview.NewTreeNode("")
-		root.AddChild(tview.NewTreeNode("[red]error[-] " + tview.Escape(err.Error())))
+		changeRoot = tview.NewTreeNode("")
+		changeRoot.AddChild(tview.NewTreeNode("[red]error[-] " + tview.Escape(err.Error())))
 	case len(changes) == 0:
 		title = " local changes (0) "
-		root = tview.NewTreeNode("")
-		root.AddChild(tview.NewTreeNode("[gray](no changes)[-]"))
+		changeRoot = tview.NewTreeNode("")
+		changeRoot.AddChild(tview.NewTreeNode("[gray](no changes)[-]"))
 	default:
 		title = fmt.Sprintf(" local changes (%d) ", len(changes))
-		root = buildLocalTree(changes, t.selectedStyle)
+		changeRoot = buildLocalTree(changes, t.selectedStyle)
 	}
 	t.changeList.SetTitle(title)
-	t.changeList.SetRoot(root)
+	t.changeList.SetRoot(changeRoot)
 
 	switch {
 	case err != nil:
@@ -782,18 +782,16 @@ func (t *TUI) showLocalFiles(_ localFilesRequest, changes []core.FileChange, err
 	case len(changes) == 0:
 		t.clearLocalDiff("no changes")
 	default:
-		node := findLocalNode(root, previous)
+		node := findLocalNode(changeRoot, previous)
 		if node == nil {
-			node = firstFileNode(root)
+			node = firstFileNode(changeRoot)
 		}
 		if node == nil {
 			t.clearLocalDiff("select a file")
 			break
 		}
 		t.changeList.SetCurrentNode(node)
-		if change, ok := node.GetReference().(core.FileChange); ok {
-			t.showLocalDiffFor(change)
-		}
+		t.showLocalDiffFor(node)
 	}
 	t.statusDone("local", "")
 }
@@ -816,6 +814,10 @@ func (t *TUI) showLocalFileDiff(node *tview.TreeNode) {
 	if t.localFilesLoading {
 		return
 	}
+	t.showLocalDiffFor(node)
+}
+
+func (t *TUI) showLocalDiffFor(node *tview.TreeNode) {
 	change, ok := node.GetReference().(core.FileChange)
 	if !ok {
 		// 目录/分组节点提示选择文件；错误/无变更占位节点保留当前内容
@@ -824,10 +826,6 @@ func (t *TUI) showLocalFileDiff(node *tview.TreeNode) {
 		}
 		return
 	}
-	t.showLocalDiffFor(change)
-}
-
-func (t *TUI) showLocalDiffFor(change core.FileChange) {
 	t.localDiff.Request(localDiffRequest{change: change})
 }
 
