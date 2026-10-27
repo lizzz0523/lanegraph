@@ -172,18 +172,6 @@ func (t *TUI) initAsync() {
 	})
 }
 
-// loadDiff 统一处理 git-delta 的输出；delta 不可用时退回到原始 diff。
-func loadDiff(output string, err error) (string, error) {
-	switch {
-	case err != nil && output == "":
-		return "", err
-	case err != nil:
-		return buildPlainDiff(output), nil
-	default:
-		return buildDeltaDiff(output), nil
-	}
-}
-
 func (t *TUI) setupUI() tview.Primitive {
 	tview.Borders.TopLeft, tview.Borders.TopRight = '╭', '╮'
 	tview.Borders.BottomLeft, tview.Borders.BottomRight = '╰', '╯'
