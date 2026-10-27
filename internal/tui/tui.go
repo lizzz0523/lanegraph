@@ -49,6 +49,7 @@ type TUI struct {
 	tabActiveStyle tcell.Style
 	selectedStyle  tcell.Style
 
+	commits      *async.Loader[[]core.Commit, commitsRequest]
 	diff         *async.Loader[string, diffRequest]
 	files        *async.Loader[[]core.FileChange, filesRequest]
 	filesLoading bool // 文件列表加载中：保留旧树并忽略交互
@@ -57,6 +58,8 @@ type TUI struct {
 	localFiles        *async.Loader[[]core.FileChange, localFilesRequest]
 	localFilesLoading bool // 本地变更列表加载中：保留旧树并忽略交互
 }
+
+type commitsRequest struct{}
 
 type filesRequest struct {
 	commit core.Commit
@@ -100,6 +103,7 @@ func (t *TUI) Run() error {
 	t.app = app
 
 	t.initAsync()
+	defer t.commits.Close()
 	defer t.files.Close()
 	defer t.diff.Close()
 	defer t.localFiles.Close()
@@ -112,6 +116,16 @@ func (t *TUI) Run() error {
 
 func (t *TUI) initAsync() {
 	post := func(f func()) { t.app.QueueUpdateDraw(f) }
+
+	t.commits = async.New(async.Config[[]core.Commit, commitsRequest]{
+		Key: func(commitsRequest) string { return "commits" },
+		Load: func(ctx context.Context, _ commitsRequest) ([]core.Commit, error) {
+			return core.GitCommits(ctx, t.Repo)
+		},
+		Post:      post,
+		OnLoading: t.showCommitsLoading,
+		OnResult:  t.showCommits,
+	})
 
 	t.files = async.New(async.Config[[]core.FileChange, filesRequest]{
 		Key: func(req filesRequest) string { return req.commit.Hash },
@@ -403,12 +417,6 @@ func (t *TUI) setupUI() tview.Primitive {
 		AddChild(localNode).
 		AddChild(remoteNode)
 
-	// commit hash -> graph 行号，用于点击分支后跳转
-	rowOf := make(map[string]int, len(t.Commits))
-	for i, c := range t.Commits {
-		rowOf[c.Hash] = i
-	}
-
 	var headNode *tview.TreeNode
 
 	for _, b := range t.Branches {
@@ -420,7 +428,8 @@ func (t *TUI) setupUI() tview.Primitive {
 		child := tview.NewTreeNode(b.Name).
 			SetSelectedTextStyle(selectedStyle).
 			SetSelectedFunc(func() {
-				if row, ok := rowOf[b.Hash]; ok {
+				// commits 刷新后行号会变化，每次跳转都按当前列表查询。
+				if row := t.commitRow(b.Hash); row >= 0 {
 					commitList.setCurrentItem(row)
 				}
 			})
@@ -457,7 +466,8 @@ func (t *TUI) setupUI() tview.Primitive {
 	focusOnScrollTree(branchList)
 
 	branchHead := tview.NewTextView().
-		SetText(t.HeadRef)
+		SetText(t.HeadRef).
+		SetWrap(false)
 
 	branchHead.SetTitle(" "+t.RepoName+" ").
 		SetBorder(true).
@@ -467,7 +477,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		if action != tview.MouseLeftClick || !branchHead.InRect(event.Position()) {
 			return action, event
 		}
-		if row, ok := rowOf[t.HeadHash]; ok {
+		if row := t.commitRow(t.HeadHash); row >= 0 {
 			commitList.setCurrentItem(row)
 		}
 		if headNode != nil {
@@ -588,26 +598,40 @@ func (t *TUI) focusChain() []tview.Primitive {
 
 func (t *TUI) switchTab(tag string) {
 	if tag == t.activeTab {
-		// 再点一次 change tab 也刷新，方便在工作区变化后重新读取索引。
-		if tag == tabChange {
+		// 再点一次当前 tab 也刷新，方便在外部 git 操作后重新读取数据。
+		switch tag {
+		case tabChange:
 			t.refreshLocal()
+		case tabCommit:
+			t.refreshCommits()
 		}
 		return
 	}
 
-	// 先记下焦点是否在 change 页，SwitchToPage 之后就不准了。
-	changeFocused := t.changePanel.HasFocus()
+	// 记下焦点是否在即将隐藏的那一页里；
+	// SwitchToPage 之后子控件的 hasFocus 标记不会清掉，事后判断不可靠。
+	var hiddenFocused bool
+	if tag == tabChange {
+		hiddenFocused = t.commitPanel.HasFocus()
+	} else {
+		hiddenFocused = t.changePanel.HasFocus()
+	}
 
 	t.activeTab = tag
 	t.mainPanels.SwitchToPage(tag)
 	t.switchTabStyles()
 
-	switch {
-	case tag == tabChange:
-		t.app.SetFocus(t.changeList)
+	if tag == tabChange {
 		t.refreshLocal()
-	case changeFocused:
-		// 切回 commit 页时焦点不能留在已隐藏的面板里。
+		// 焦点原本在左侧分支列表时保留，避免切 tab 抢走焦点。
+		if hiddenFocused {
+			t.app.SetFocus(t.changeList)
+		}
+		return
+	}
+
+	t.refreshCommits()
+	if hiddenFocused {
 		t.app.SetFocus(t.commitList)
 	}
 }
@@ -623,6 +647,66 @@ func (t *TUI) setTabStyle(button *tview.Button, active bool) {
 		style = t.tabActiveStyle
 	}
 	button.SetStyle(style).SetActivatedStyle(style)
+}
+
+// refreshCommits 重新读取 git log；加载期间保留旧列表，避免切 tab 时闪空。
+func (t *TUI) refreshCommits() {
+	t.commits.Reload(commitsRequest{})
+}
+
+func (t *TUI) showCommitsLoading(_ commitsRequest) {
+	t.statusStart("commits", "commits")
+}
+
+func (t *TUI) showCommits(_ commitsRequest, commits []core.Commit, err error) {
+	if err != nil {
+		// 保留旧列表，只提示失败原因；下次切 tab 会重试。
+		t.statusDone("commits", "commits: "+err.Error())
+		return
+	}
+	t.statusDone("commits", "")
+
+	// 按 hash 恢复选中项：新提交只会插到列表前面，不应该把用户甩到别的提交。
+	row := t.commitList.currentItem()
+	previous := ""
+	if row < len(t.Commits) {
+		previous = t.Commits[row].Hash
+	}
+
+	t.Commits = commits
+	t.commitList.setLines(renderGraph(commits, core.ComputeGraph(commits)))
+
+	if len(commits) == 0 {
+		t.CurrentCommit = core.Commit{}
+		t.filesLoading = false
+		t.files.Cancel()
+		t.statusDone("files", "")
+		t.commitInfo.SetText("")
+		t.fileList.SetTitle(" file changes ")
+		t.fileList.SetRoot(tview.NewTreeNode(""))
+		t.clearFileDiff("no commits")
+		return
+	}
+
+	if found := t.commitRow(previous); found >= 0 {
+		row = found
+	}
+	t.commitList.setCurrentItem(row)
+	t.refreshCommit(true)
+}
+
+// commitRow 返回 hash 在提交列表中的行号；hash 为空或不存在时返回 -1。
+// 刷新 commits 后行号会整体移动，分支跳转必须按当前列表重新查询。
+func (t *TUI) commitRow(hash string) int {
+	if hash == "" {
+		return -1
+	}
+	for i, commit := range t.Commits {
+		if commit.Hash == hash {
+			return i
+		}
+	}
+	return -1
 }
 
 // refreshCommit 更新 commit 面板与 commit 信息，并异步请求文件列表。
