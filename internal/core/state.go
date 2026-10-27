@@ -27,7 +27,7 @@ func NewState(repo string) (State, error) {
 		return State{}, err
 	}
 
-	headRef, headHash := GitHeadRef(repo)
+	headRef, headHash := GitRepoHead(repo)
 
 	return State{
 		Repo:      repo,

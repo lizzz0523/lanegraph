@@ -36,7 +36,7 @@ func GitRepoName(repo string) string {
 	return filepath.Base(root)
 }
 
-func GitHeadRef(repo string) (string, string) {
+func GitRepoHead(repo string) (string, string) {
 	hash, _ := gitOutput(repo, "rev-parse", "HEAD")
 
 	// HEAD 指向分支时直接显示分支名
