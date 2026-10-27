@@ -13,19 +13,33 @@ import (
 	"github.com/rivo/tview"
 )
 
+// 主面板 tab，同时用作 Pages 的页名。
+const (
+	tabChange = "change"
+	tabCommit = "commit"
+)
+
 type TUI struct {
 	*core.State
-	app           *tview.Application
-	branchList    *tview.TreeView
-	commitList    *laneView
-	commitInfo    *tview.TextView
-	fileList      *tview.TreeView
-	fileDiff      *tview.TextView
-	statusBar     *tview.TextView
-	statusBusy    map[string]string // statusBar 当前展示的 loading 项，key 为槽位
-	statusMsg     string            // 最近一次操作结果，loading 结束后保留
-	infoWidth     int
-	selectedStyle tcell.Style
+	app            *tview.Application
+	mainPanels     *tview.Pages
+	changeTab      *tview.Button
+	commitTab      *tview.Button
+	branchList     *tview.TreeView
+	commitPanel    *tview.Flex
+	changePanel    *tview.Flex
+	commitList     *laneView
+	commitInfo     *tview.TextView
+	fileList       *tview.TreeView
+	fileDiff       *tview.TextView
+	activeTab      string // 当前显示的主面板 tab
+	infoWidth      int
+	statusBar      *tview.TextView
+	statusBusy     map[string]string // statusBar 当前展示的 loading 项，key 为槽位
+	statusMsg      string            // 最近一次操作结果，loading 结束后保留
+	tabStyle       tcell.Style
+	tabActiveStyle tcell.Style
+	selectedStyle  tcell.Style
 
 	files        *async.Loader[[]core.FileChange, filesRequest]
 	filesLoading bool // 文件列表加载中：保留旧树并忽略交互
@@ -57,6 +71,8 @@ func (t *TUI) Run() error {
 			return nil
 		case event.Key() == tcell.KeyTab:
 			switch {
+			case t.activeTab == tabChange:
+				app.SetFocus(t.branchList)
 			case t.branchList.HasFocus():
 				app.SetFocus(t.commitList)
 			case t.commitList.HasFocus():
@@ -69,6 +85,8 @@ func (t *TUI) Run() error {
 			return nil
 		case event.Key() == tcell.KeyBacktab:
 			switch {
+			case t.activeTab == tabChange:
+				app.SetFocus(t.branchList)
 			case t.branchList.HasFocus():
 				app.SetFocus(t.fileDiff)
 			case t.commitList.HasFocus():
@@ -89,7 +107,7 @@ func (t *TUI) Run() error {
 	defer t.files.Close()
 	defer t.diff.Close()
 
-	t.refresh(true)
+	t.refreshCommit(true)
 
 	return app.Run()
 }
@@ -136,6 +154,10 @@ func (t *TUI) setupUI() tview.Primitive {
 	tview.Borders.HorizontalFocus = tview.Borders.Horizontal
 	tview.Borders.VerticalFocus = tview.Borders.Vertical
 
+	defaultStyle := tcell.StyleDefault.
+		Foreground(tcell.ColorGray).
+		Background(tview.Styles.PrimitiveBackgroundColor)
+
 	// 选中态用灰底代替 tview 默认的白底反色；前景色与未选中行一致
 	selectedStyle := tcell.StyleDefault.
 		Foreground(tview.Styles.PrimaryTextColor).
@@ -167,9 +189,10 @@ func (t *TUI) setupUI() tview.Primitive {
 	}
 
 	commitList := newLaneView(selectedStyle)
-	commitList.setSelectedFunc(func() { t.refresh(false) })
+	commitList.setSelectedFunc(func() { t.refreshCommit(false) })
 
-	commitList.SetTitle(" lanegraph ").
+	commitList.SetTitle(" all commits ").
+		SetTitleAlign(tview.AlignLeft).
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
 		SetFocusFunc(func() { setFocusBorder(commitList.Box, true) }).
@@ -189,7 +212,7 @@ func (t *TUI) setupUI() tview.Primitive {
 			x, y, width, height := commitInfo.GetInnerRect()
 			if width != t.infoWidth {
 				t.infoWidth = width
-				t.refresh(true)
+				t.refreshCommit(true)
 			}
 			return x, y, width, height
 		})
@@ -259,6 +282,22 @@ func (t *TUI) setupUI() tview.Primitive {
 		AddItem(commitList, 18, 0, true).
 		AddItem(commitInfo, 4, 0, false).
 		AddItem(commitDetail, 0, 1, false)
+
+	changeList := tview.NewBox().
+		SetTitle(" local changes ").
+		SetTitleAlign(tview.AlignLeft).
+		SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1)
+
+	changeDiff := tview.NewBox().
+		SetTitle(" file diff ").
+		SetTitleAlign(tview.AlignLeft).
+		SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1)
+
+	changePanel := tview.NewFlex().
+		AddItem(changeList, 40, 0, false).
+		AddItem(changeDiff, 0, 1, false)
 
 	// 隐藏 root，用 Local / Remote 作为分组标题。
 	localNode := tview.NewTreeNode("Local").
@@ -364,14 +403,49 @@ func (t *TUI) setupUI() tview.Primitive {
 		return tview.MouseConsumed, nil
 	})
 
+	changeTab := tview.NewButton("Local Changes")
+	commitTab := tview.NewButton("All Commits")
+
+	// 左键按下也要吞掉，否则 Button 会自己 setFocus，抢走列表焦点。
+	bindTab := func(button *tview.Button, tag string) {
+		button.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+			switch action {
+			case tview.MouseLeftDown, tview.MouseLeftClick:
+				if !button.InRect(event.Position()) {
+					return action, event
+				}
+				if action == tview.MouseLeftClick {
+					t.switchTab(tag)
+				}
+				return tview.MouseConsumed, nil
+			}
+			return action, event
+		})
+	}
+
+	bindTab(changeTab, tabChange)
+	bindTab(commitTab, tabCommit)
+
+	mainTabs := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(changeTab, 1, 0, false).
+		AddItem(commitTab, 1, 0, false)
+
 	branchPanel := tview.NewFlex().
 		SetDirection(tview.FlexRow).
 		AddItem(branchHead, 3, 0, false).
+		AddItem(mainTabs, 2, 0, false).
 		AddItem(branchList, 0, 1, false)
+
+	// Pages 会先把整块区域刷成背景色再画当前页，
+	// 所以切换时不会残留上一个面板的像素。
+	mainPanels := tview.NewPages().
+		AddPage(tabChange, changePanel, true, false).
+		AddPage(tabCommit, commitPanel, true, true)
 
 	mainContent := tview.NewFlex().
 		AddItem(branchPanel, 30, 0, false).
-		AddItem(commitPanel, 0, 1, true)
+		AddItem(mainPanels, 0, 1, true)
 
 	statusBar := tview.NewTextView().
 		SetDynamicColors(true).
@@ -389,22 +463,63 @@ func (t *TUI) setupUI() tview.Primitive {
 	setFocusBorder(commitList.Box, true)
 	setFocusBorder(fileList.Box, false)
 	setFocusBorder(fileDiff.Box, false)
+	setFocusBorder(changePanel.Box, false)
 
 	t.branchList = branchList
+	t.changeTab = changeTab
+	t.commitTab = commitTab
+	t.mainPanels = mainPanels
+	t.commitPanel = commitPanel
+	t.changePanel = changePanel
 	t.commitList = commitList
 	t.commitInfo = commitInfo
 	t.fileList = fileList
 	t.fileDiff = fileDiff
+	t.activeTab = tabCommit
 	t.statusBar = statusBar
 	t.statusBusy = make(map[string]string)
+	t.tabStyle = defaultStyle
+	t.tabActiveStyle = selectedStyle
 	t.selectedStyle = selectedStyle
+	t.applyTabStyles()
 
 	return root
 }
 
-// refresh 更新 commit 面板与 commit 信息，并异步请求文件列表。
+func (t *TUI) switchTab(tag string) {
+	if tag == t.activeTab {
+		return
+	}
+
+	// SwitchToPage 会把焦点交给新页，先记下焦点是否在 commit 页里。
+	commitFocused := t.commitPanel.HasFocus()
+
+	t.activeTab = tag
+	t.mainPanels.SwitchToPage(tag)
+	t.applyTabStyles()
+
+	// change 页暂无焦点控件，避免焦点留在已隐藏的面板里。
+	if tag == tabChange && commitFocused {
+		t.app.SetFocus(t.branchList)
+	}
+}
+
+func (t *TUI) applyTabStyles() {
+	t.setTabStyle(t.changeTab, t.activeTab == tabChange)
+	t.setTabStyle(t.commitTab, t.activeTab == tabCommit)
+}
+
+func (t *TUI) setTabStyle(button *tview.Button, active bool) {
+	style := t.tabStyle
+	if active {
+		style = t.tabActiveStyle
+	}
+	button.SetStyle(style).SetActivatedStyle(style)
+}
+
+// refreshCommit 更新 commit 面板与 commit 信息，并异步请求文件列表。
 // force 用于宽度变化等必须重绘 commitInfo 的场景；否则仅在选中 commit 变化时重绘。
-func (t *TUI) refresh(force bool) {
+func (t *TUI) refreshCommit(force bool) {
 	row := t.commitList.currentItem()
 	if row >= len(t.Commits) {
 		return
