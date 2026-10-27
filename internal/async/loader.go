@@ -100,6 +100,56 @@ func (l *Loader[T, K]) Request(arg K) {
 	}
 }
 
+// Reload 丢弃 arg 对应的缓存并重新请求，用于切换面板时强制刷新。
+// 只能在 UI 线程调用。
+func (l *Loader[T, K]) Reload(arg K) {
+	key := l.cfg.Key(arg)
+
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		return
+	}
+	// 在锁内取消在途请求，确保旧结果不会在删除缓存后重新写回；
+	// 否则 Request 可能命中刚刚写回的旧缓存。
+	if l.cancel != nil {
+		l.cancel()
+		l.cancel = nil
+	}
+	delete(l.cache, key)
+	// 之前请求的就是同一个 key 时，Request 会把它当成重复请求直接返回，
+	// 因此这里先清掉最新请求标记，让下面的 Request 真正发起加载。
+	if l.latestKey == key {
+		l.latestKey = ""
+		l.shownKey = ""
+		l.seq++
+	}
+	l.mu.Unlock()
+
+	l.Request(arg)
+}
+
+// Reset 丢弃全部缓存并取消在途请求，让后续 Request 重新加载。
+// 用于数据源整体变化、无法按 key 判断失效的场景。
+// 只能在 UI 线程调用。
+func (l *Loader[T, K]) Reset() {
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		return
+	}
+	// 在锁内取消在途请求，避免旧结果在清空缓存后重新写回。
+	if l.cancel != nil {
+		l.cancel()
+		l.cancel = nil
+	}
+	l.cache = make(map[string]entry[T])
+	l.latestKey = ""
+	l.shownKey = ""
+	l.seq++
+	l.mu.Unlock()
+}
+
 // Cancel 让当前在途结果失效，并取消当前 Load 的 context。
 func (l *Loader[T, K]) Cancel() {
 	l.mu.Lock()

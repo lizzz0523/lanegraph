@@ -48,3 +48,13 @@ func (s *State) Files(ctx context.Context, commit Commit) ([]FileChange, error) 
 func (s *State) Diff(ctx context.Context, commit Commit, change FileChange) (string, error) {
 	return GitFileDiff(ctx, s.Repo, commit, change)
 }
+
+// LocalChanges 返回暂存区、未暂存和未跟踪的全部本地变更。
+func (s *State) LocalChanges(ctx context.Context) ([]FileChange, error) {
+	return GitLocalChanges(ctx, s.Repo)
+}
+
+// LocalDiff 返回本地单个文件的 diff，通常是 git-delta 的 ANSI 输出。
+func (s *State) LocalDiff(ctx context.Context, change FileChange) (string, error) {
+	return GitLocalFileDiff(ctx, s.Repo, change)
+}
