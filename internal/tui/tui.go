@@ -32,6 +32,8 @@ type TUI struct {
 	commitInfo     *tview.TextView
 	fileList       *tview.TreeView
 	fileDiff       *tview.TextView
+	changeList     *tview.Box
+	changeDiff     *tview.Box
 	activeTab      string // 当前显示的主面板 tab
 	infoWidth      int
 	statusBar      *tview.TextView
@@ -70,32 +72,10 @@ func (t *TUI) Run() error {
 			app.Stop()
 			return nil
 		case event.Key() == tcell.KeyTab:
-			switch {
-			case t.activeTab == tabChange:
-				app.SetFocus(t.branchList)
-			case t.branchList.HasFocus():
-				app.SetFocus(t.commitList)
-			case t.commitList.HasFocus():
-				app.SetFocus(t.fileList)
-			case t.fileList.HasFocus():
-				app.SetFocus(t.fileDiff)
-			default:
-				app.SetFocus(t.branchList)
-			}
+			app.SetFocus(t.nextFocus(1))
 			return nil
 		case event.Key() == tcell.KeyBacktab:
-			switch {
-			case t.activeTab == tabChange:
-				app.SetFocus(t.branchList)
-			case t.branchList.HasFocus():
-				app.SetFocus(t.fileDiff)
-			case t.commitList.HasFocus():
-				app.SetFocus(t.branchList)
-			case t.fileList.HasFocus():
-				app.SetFocus(t.commitList)
-			default:
-				app.SetFocus(t.fileList)
-			}
+			app.SetFocus(t.nextFocus(-1))
 			return nil
 		}
 		return event
@@ -283,20 +263,26 @@ func (t *TUI) setupUI() tview.Primitive {
 		AddItem(commitInfo, 4, 0, false).
 		AddItem(commitDetail, 0, 1, false)
 
-	changeList := tview.NewBox().
-		SetTitle(" local changes ").
-		SetTitleAlign(tview.AlignLeft).
-		SetBorder(true).
-		SetBorderPadding(0, 0, 1, 1)
+	changeList := tview.NewBox()
 
-	changeDiff := tview.NewBox().
-		SetTitle(" file diff ").
+	changeList.SetTitle(" local changes ").
 		SetTitleAlign(tview.AlignLeft).
 		SetBorder(true).
-		SetBorderPadding(0, 0, 1, 1)
+		SetBorderPadding(0, 0, 1, 1).
+		SetFocusFunc(func() { setFocusBorder(changeList, true) }).
+		SetBlurFunc(func() { setFocusBorder(changeList, false) })
+
+	changeDiff := tview.NewBox()
+
+	changeDiff.SetTitle(" file diff ").
+		SetTitleAlign(tview.AlignLeft).
+		SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1).
+		SetFocusFunc(func() { setFocusBorder(changeDiff, true) }).
+		SetBlurFunc(func() { setFocusBorder(changeDiff, false) })
 
 	changePanel := tview.NewFlex().
-		AddItem(changeList, 40, 0, false).
+		AddItem(changeList, 40, 1, true).
 		AddItem(changeDiff, 0, 1, false)
 
 	// 隐藏 root，用 Local / Remote 作为分组标题。
@@ -458,12 +444,13 @@ func (t *TUI) setupUI() tview.Primitive {
 		AddItem(mainContent, 0, 1, true).
 		AddItem(statusBar, 1, 0, false)
 
-	// SetRoot 只会对 commitList 触发 focus 回调，branchList 需手动初始化为未聚焦
+	// SetRoot 只会对 commitList 触发 focus 回调，其余需手动初始化为未聚焦
 	setFocusBorder(branchList.Box, false)
 	setFocusBorder(commitList.Box, true)
 	setFocusBorder(fileList.Box, false)
 	setFocusBorder(fileDiff.Box, false)
-	setFocusBorder(changePanel.Box, false)
+	setFocusBorder(changeList, false)
+	setFocusBorder(changeDiff, false)
 
 	t.branchList = branchList
 	t.changeTab = changeTab
@@ -475,6 +462,8 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.commitInfo = commitInfo
 	t.fileList = fileList
 	t.fileDiff = fileDiff
+	t.changeList = changeList
+	t.changeDiff = changeDiff
 	t.activeTab = tabCommit
 	t.statusBar = statusBar
 	t.statusBusy = make(map[string]string)
@@ -491,17 +480,43 @@ func (t *TUI) switchTab(tag string) {
 		return
 	}
 
-	// SwitchToPage 会把焦点交给新页，先记下焦点是否在 commit 页里。
-	commitFocused := t.commitPanel.HasFocus()
+	// 先记下焦点是否在 change 页，SwitchToPage 之后就不准了。
+	changeFocused := t.changePanel.HasFocus()
 
 	t.activeTab = tag
 	t.mainPanels.SwitchToPage(tag)
 	t.applyTabStyles()
 
-	// change 页暂无焦点控件，避免焦点留在已隐藏的面板里。
-	if tag == tabChange && commitFocused {
-		t.app.SetFocus(t.branchList)
+	switch {
+	case tag == tabChange:
+		t.app.SetFocus(t.changeList)
+	case changeFocused:
+		// 切回 commit 页时焦点不能留在已隐藏的面板里。
+		t.app.SetFocus(t.commitList)
 	}
+}
+
+// nextFocus 在当前 tab 的循环顺序里前进 step（±1）。
+func (t *TUI) nextFocus(step int) tview.Primitive {
+	chain := t.focusChain()
+	for i, p := range chain {
+		if p.HasFocus() {
+			return chain[(i+step+len(chain))%len(chain)]
+		}
+	}
+	// 焦点不在链上（例如刚点到面板空白处）时的兜底。
+	if step < 0 {
+		return chain[len(chain)-1]
+	}
+	return chain[0]
+}
+
+// focusChain 是当前 tab 下 Tab/Backtab 的循环顺序。
+func (t *TUI) focusChain() []tview.Primitive {
+	if t.activeTab == tabChange {
+		return []tview.Primitive{t.branchList, t.changeList, t.changeDiff}
+	}
+	return []tview.Primitive{t.branchList, t.commitList, t.fileList, t.fileDiff}
 }
 
 func (t *TUI) applyTabStyles() {
