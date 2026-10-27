@@ -27,8 +27,9 @@ type TUI struct {
 	infoWidth     int
 	selectedStyle tcell.Style
 
-	files *async.Loader[[]core.FileChange, filesRequest]
-	diff  *async.Loader[string, diffRequest]
+	files        *async.Loader[[]core.FileChange, filesRequest]
+	filesLoading bool // 文件列表加载中：保留旧树并忽略交互
+	diff         *async.Loader[string, diffRequest]
 }
 
 type filesRequest struct {
@@ -208,6 +209,9 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetBlurFunc(func() { setFocusBorder(fileList.Box, false) })
 
 	fileList.SetSelectedFunc(func(node *tview.TreeNode) {
+		if t.filesLoading {
+			return
+		}
 		if len(node.GetChildren()) == 0 {
 			t.showFileDiff(node)
 			return
@@ -434,14 +438,18 @@ func (t *TUI) refreshFiles(commit core.Commit) {
 	t.files.Request(filesRequest{commit: commit})
 }
 
+// showFilesLoading 保留旧文件树，只通过 statusBar 提示加载。
 func (t *TUI) showFilesLoading(_ filesRequest) {
-	t.clearFileDiff("")
-	t.fileList.SetTitle(" file changes ")
-	t.fileList.SetRoot(tview.NewTreeNode(""))
+	t.filesLoading = true
+	// 保留旧 diff 内容，但停掉在途请求，避免旧结果在文件加载期间回写面板。
+	t.diff.Cancel()
+	t.statusDone("diff", "")
 	t.statusStart("files", "file changes")
 }
 
 func (t *TUI) showFiles(req filesRequest, changes []core.FileChange, err error) {
+	t.filesLoading = false
+
 	title := " file changes "
 	var fileRoot *tview.TreeNode
 	switch {
@@ -478,6 +486,10 @@ func (t *TUI) showFiles(req filesRequest, changes []core.FileChange, err error) 
 }
 
 func (t *TUI) showFileDiff(node *tview.TreeNode) {
+	// 文件列表加载中时，旧树节点属于旧 commit，不能拿来请求新 commit 的 diff。
+	if t.filesLoading {
+		return
+	}
 	t.showFileDiffFor(t.CurrentCommit, node)
 }
 
@@ -493,10 +505,8 @@ func (t *TUI) showFileDiffFor(commit core.Commit, node *tview.TreeNode) {
 	t.diff.Request(diffRequest{commit: commit, change: change})
 }
 
+// showDiffLoading 保留旧 diff，只通过 statusBar 提示加载。
 func (t *TUI) showDiffLoading(req diffRequest) {
-	t.fileDiff.SetTitle(" file diff: " + tview.Escape(req.change.Path) + " ")
-	t.fileDiff.SetText("")
-	t.fileDiff.ScrollToBeginning()
 	t.statusStart("diff", "diff "+req.change.Path)
 }
 
