@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
+	"lanegraph/internal/async"
 	"lanegraph/internal/core"
 
 	"github.com/gdamore/tcell/v2"
@@ -12,20 +14,33 @@ import (
 )
 
 type TUI struct {
-	core.State
+	*core.State
 	app           *tview.Application
 	branchList    *tview.TreeView
 	commitList    *laneView
 	commitInfo    *tview.TextView
 	fileList      *tview.TreeView
 	fileDiff      *tview.TextView
+	statusBar     *tview.TextView
+	statusBusy    map[string]string // statusBar 当前展示的 loading 项，key 为槽位
+	statusMsg     string            // 最近一次操作结果，loading 结束后保留
 	infoWidth     int
-	filesHash     string // 当前文件树对应的 commit，用于跳过重复刷新
-	diffShown     string // 当前已渲染 diff 的 key（commit hash + path），用于跳过重复渲染
 	selectedStyle tcell.Style
+
+	files *async.Loader[[]core.FileChange, filesRequest]
+	diff  *async.Loader[string, diffRequest]
 }
 
-func New(st core.State) *TUI {
+type filesRequest struct {
+	commit core.Commit
+}
+
+type diffRequest struct {
+	commit core.Commit
+	change core.FileChange
+}
+
+func New(st *core.State) *TUI {
 	return &TUI{State: st}
 }
 
@@ -68,9 +83,48 @@ func (t *TUI) Run() error {
 	})
 
 	t.app = app
+
+	t.initAsync()
+	defer t.files.Close()
+	defer t.diff.Close()
+
 	t.refresh(true)
 
 	return app.Run()
+}
+
+func (t *TUI) initAsync() {
+	post := func(f func()) { t.app.QueueUpdateDraw(f) }
+
+	t.files = async.New(async.Config[[]core.FileChange, filesRequest]{
+		Key: func(req filesRequest) string { return req.commit.Hash },
+		Load: func(ctx context.Context, req filesRequest) ([]core.FileChange, error) {
+			return t.Files(ctx, req.commit)
+		},
+		Post:      post,
+		OnLoading: t.showFilesLoading,
+		OnResult:  t.showFiles,
+	})
+
+	t.diff = async.New(async.Config[string, diffRequest]{
+		Key: func(req diffRequest) string {
+			return req.commit.Hash + "\x00" + req.change.Path
+		},
+		Load: func(ctx context.Context, req diffRequest) (string, error) {
+			output, err := t.Diff(ctx, req.commit, req.change)
+			switch {
+			case err != nil && output == "":
+				return "", err
+			case err != nil:
+				return buildPlainDiff(output), nil
+			default:
+				return buildDeltaDiff(output), nil
+			}
+		},
+		Post:      post,
+		OnLoading: t.showDiffLoading,
+		OnResult:  t.showDiff,
+	})
 }
 
 func (t *TUI) setupUI() tview.Primitive {
@@ -311,9 +365,20 @@ func (t *TUI) setupUI() tview.Primitive {
 		AddItem(branchHead, 3, 0, false).
 		AddItem(branchList, 0, 1, false)
 
-	root := tview.NewFlex().
+	mainContent := tview.NewFlex().
 		AddItem(branchPanel, 30, 0, false).
 		AddItem(commitPanel, 0, 1, true)
+
+	statusBar := tview.NewTextView().
+		SetDynamicColors(true).
+		SetWrap(false)
+
+	statusBar.SetBorderPadding(0, 0, 1, 1)
+
+	root := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(mainContent, 0, 1, true).
+		AddItem(statusBar, 1, 0, false)
 
 	// SetRoot 只会对 commitList 触发 focus 回调，branchList 需手动初始化为未聚焦
 	setFocusBorder(branchList.Box, false)
@@ -326,12 +391,14 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.commitInfo = commitInfo
 	t.fileList = fileList
 	t.fileDiff = fileDiff
+	t.statusBar = statusBar
+	t.statusBusy = make(map[string]string)
 	t.selectedStyle = selectedStyle
 
 	return root
 }
 
-// refresh 同步 commit 面板、commit 信息和文件列表。
+// refresh 更新 commit 面板与 commit 信息，并异步请求文件列表。
 // force 用于宽度变化等必须重绘 commitInfo 的场景；否则仅在选中 commit 变化时重绘。
 func (t *TUI) refresh(force bool) {
 	row := t.commitList.currentItem()
@@ -364,12 +431,17 @@ func (t *TUI) refresh(force bool) {
 }
 
 func (t *TUI) refreshFiles(commit core.Commit) {
-	if commit.Hash == t.filesHash {
-		return
-	}
+	t.files.Request(filesRequest{commit: commit})
+}
 
-	changes, err := t.Files(commit)
+func (t *TUI) showFilesLoading(_ filesRequest) {
+	t.clearFileDiff("")
+	t.fileList.SetTitle(" file changes ")
+	t.fileList.SetRoot(tview.NewTreeNode(""))
+	t.statusStart("files", "file changes")
+}
 
+func (t *TUI) showFiles(req filesRequest, changes []core.FileChange, err error) {
 	title := " file changes "
 	var fileRoot *tview.TreeNode
 	switch {
@@ -384,76 +456,79 @@ func (t *TUI) refreshFiles(commit core.Commit) {
 		title = fmt.Sprintf(" file changes (%d) ", len(changes))
 		fileRoot = buildFileTree(changes, t.selectedStyle)
 	}
-	if err == nil {
-		t.filesHash = commit.Hash
-	} else {
-		t.filesHash = "" // 下次刷新/重新选中时重试
-	}
 	t.fileList.SetTitle(title)
 	t.fileList.SetRoot(fileRoot)
 
 	switch {
 	case err != nil:
 		t.clearFileDiff("failed to load file changes")
+		t.files.Cancel() // 下次刷新/重新选中时重试
 	case len(changes) == 0:
 		t.clearFileDiff("no changes")
 	default:
 		first := firstFileNode(fileRoot)
 		if first == nil {
 			t.clearFileDiff("select a file")
-			return
+			break
 		}
 		t.fileList.SetCurrentNode(first)
-		t.showFileDiff(first)
+		t.showFileDiffFor(req.commit, first)
 	}
+	t.statusDone("files", "")
 }
 
 func (t *TUI) showFileDiff(node *tview.TreeNode) {
+	t.showFileDiffFor(t.CurrentCommit, node)
+}
+
+func (t *TUI) showFileDiffFor(commit core.Commit, node *tview.TreeNode) {
 	change, ok := node.GetReference().(core.FileChange)
 	if !ok {
-		// 目录节点提示选择文件；错误/无变更占位节点保留 refreshFiles 设置的内容
+		// 目录节点提示选择文件；错误/无变更占位节点保留当前内容
 		if _, isFolder := node.GetReference().(string); isFolder {
 			t.clearFileDiff("select a file")
 		}
 		return
 	}
-
-	key := t.CurrentCommit.Hash + "\x00" + change.Path
-	// TreeView 在 Draw 中可能对同一节点再次触发 changed（鼠标点选时尤其如此）。
-	// 若在 diff 已绘制后再 SetText，会清空 TextView 的行索引，下一次滚轮就会
-	// 误判为已到底并打开 trackEnd，导致视口直接跳到末尾。同一份 diff 不重复渲染。
-	if key == t.diffShown {
-		return
-	}
-	t.diffShown = key
-
-	output, err := t.Diff(t.CurrentCommit, change)
-	var text string
-	switch {
-	case err != nil && output == "":
-		text = "[red]error[-] " + tview.Escape(err.Error())
-	case err != nil:
-		// git-delta 默认可用；万一执行失败，回退到原始 diff 的简单着色
-		text = buildPlainDiff(output)
-	default:
-		text = buildDeltaDiff(output)
-	}
-	if text == "" {
-		text = "[gray](no diff)[-]"
-	}
-
-	t.setFileDiff(change, text)
+	t.diff.Request(diffRequest{commit: commit, change: change})
 }
 
-func (t *TUI) setFileDiff(change core.FileChange, text string) {
+func (t *TUI) showDiffLoading(req diffRequest) {
+	t.fileDiff.SetTitle(" file diff: " + tview.Escape(req.change.Path) + " ")
+	t.fileDiff.SetText("")
+	t.fileDiff.ScrollToBeginning()
+	t.statusStart("diff", "diff "+req.change.Path)
+}
+
+func (t *TUI) showDiff(req diffRequest, text string, err error) {
+	message := "diff: " + req.change.Path
+	switch {
+	case err != nil:
+		text = "[red]error[-] " + tview.Escape(err.Error())
+		message = "diff failed: " + req.change.Path
+	case text == "":
+		text = "[gray](no diff)[-]"
+		message = "no diff: " + req.change.Path
+	}
+	t.setFileDiff(req.change, text, message)
+}
+
+func (t *TUI) setFileDiff(change core.FileChange, text, message string) {
+	t.statusDone("diff", message)
 	t.fileDiff.SetTitle(" file diff: " + tview.Escape(change.Path) + " ")
 	t.fileDiff.SetText(text)
 	t.fileDiff.ScrollToBeginning()
 }
 
+// clearFileDiff 清空 diff 并让在途请求失效；Loader 会取消对应的 git 进程。
 func (t *TUI) clearFileDiff(message string) {
-	t.diffShown = ""
+	t.diff.Cancel()
+	t.statusDone("diff", message)
 	t.fileDiff.SetTitle(" file diff ")
-	t.fileDiff.SetText("[gray]" + tview.Escape(message) + "[-]")
+	if message == "" {
+		t.fileDiff.SetText("")
+	} else {
+		t.fileDiff.SetText("[gray]" + tview.Escape(message) + "[-]")
+	}
 	t.fileDiff.ScrollToBeginning()
 }

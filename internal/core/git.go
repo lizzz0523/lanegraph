@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -9,8 +10,8 @@ import (
 	"time"
 )
 
-func gitOutput(repo string, args ...string) (string, error) {
-	output, err := gitOutputUntrimmed(repo, args...)
+func gitOutput(ctx context.Context, repo string, args ...string) (string, error) {
+	output, err := gitOutputUntrimmed(ctx, repo, args...)
 	if err != nil {
 		return "", err
 	}
@@ -18,34 +19,37 @@ func gitOutput(repo string, args ...string) (string, error) {
 }
 
 // gitOutputUntrimmed 保留原始输出，供 -z 分隔的路径解析使用，避免 TrimSpace 破坏文件名。
-func gitOutputUntrimmed(repo string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+func gitOutputUntrimmed(ctx context.Context, repo string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = repo
 	output, err := cmd.Output()
 	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
 		return "", err
 	}
 	return string(output), nil
 }
 
-func GitRepoName(repo string) string {
-	root, err := gitOutput(repo, "rev-parse", "--show-toplevel")
+func GitRepoName(ctx context.Context, repo string) string {
+	root, err := gitOutput(ctx, repo, "rev-parse", "--show-toplevel")
 	if err != nil || root == "" {
 		return filepath.Base(repo)
 	}
 	return filepath.Base(root)
 }
 
-func GitRepoHead(repo string) (string, string) {
-	hash, _ := gitOutput(repo, "rev-parse", "HEAD")
+func GitRepoHead(ctx context.Context, repo string) (string, string) {
+	hash, _ := gitOutput(ctx, repo, "rev-parse", "HEAD")
 
 	// HEAD 指向分支时直接显示分支名
-	if ref, err := gitOutput(repo, "symbolic-ref", "--short", "-q", "HEAD"); err == nil && ref != "" {
+	if ref, err := gitOutput(ctx, repo, "symbolic-ref", "--short", "-q", "HEAD"); err == nil && ref != "" {
 		return ref, hash
 	}
 	// detached HEAD：优先显示指向该提交的 tag，其次本地分支
 	for _, pattern := range []string{"refs/tags", "refs/heads"} {
-		if ref, err := gitOutput(repo, "for-each-ref", "--points-at", "HEAD", "--count=1", "--format=%(refname:short)", pattern); err == nil && ref != "" {
+		if ref, err := gitOutput(ctx, repo, "for-each-ref", "--points-at", "HEAD", "--count=1", "--format=%(refname:short)", pattern); err == nil && ref != "" {
 			return ref, hash
 		}
 	}
@@ -65,9 +69,9 @@ type Branch struct {
 	Remote bool
 }
 
-func GitBranches(repo string) ([]Branch, error) {
+func GitBranches(ctx context.Context, repo string) ([]Branch, error) {
 	// 本地 + 远端分支；按提交时间倒序，最新改动的排在前面
-	output, err := gitOutput(repo, "for-each-ref", "--sort=-committerdate",
+	output, err := gitOutput(ctx, repo, "for-each-ref", "--sort=-committerdate",
 		"--format=%(refname)%00%(refname:short)%00%(objectname)%00%(symref)",
 		"refs/heads", "refs/remotes")
 	if err != nil {
@@ -105,10 +109,10 @@ type Commit struct {
 	Body    string
 }
 
-func GitCommits(repo string) ([]Commit, error) {
+func GitCommits(ctx context.Context, repo string) ([]Commit, error) {
 	// 起点为 HEAD + 本地分支 + 远端分支 + 标签（不含 stash），未合并的分支也会被画出来
 	// -z 用 NUL 分隔记录，body 里的换行才不会把一条记录拆成多行
-	output, err := gitOutput(repo, "log", "-z", "--date-order", "--branches",
+	output, err := gitOutput(ctx, repo, "log", "-z", "--date-order", "--branches",
 		"--remotes", "--tags", "HEAD", "--format=%H%x00%P%x00%D%x00%an%x00%ct%x00%s%x00%b")
 	if err != nil {
 		return nil, fmt.Errorf("git log error: %w", err)
@@ -145,14 +149,14 @@ type FileChange struct {
 }
 
 // GitCommitFiles 相对第一个 parent 计算文件变更；根提交没有 parent，只能把全部文件视为新增。
-func GitCommitFiles(repo string, commit Commit) ([]FileChange, error) {
+func GitCommitFiles(ctx context.Context, repo string, commit Commit) ([]FileChange, error) {
 	var args []string
 	if len(commit.Parents) > 0 {
 		args = []string{"diff", "--name-status", "-z", "-M", commit.Parents[0], commit.Hash}
 	} else {
 		args = []string{"show", "--format=", "--name-status", "-z", "-M", commit.Hash}
 	}
-	output, err := gitOutputUntrimmed(repo, args...)
+	output, err := gitOutputUntrimmed(ctx, repo, args...)
 	if err != nil {
 		return nil, fmt.Errorf("git commit files error: %w", err)
 	}
@@ -184,8 +188,8 @@ func GitCommitFiles(repo string, commit Commit) ([]FileChange, error) {
 }
 
 // GitFileDiff 相对第一个 parent 计算单个文件的 diff，并交给 git-delta 着色。
-// git-delta 失败时返回原始 diff，由调用方回退到 buildPlainDiff。
-func GitFileDiff(repo string, commit Commit, change FileChange) (string, error) {
+// git-delta 失败时返回原始 diff，由调用方决定如何展示。
+func GitFileDiff(ctx context.Context, repo string, commit Commit, change FileChange) (string, error) {
 	var args []string
 	if len(commit.Parents) > 0 {
 		args = []string{"diff", "-M", "--no-color", "--no-ext-diff", commit.Parents[0], commit.Hash, "--"}
@@ -198,12 +202,15 @@ func GitFileDiff(repo string, commit Commit, change FileChange) (string, error) 
 	}
 	args = append(args, change.Path)
 
-	diff, err := gitOutputUntrimmed(repo, args...)
+	diff, err := gitOutputUntrimmed(ctx, repo, args...)
 	if err != nil {
 		return "", fmt.Errorf("git file diff error: %w", err)
 	}
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
 
-	delta := exec.Command("delta",
+	delta := exec.CommandContext(ctx, "delta",
 		"--paging=never", "--no-gitconfig", "--width=variable", "--true-color=always",
 		"--line-numbers", "--file-style=omit",
 		"--hunk-header-decoration-style=gray box",
@@ -214,6 +221,9 @@ func GitFileDiff(repo string, commit Commit, change FileChange) (string, error) 
 	delta.Stdin = strings.NewReader(diff)
 	out, err := delta.Output()
 	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
 		return diff, fmt.Errorf("git-delta error: %w", err)
 	}
 	return string(out), nil
