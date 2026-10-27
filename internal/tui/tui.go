@@ -155,8 +155,8 @@ func (t *TUI) initAsync() {
 			return t.LocalChanges(ctx)
 		},
 		Post:      post,
-		OnLoading: t.showLocalFilesLoading,
-		OnResult:  t.showLocalFiles,
+		OnLoading: t.showLocalLoading,
+		OnResult:  t.showLocal,
 	})
 
 	t.localDiff = async.New(async.Config[string, localDiffRequest]{
@@ -637,6 +637,83 @@ func (t *TUI) setTabStyle(button *tview.Button, active bool) {
 	button.SetStyle(style).SetActivatedStyle(style)
 }
 
+// refreshCommit 更新 commit 面板与 commit 信息，并异步请求文件列表。
+// force 用于宽度变化等必须重绘 commitInfo 的场景；否则仅在选中 commit 变化时重绘。
+func (t *TUI) refreshCommit(force bool) {
+	row := t.commitList.currentItem()
+	if row >= len(t.Commits) {
+		return
+	}
+
+	commit := t.Commits[row]
+	changed := commit.Hash != t.CurrentCommit.Hash
+	t.CurrentCommit = commit
+
+	if force || changed {
+		text := fmt.Sprintf("[aqua]%v[-] [gray]%v[-]  [::b]%v[-::-]", tview.Escape(commit.Author), commit.Date.Format("2006-01-02 15:04:05"), tview.Escape(commit.Subject))
+		if body := strings.TrimLeft(commit.Body, "\r\n"); body != "" {
+			first, _, more := strings.Cut(body, "\n")
+			if t.infoWidth > 4 {
+				if truncate := runewidth.Truncate(first, t.infoWidth-4, ""); truncate != first {
+					first, more = truncate, true
+				}
+			}
+			text += "\n" + tview.Escape(first)
+			if more {
+				text += " [gray]...[-]"
+			}
+		}
+		t.commitInfo.SetText(text)
+	}
+
+	t.requestFiles(commit)
+}
+
+func (t *TUI) selectFile(node *tview.TreeNode) {
+	// 文件列表加载中时，旧树节点属于旧 commit，不能拿来请求新 commit 的 diff。
+	if t.filesLoading {
+		return
+	}
+	t.requestFileDiff(t.CurrentCommit, node)
+}
+
+func (t *TUI) selectLocalFile(node *tview.TreeNode) {
+	// 列表加载中时，旧树节点属于旧数据，不能拿来发起新的 diff 请求。
+	if t.localFilesLoading {
+		return
+	}
+	t.requestLocalDiff(node)
+}
+
+// commitRow 返回 hash 在提交列表中的行号；hash 为空或不存在时返回 -1。
+// 刷新 commits 后行号会整体移动，分支跳转必须按当前列表重新查询。
+func (t *TUI) commitRow(hash string) int {
+	if hash == "" {
+		return -1
+	}
+	for i, commit := range t.Commits {
+		if commit.Hash == hash {
+			return i
+		}
+	}
+	return -1
+}
+
+// localChange 返回当前选中项对应的文件变更；目录/分组节点返回零值。
+func (t *TUI) localChange() core.FileChange {
+	if t.changeList == nil {
+		return core.FileChange{}
+	}
+	node := t.changeList.GetCurrentNode()
+	if node == nil {
+		return core.FileChange{}
+	}
+	change, _ := node.GetReference().(core.FileChange)
+	return change
+}
+
+/** COMMIT */
+
 // reloadCommits 重新读取 git log；加载期间保留旧列表，避免切 tab 时闪空。
 func (t *TUI) reloadCommits() {
 	t.commits.Reload(commitsRequest{})
@@ -683,51 +760,7 @@ func (t *TUI) showCommits(_ commitsRequest, commits []core.Commit, err error) {
 	t.refreshCommit(true)
 }
 
-// commitRow 返回 hash 在提交列表中的行号；hash 为空或不存在时返回 -1。
-// 刷新 commits 后行号会整体移动，分支跳转必须按当前列表重新查询。
-func (t *TUI) commitRow(hash string) int {
-	if hash == "" {
-		return -1
-	}
-	for i, commit := range t.Commits {
-		if commit.Hash == hash {
-			return i
-		}
-	}
-	return -1
-}
-
-// refreshCommit 更新 commit 面板与 commit 信息，并异步请求文件列表。
-// force 用于宽度变化等必须重绘 commitInfo 的场景；否则仅在选中 commit 变化时重绘。
-func (t *TUI) refreshCommit(force bool) {
-	row := t.commitList.currentItem()
-	if row >= len(t.Commits) {
-		return
-	}
-
-	commit := t.Commits[row]
-	changed := commit.Hash != t.CurrentCommit.Hash
-	t.CurrentCommit = commit
-
-	if force || changed {
-		text := fmt.Sprintf("[aqua]%v[-] [gray]%v[-]  [::b]%v[-::-]", tview.Escape(commit.Author), commit.Date.Format("2006-01-02 15:04:05"), tview.Escape(commit.Subject))
-		if body := strings.TrimLeft(commit.Body, "\r\n"); body != "" {
-			first, _, more := strings.Cut(body, "\n")
-			if t.infoWidth > 4 {
-				if truncate := runewidth.Truncate(first, t.infoWidth-4, ""); truncate != first {
-					first, more = truncate, true
-				}
-			}
-			text += "\n" + tview.Escape(first)
-			if more {
-				text += " [gray]...[-]"
-			}
-		}
-		t.commitInfo.SetText(text)
-	}
-
-	t.requestFiles(commit)
-}
+/** FILES */
 
 // requestFiles 请求 commit 的文件列表；同一 commit 的重复请求由 Loader 去重。
 func (t *TUI) requestFiles(commit core.Commit) {
@@ -782,13 +815,7 @@ func (t *TUI) showFiles(req filesRequest, changes []core.FileChange, err error) 
 	t.statusDone("files", "")
 }
 
-func (t *TUI) selectFile(node *tview.TreeNode) {
-	// 文件列表加载中时，旧树节点属于旧 commit，不能拿来请求新 commit 的 diff。
-	if t.filesLoading {
-		return
-	}
-	t.requestFileDiff(t.CurrentCommit, node)
-}
+/** FILE DIFF */
 
 func (t *TUI) requestFileDiff(commit core.Commit, node *tview.TreeNode) {
 	change, ok := node.GetReference().(core.FileChange)
@@ -826,13 +853,15 @@ func (t *TUI) clearFileDiff(message string) {
 	t.clearDiff(t.fileDiff, "diff", message)
 }
 
+/** LOCAL */
+
 // reloadLocal 重新读取本地变更；加载期间保留旧列表，避免切 tab 时闪空。
 func (t *TUI) reloadLocal() {
 	t.localFiles.Reload(localFilesRequest{})
 }
 
-// showLocalFilesLoading 保留旧变更树，只通过 statusBar 提示加载。
-func (t *TUI) showLocalFilesLoading(_ localFilesRequest) {
+// showLocalLoading 保留旧变更树，只通过 statusBar 提示加载。
+func (t *TUI) showLocalLoading(_ localFilesRequest) {
 	// 保留旧 diff 内容，但停掉在途请求并丢弃缓存：
 	// 文件内容可能已经变化，不能再用 scope+path 命中旧结果。
 	t.localDiff.Reset()
@@ -842,7 +871,7 @@ func (t *TUI) showLocalFilesLoading(_ localFilesRequest) {
 	t.statusStart("local", "local changes")
 }
 
-func (t *TUI) showLocalFiles(_ localFilesRequest, changes []core.FileChange, err error) {
+func (t *TUI) showLocal(_ localFilesRequest, changes []core.FileChange, err error) {
 	t.localFilesLoading = false
 
 	// 刷新后尽量恢复原来的选中文件，避免每次切 tab 都跳回第一项。
@@ -886,26 +915,7 @@ func (t *TUI) showLocalFiles(_ localFilesRequest, changes []core.FileChange, err
 	t.statusDone("local", "")
 }
 
-// localChange 返回当前选中项对应的文件变更；目录/分组节点返回零值。
-func (t *TUI) localChange() core.FileChange {
-	if t.changeList == nil {
-		return core.FileChange{}
-	}
-	node := t.changeList.GetCurrentNode()
-	if node == nil {
-		return core.FileChange{}
-	}
-	change, _ := node.GetReference().(core.FileChange)
-	return change
-}
-
-func (t *TUI) selectLocalFile(node *tview.TreeNode) {
-	// 列表加载中时，旧树节点属于旧数据，不能拿来发起新的 diff 请求。
-	if t.localFilesLoading {
-		return
-	}
-	t.requestLocalDiff(node)
-}
+/** LOCAL DIFF */
 
 func (t *TUI) requestLocalDiff(node *tview.TreeNode) {
 	change, ok := node.GetReference().(core.FileChange)
@@ -942,6 +952,8 @@ func (t *TUI) clearLocalDiff(message string) {
 	t.localDiff.Cancel()
 	t.clearDiff(t.changeDiff, "local-diff", message)
 }
+
+/** DIFF */
 
 func (t *TUI) setDiff(view *tview.TextView, slot string, change core.FileChange, text, message string) {
 	t.statusDone(slot, message)
