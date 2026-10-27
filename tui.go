@@ -306,7 +306,7 @@ func (t *tui) setupUI() tview.Primitive {
 		AddItem(branchList, 0, 1, false)
 
 	root := tview.NewFlex().
-		AddItem(branchPanel, 40, 0, false).
+		AddItem(branchPanel, 30, 0, false).
 		AddItem(commitPanel, 0, 1, true)
 
 	// SetRoot 只会对 commitList 触发 focus 回调，branchList 需手动初始化为未聚焦
