@@ -205,7 +205,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		Bold(true)
 
 	setFocusBorder := func(box *tview.Box, focused bool) {
-		color := tcell.ColorGray
+		color := tcell.ColorDarkGray
 		if focused {
 			color = tcell.ColorAqua
 		}
