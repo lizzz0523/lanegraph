@@ -1,7 +1,6 @@
 package main
 
 // state 是 TUI 和后续 GUI 共用的数据、缓存与会话状态。
-// currentCommit 记录当前选中的提交，单 UI 前提下由各 UI 读写。
 type state struct {
 	repo     string
 	repoName string
@@ -60,7 +59,7 @@ func (s *state) files(commit commit) ([]fileChange, error) {
 	return changes, nil
 }
 
-// diff 带缓存地返回单个文件的原始 diff，不包含任何 UI 标记。
+// diff 带缓存地返回单个文件的原始 diff，不包含任何着色标记。
 // git-delta 不可用时返回原始 diff 和错误，由调用方决定如何展示。
 func (s *state) diff(commit commit, change fileChange) (string, error) {
 	if s.diffCache == nil {
