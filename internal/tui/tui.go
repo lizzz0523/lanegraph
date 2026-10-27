@@ -212,18 +212,49 @@ func (t *TUI) setupUI() tview.Primitive {
 		}
 	}
 
-	// focusOnScroll 让滚轮滚动 diff 时同步聚焦，边框状态保持一致。
-	focusOnScroll := func(view *tview.TextView) {
-		view.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
-			if !view.InRect(event.Position()) {
+	// scrollFocusable 是内嵌 *tview.Box 的控件（TextView / TreeView 都满足）。
+	type scrollFocusable interface {
+		tview.Primitive
+		InRect(x, y int) bool
+		SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse)) *tview.Box
+	}
+
+	// focusIfScrolled 在滚轮事件上同步聚焦，边框状态和焦点保持一致。
+	focusIfScrolled := func(p tview.Primitive, action tview.MouseAction) {
+		switch action {
+		case tview.MouseScrollUp, tview.MouseScrollDown:
+			if !p.HasFocus() {
+				t.app.SetFocus(p)
+			}
+		}
+	}
+
+	// focusOnScroll 让滚轮滚动时同步聚焦。
+	focusOnScroll := func(p scrollFocusable) {
+		p.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+			if !p.InRect(event.Position()) {
 				return action, event
 			}
-			switch action {
-			case tview.MouseScrollUp, tview.MouseScrollDown:
-				if !view.HasFocus() {
-					t.app.SetFocus(view)
-				}
+			focusIfScrolled(p, action)
+			return action, event
+		})
+	}
+
+	// focusOnScrollTree 同上，并跳过 MouseLeftDown 的默认处理：
+	// TreeView 按下鼠标后会重绘，并把视口外的选中项拉回可见范围，
+	// 导致随后的点击按新的 offsetY 命中错误的行。焦点只能在这里自己补。
+	focusOnScrollTree := func(p scrollFocusable) {
+		p.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+			if !p.InRect(event.Position()) {
+				return action, event
 			}
+			if action == tview.MouseLeftDown {
+				if !p.HasFocus() {
+					t.app.SetFocus(p)
+				}
+				return tview.MouseMove, event
+			}
+			focusIfScrolled(p, action)
 			return action, event
 		})
 	}
@@ -270,6 +301,8 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetBorderPadding(0, 0, 1, 1).
 		SetFocusFunc(func() { setFocusBorder(fileList.Box, true) }).
 		SetBlurFunc(func() { setFocusBorder(fileList.Box, false) })
+
+	focusOnScrollTree(fileList)
 
 	fileList.SetSelectedFunc(func(node *tview.TreeNode) {
 		if t.filesLoading {
@@ -322,6 +355,8 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetBorderPadding(0, 0, 1, 1).
 		SetFocusFunc(func() { setFocusBorder(changeList.Box, true) }).
 		SetBlurFunc(func() { setFocusBorder(changeList.Box, false) })
+
+	focusOnScrollTree(changeList)
 
 	changeList.SetSelectedFunc(func(node *tview.TreeNode) {
 		if t.localFilesLoading {
@@ -419,26 +454,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		branchList.SetCurrentNode(children[0])
 	}
 
-	// TreeView 在按下鼠标后会重绘，并把视口外的选中项拉回可见范围，
-	// 导致随后的点击按新的 offsetY 命中错误的行。这里跳过 down 的默认处理，
-	// 避免这次重绘；点击仍由 TreeView 默认逻辑处理。
-	branchList.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
-		if !branchList.InRect(event.Position()) {
-			return action, event
-		}
-		switch action {
-		case tview.MouseLeftDown:
-			if !branchList.HasFocus() {
-				t.app.SetFocus(branchList)
-			}
-			return tview.MouseMove, event
-		case tview.MouseScrollUp, tview.MouseScrollDown:
-			if !branchList.HasFocus() {
-				t.app.SetFocus(branchList)
-			}
-		}
-		return action, event
-	})
+	focusOnScrollTree(branchList)
 
 	branchHead := tview.NewTextView().
 		SetText(t.HeadRef)
