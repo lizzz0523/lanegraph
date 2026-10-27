@@ -180,6 +180,11 @@ func (t *TUI) setupUI() tview.Primitive {
 	tview.Borders.HorizontalFocus = tview.Borders.Horizontal
 	tview.Borders.VerticalFocus = tview.Borders.Vertical
 
+	// 背景跟随终端的默认背景色，而不是 ANSI 黑：
+	// 终端窗口在字符网格外可能露出自己的底色（例如底部圆角的留白），
+	// 用默认色能让 UI 和窗口边缘保持一致。
+	tview.Styles.PrimitiveBackgroundColor = tcell.ColorDefault
+
 	defaultStyle := tcell.StyleDefault.
 		Foreground(tcell.ColorGray).
 		Background(tview.Styles.PrimitiveBackgroundColor)
