@@ -256,7 +256,7 @@ func (t *TUI) setupUI() tview.Primitive {
 
 	commitPanel := tview.NewFlex().
 		SetDirection(tview.FlexRow).
-		AddItem(commitList, 20, 0, true).
+		AddItem(commitList, 18, 0, true).
 		AddItem(commitInfo, 4, 0, false).
 		AddItem(commitDetail, 0, 1, false)
 
