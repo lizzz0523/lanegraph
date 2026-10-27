@@ -93,9 +93,9 @@ var localChangeGroups = []struct {
 	scopes []core.ChangeScope
 	name   string
 }{
-	{[]core.ChangeScope{core.ScopeStaged}, "Staged Changes"},
 	// 未暂存和未跟踪都属于“工作区里还没 add 的改动”，放在同一组。
 	{[]core.ChangeScope{core.ScopeUnstaged, core.ScopeUntracked}, "Unstaged Changes"},
+	{[]core.ChangeScope{core.ScopeStaged}, "Staged Changes"},
 }
 
 // buildLocalTree 把本地变更分成暂存区和工作区两组，每组内部复用 buildFileTree 的目录树。
