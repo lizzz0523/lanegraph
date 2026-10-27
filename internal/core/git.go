@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"fmt"
@@ -28,7 +28,7 @@ func gitOutputUntrimmed(repo string, args ...string) (string, error) {
 	return string(output), nil
 }
 
-func gitRepoName(repo string) string {
+func GitRepoName(repo string) string {
 	root, err := gitOutput(repo, "rev-parse", "--show-toplevel")
 	if err != nil || root == "" {
 		return filepath.Base(repo)
@@ -36,7 +36,7 @@ func gitRepoName(repo string) string {
 	return filepath.Base(root)
 }
 
-func gitHeadRef(repo string) (string, string) {
+func GitHeadRef(repo string) (string, string) {
 	hash, _ := gitOutput(repo, "rev-parse", "HEAD")
 
 	// HEAD 指向分支时直接显示分支名
@@ -59,13 +59,13 @@ func gitHeadRef(repo string) (string, string) {
 	return "HEAD", ""
 }
 
-type branch struct {
-	name   string
-	hash   string
-	remote bool
+type Branch struct {
+	Name   string
+	Hash   string
+	Remote bool
 }
 
-func gitBranches(repo string) ([]branch, error) {
+func GitBranches(repo string) ([]Branch, error) {
 	// 本地 + 远端分支；按提交时间倒序，最新改动的排在前面
 	output, err := gitOutput(repo, "for-each-ref", "--sort=-committerdate",
 		"--format=%(refname)%00%(refname:short)%00%(objectname)%00%(symref)",
@@ -74,7 +74,7 @@ func gitBranches(repo string) ([]branch, error) {
 		return nil, fmt.Errorf("git for-each-ref error: %w", err)
 	}
 
-	var branches []branch
+	var branches []Branch
 	for line := range strings.Lines(output) {
 		line = strings.TrimRight(line, "\r\n")
 		if line == "" {
@@ -86,26 +86,26 @@ func gitBranches(repo string) ([]branch, error) {
 		if len(parts) != 4 || parts[3] != "" {
 			continue
 		}
-		branches = append(branches, branch{
-			name:   parts[1],
-			hash:   parts[2],
-			remote: strings.HasPrefix(parts[0], "refs/remotes/"),
+		branches = append(branches, Branch{
+			Name:   parts[1],
+			Hash:   parts[2],
+			Remote: strings.HasPrefix(parts[0], "refs/remotes/"),
 		})
 	}
 	return branches, nil
 }
 
-type commit struct {
-	hash    string
-	parents []string
-	refs    string // %D，如 "HEAD -> main, origin/main, tag: v1"
-	author  string
-	date    time.Time
-	subject string
-	body    string
+type Commit struct {
+	Hash    string
+	Parents []string
+	Refs    string // %D，如 "HEAD -> main, origin/main, tag: v1"
+	Author  string
+	Date    time.Time
+	Subject string
+	Body    string
 }
 
-func gitCommits(repo string) ([]commit, error) {
+func GitCommits(repo string) ([]Commit, error) {
 	// 起点为 HEAD + 本地分支 + 远端分支 + 标签（不含 stash），未合并的分支也会被画出来
 	// -z 用 NUL 分隔记录，body 里的换行才不会把一条记录拆成多行
 	output, err := gitOutput(repo, "log", "-z", "--date-order", "--branches",
@@ -116,7 +116,7 @@ func gitCommits(repo string) ([]commit, error) {
 
 	// 字段和记录都以 NUL 分隔，每 7 段是一个 commit；末尾终止符会多出一个空段
 	parts := strings.Split(output, "\x00")
-	var commits []commit
+	var commits []Commit
 	for i := 0; i+7 <= len(parts); i += 7 {
 		if parts[i] == "" {
 			continue
@@ -125,39 +125,39 @@ func gitCommits(repo string) ([]commit, error) {
 		if sec, err := strconv.ParseInt(parts[i+4], 10, 64); err == nil {
 			date = time.Unix(sec, 0)
 		}
-		commits = append(commits, commit{
-			hash:    parts[i],
-			parents: strings.Fields(parts[i+1]),
-			refs:    parts[i+2],
-			author:  parts[i+3],
-			date:    date,
-			subject: strings.TrimRight(parts[i+5], "\r\n"),
-			body:    strings.ReplaceAll(strings.TrimRight(parts[i+6], "\r\n"), "\r\n", "\n"),
+		commits = append(commits, Commit{
+			Hash:    parts[i],
+			Parents: strings.Fields(parts[i+1]),
+			Refs:    parts[i+2],
+			Author:  parts[i+3],
+			Date:    date,
+			Subject: strings.TrimRight(parts[i+5], "\r\n"),
+			Body:    strings.ReplaceAll(strings.TrimRight(parts[i+6], "\r\n"), "\r\n", "\n"),
 		})
 	}
 	return commits, nil
 }
 
-type fileChange struct {
-	status  string // git name-status，如 A、M、D、R100
-	path    string
-	oldPath string
+type FileChange struct {
+	Status  string // git name-status，如 A、M、D、R100
+	Path    string
+	OldPath string
 }
 
-// gitCommitFiles 相对第一个 parent 计算文件变更；根提交没有 parent，只能把全部文件视为新增。
-func gitCommitFiles(repo string, commit commit) ([]fileChange, error) {
+// GitCommitFiles 相对第一个 parent 计算文件变更；根提交没有 parent，只能把全部文件视为新增。
+func GitCommitFiles(repo string, commit Commit) ([]FileChange, error) {
 	var args []string
-	if len(commit.parents) > 0 {
-		args = []string{"diff", "--name-status", "-z", "-M", commit.parents[0], commit.hash}
+	if len(commit.Parents) > 0 {
+		args = []string{"diff", "--name-status", "-z", "-M", commit.Parents[0], commit.Hash}
 	} else {
-		args = []string{"show", "--format=", "--name-status", "-z", "-M", commit.hash}
+		args = []string{"show", "--format=", "--name-status", "-z", "-M", commit.Hash}
 	}
 	output, err := gitOutputUntrimmed(repo, args...)
 	if err != nil {
 		return nil, fmt.Errorf("git commit files error: %w", err)
 	}
 	fields := strings.Split(output, "\x00")
-	var changes []fileChange
+	var changes []FileChange
 	// 解析 git --name-status -z 的输出：
 	// 每项为 status\0path\0，R/C 状态后跟 oldPath\0newPath\0。
 	for i := 0; i < len(fields); {
@@ -167,14 +167,14 @@ func gitCommitFiles(repo string, commit commit) ([]fileChange, error) {
 			continue
 		}
 
-		change := fileChange{status: status, path: fields[i]}
+		change := FileChange{Status: status, Path: fields[i]}
 		i++
 		if status[0] == 'R' || status[0] == 'C' {
 			if i >= len(fields) {
 				break
 			}
-			change.oldPath = change.path
-			change.path = fields[i]
+			change.OldPath = change.Path
+			change.Path = fields[i]
 			i++
 		}
 
@@ -183,20 +183,20 @@ func gitCommitFiles(repo string, commit commit) ([]fileChange, error) {
 	return changes, nil
 }
 
-// gitFileDiff 相对第一个 parent 计算单个文件的 diff，并交给 git-delta 着色。
+// GitFileDiff 相对第一个 parent 计算单个文件的 diff，并交给 git-delta 着色。
 // git-delta 失败时返回原始 diff，由调用方回退到 buildPlainDiff。
-func gitFileDiff(repo string, commit commit, change fileChange) (string, error) {
+func GitFileDiff(repo string, commit Commit, change FileChange) (string, error) {
 	var args []string
-	if len(commit.parents) > 0 {
-		args = []string{"diff", "-M", "--no-color", "--no-ext-diff", commit.parents[0], commit.hash, "--"}
+	if len(commit.Parents) > 0 {
+		args = []string{"diff", "-M", "--no-color", "--no-ext-diff", commit.Parents[0], commit.Hash, "--"}
 	} else {
-		args = []string{"show", "--format=", "-M", "--no-color", "--no-ext-diff", commit.hash, "--"}
+		args = []string{"show", "--format=", "-M", "--no-color", "--no-ext-diff", commit.Hash, "--"}
 	}
 	// 重命名/复制需要同时限制新旧路径，否则 git 会把新路径识别成新增文件
-	if change.oldPath != "" {
-		args = append(args, change.oldPath)
+	if change.OldPath != "" {
+		args = append(args, change.OldPath)
 	}
-	args = append(args, change.path)
+	args = append(args, change.Path)
 
 	diff, err := gitOutputUntrimmed(repo, args...)
 	if err != nil {

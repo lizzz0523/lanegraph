@@ -1,16 +1,18 @@
-package main
+package tui
 
 import (
 	"fmt"
 	"strings"
+
+	"lanegraph/internal/core"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/mattn/go-runewidth"
 	"github.com/rivo/tview"
 )
 
-type tui struct {
-	state
+type TUI struct {
+	core.State
 	app           *tview.Application
 	branchList    *tview.TreeView
 	commitList    *laneView
@@ -23,7 +25,11 @@ type tui struct {
 	selectedStyle tcell.Style
 }
 
-func (t *tui) run() error {
+func New(st core.State) *TUI {
+	return &TUI{State: st}
+}
+
+func (t *TUI) Run() error {
 	app := tview.NewApplication().
 		SetRoot(t.setupUI(), true).
 		EnableMouse(true)
@@ -67,7 +73,7 @@ func (t *tui) run() error {
 	return app.Run()
 }
 
-func (t *tui) setupUI() tview.Primitive {
+func (t *TUI) setupUI() tview.Primitive {
 	tview.Borders.TopLeft, tview.Borders.TopRight = '╭', '╮'
 	tview.Borders.BottomLeft, tview.Borders.BottomRight = '╰', '╯'
 	tview.Borders.TopLeftFocus, tview.Borders.TopRightFocus = '╭', '╮'
@@ -114,7 +120,7 @@ func (t *tui) setupUI() tview.Primitive {
 		SetFocusFunc(func() { setFocusBorder(commitList.Box, true) }).
 		SetBlurFunc(func() { setFocusBorder(commitList.Box, false) })
 
-	commitList.setLines(renderGraph(t.commits, computeGraph(t.commits)))
+	commitList.setLines(renderGraph(t.Commits, core.ComputeGraph(t.Commits)))
 
 	commitInfo := tview.NewTextView().
 		SetWrap(false).
@@ -208,28 +214,28 @@ func (t *tui) setupUI() tview.Primitive {
 		AddChild(remoteNode)
 
 	// commit hash -> graph 行号，用于点击分支后跳转
-	rowOf := make(map[string]int, len(t.commits))
-	for i, c := range t.commits {
-		rowOf[c.hash] = i
+	rowOf := make(map[string]int, len(t.Commits))
+	for i, c := range t.Commits {
+		rowOf[c.Hash] = i
 	}
 
 	var headNode *tview.TreeNode
 
-	for _, b := range t.branches {
+	for _, b := range t.Branches {
 		parent := localNode
-		if b.remote {
+		if b.Remote {
 			parent = remoteNode
 		}
 
-		child := tview.NewTreeNode(b.name).
+		child := tview.NewTreeNode(b.Name).
 			SetSelectedTextStyle(selectedStyle).
 			SetSelectedFunc(func() {
-				if row, ok := rowOf[b.hash]; ok {
+				if row, ok := rowOf[b.Hash]; ok {
 					commitList.setCurrentItem(row)
 				}
 			})
 
-		if !b.remote && b.name == t.headRef {
+		if !b.Remote && b.Name == t.HeadRef {
 			headNode = child
 		}
 
@@ -280,9 +286,9 @@ func (t *tui) setupUI() tview.Primitive {
 	})
 
 	branchHead := tview.NewTextView().
-		SetText(t.headRef)
+		SetText(t.HeadRef)
 
-	branchHead.SetTitle(" "+t.repoName+" ").
+	branchHead.SetTitle(" "+t.RepoName+" ").
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1)
 
@@ -290,7 +296,7 @@ func (t *tui) setupUI() tview.Primitive {
 		if action != tview.MouseLeftClick || !branchHead.InRect(event.Position()) {
 			return action, event
 		}
-		if row, ok := rowOf[t.headHash]; ok {
+		if row, ok := rowOf[t.HeadHash]; ok {
 			commitList.setCurrentItem(row)
 		}
 		if headNode != nil {
@@ -327,19 +333,19 @@ func (t *tui) setupUI() tview.Primitive {
 
 // refresh 同步 commit 面板、commit 信息和文件列表。
 // force 用于宽度变化等必须重绘 commitInfo 的场景；否则仅在选中 commit 变化时重绘。
-func (t *tui) refresh(force bool) {
+func (t *TUI) refresh(force bool) {
 	row := t.commitList.currentItem()
-	if row >= len(t.commits) {
+	if row >= len(t.Commits) {
 		return
 	}
 
-	commit := t.commits[row]
-	changed := commit.hash != t.currentCommit.hash
-	t.currentCommit = commit
+	commit := t.Commits[row]
+	changed := commit.Hash != t.CurrentCommit.Hash
+	t.CurrentCommit = commit
 
 	if force || changed {
-		text := fmt.Sprintf("[aqua]%v[-] [gray]%v[-]  [::b]%v[-::-]", tview.Escape(commit.author), commit.date.Format("2006-01-02 15:04:05"), tview.Escape(commit.subject))
-		if body := strings.TrimLeft(commit.body, "\r\n"); body != "" {
+		text := fmt.Sprintf("[aqua]%v[-] [gray]%v[-]  [::b]%v[-::-]", tview.Escape(commit.Author), commit.Date.Format("2006-01-02 15:04:05"), tview.Escape(commit.Subject))
+		if body := strings.TrimLeft(commit.Body, "\r\n"); body != "" {
 			first, _, more := strings.Cut(body, "\n")
 			if t.infoWidth > 4 {
 				if truncate := runewidth.Truncate(first, t.infoWidth-4, ""); truncate != first {
@@ -357,12 +363,12 @@ func (t *tui) refresh(force bool) {
 	t.refreshFiles(commit)
 }
 
-func (t *tui) refreshFiles(commit commit) {
-	if commit.hash == t.filesHash {
+func (t *TUI) refreshFiles(commit core.Commit) {
+	if commit.Hash == t.filesHash {
 		return
 	}
 
-	changes, err := t.files(commit)
+	changes, err := t.Files(commit)
 
 	title := " file changes "
 	var fileRoot *tview.TreeNode
@@ -379,7 +385,7 @@ func (t *tui) refreshFiles(commit commit) {
 		fileRoot = buildFileTree(changes, t.selectedStyle)
 	}
 	if err == nil {
-		t.filesHash = commit.hash
+		t.filesHash = commit.Hash
 	} else {
 		t.filesHash = "" // 下次刷新/重新选中时重试
 	}
@@ -402,8 +408,8 @@ func (t *tui) refreshFiles(commit commit) {
 	}
 }
 
-func (t *tui) showFileDiff(node *tview.TreeNode) {
-	change, ok := node.GetReference().(fileChange)
+func (t *TUI) showFileDiff(node *tview.TreeNode) {
+	change, ok := node.GetReference().(core.FileChange)
 	if !ok {
 		// 目录节点提示选择文件；错误/无变更占位节点保留 refreshFiles 设置的内容
 		if _, isFolder := node.GetReference().(string); isFolder {
@@ -412,7 +418,7 @@ func (t *tui) showFileDiff(node *tview.TreeNode) {
 		return
 	}
 
-	key := t.currentCommit.hash + "\x00" + change.path
+	key := t.CurrentCommit.Hash + "\x00" + change.Path
 	// TreeView 在 Draw 中可能对同一节点再次触发 changed（鼠标点选时尤其如此）。
 	// 若在 diff 已绘制后再 SetText，会清空 TextView 的行索引，下一次滚轮就会
 	// 误判为已到底并打开 trackEnd，导致视口直接跳到末尾。同一份 diff 不重复渲染。
@@ -421,7 +427,7 @@ func (t *tui) showFileDiff(node *tview.TreeNode) {
 	}
 	t.diffShown = key
 
-	output, err := t.diff(t.currentCommit, change)
+	output, err := t.Diff(t.CurrentCommit, change)
 	var text string
 	switch {
 	case err != nil && output == "":
@@ -439,13 +445,13 @@ func (t *tui) showFileDiff(node *tview.TreeNode) {
 	t.setFileDiff(change, text)
 }
 
-func (t *tui) setFileDiff(change fileChange, text string) {
-	t.fileDiff.SetTitle(" file diff: " + tview.Escape(change.path) + " ")
+func (t *TUI) setFileDiff(change core.FileChange, text string) {
+	t.fileDiff.SetTitle(" file diff: " + tview.Escape(change.Path) + " ")
 	t.fileDiff.SetText(text)
 	t.fileDiff.ScrollToBeginning()
 }
 
-func (t *tui) clearFileDiff(message string) {
+func (t *TUI) clearFileDiff(message string) {
 	t.diffShown = ""
 	t.fileDiff.SetTitle(" file diff ")
 	t.fileDiff.SetText("[gray]" + tview.Escape(message) + "[-]")

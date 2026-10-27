@@ -1,9 +1,11 @@
-package main
+package tui
 
 import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"lanegraph/internal/core"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -47,12 +49,12 @@ func fileLabel(name string, status string) string {
 	return fmt.Sprintf("%s%s[-] %s", changeColor(status), changeLabel(status), tview.Escape(name))
 }
 
-func buildFileTree(changes []fileChange, selectedStyle tcell.Style) *tview.TreeNode {
+func buildFileTree(changes []core.FileChange, selectedStyle tcell.Style) *tview.TreeNode {
 	rootNode := tview.NewTreeNode("")
 
 	folders := map[string]*tview.TreeNode{"": rootNode}
 	for _, change := range changes {
-		parts := strings.Split(change.path, "/")
+		parts := strings.Split(change.Path, "/")
 		parent := rootNode
 		prefix := ""
 
@@ -76,7 +78,7 @@ func buildFileTree(changes []fileChange, selectedStyle tcell.Style) *tview.TreeN
 			parent = folderNode
 		}
 
-		fileNode := tview.NewTreeNode(fileLabel(parts[len(parts)-1], change.status)).
+		fileNode := tview.NewTreeNode(fileLabel(parts[len(parts)-1], change.Status)).
 			SetReference(change).
 			SetSelectedTextStyle(selectedStyle)
 		parent.AddChild(fileNode)
@@ -103,7 +105,7 @@ func sortFoldersFirst(node *tview.TreeNode) {
 
 func firstFileNode(node *tview.TreeNode) *tview.TreeNode {
 	for _, child := range node.GetChildren() {
-		if _, ok := child.GetReference().(fileChange); ok {
+		if _, ok := child.GetReference().(core.FileChange); ok {
 			return child
 		}
 		if found := firstFileNode(child); found != nil {

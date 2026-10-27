@@ -1,125 +1,14 @@
-package main
+package tui
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 	"unicode"
 
+	"lanegraph/internal/core"
+
 	"github.com/rivo/tview"
 )
-
-type graphRow struct {
-	nodeCol int
-	top     [][2]int
-	bottom  [][2]int
-}
-
-type graph struct {
-	rows      []graphRow
-	laneCount int
-}
-
-const MAX_LANES = 24
-
-func computeGraph(commits []commit) graph {
-	rows := make([]graphRow, 0, len(commits))
-	lanes := []string{}
-	laneCount := 1
-
-	for _, commit := range commits {
-		expected := []int{}
-		for i := range lanes {
-			if lanes[i] == commit.hash {
-				expected = append(expected, i)
-			}
-		}
-
-		var nodeCol int
-		if len(expected) > 0 {
-			nodeCol = expected[0]
-		} else {
-			nodeCol = freeSlot(lanes)
-		}
-
-		top := [][2]int{}
-		for i := range lanes {
-			if lanes[i] == "" {
-				continue
-			}
-			if slices.Contains(expected, i) {
-				top = append(top, [2]int{i, nodeCol})
-			} else {
-				top = append(top, [2]int{i, i})
-			}
-		}
-
-		for _, i := range expected {
-			lanes[i] = ""
-		}
-		if nodeCol < len(lanes) {
-			lanes[nodeCol] = ""
-		}
-
-		parentCols := []int{}
-		for i, parent := range commit.parents {
-			// 第一个 parent 始终沿用节点所在 lane，保持主线连续；
-			// 若该 parent 已在其他 lane 中，会在它自己那一行汇合
-			parentCol := nodeCol
-			if i > 0 {
-				parentCol = slices.IndexFunc(lanes, func(lane string) bool { return lane == parent })
-				if parentCol == -1 {
-					parentCol = freeSlot(lanes)
-				}
-			}
-			lanes = ensureLen(lanes, parentCol)
-			lanes[parentCol] = parent
-			if !slices.Contains(parentCols, parentCol) {
-				parentCols = append(parentCols, parentCol)
-			}
-		}
-
-		bottom := [][2]int{}
-		for i := range lanes {
-			if lanes[i] == "" {
-				continue
-			}
-			if slices.Contains(parentCols, i) {
-				bottom = append(bottom, [2]int{nodeCol, i})
-			} else {
-				bottom = append(bottom, [2]int{i, i})
-			}
-		}
-
-		for len(lanes) > 0 && lanes[len(lanes)-1] == "" {
-			lanes = lanes[:len(lanes)-1]
-		}
-
-		for _, edge := range slices.Concat(top, bottom) {
-			laneCount = max(laneCount, edge[0]+1, edge[1]+1)
-		}
-		laneCount = max(laneCount, nodeCol+1, len(lanes))
-
-		rows = append(rows, graphRow{nodeCol: nodeCol, top: top, bottom: bottom})
-	}
-
-	return graph{rows: rows, laneCount: min(MAX_LANES, max(1, laneCount))}
-}
-
-func freeSlot(lanes []string) int {
-	slot := slices.IndexFunc(lanes, func(lane string) bool { return lane == "" })
-	if slot != -1 {
-		return slot
-	}
-	return len(lanes)
-}
-
-func ensureLen(lanes []string, idx int) []string {
-	for idx >= len(lanes) {
-		lanes = append(lanes, "")
-	}
-	return lanes
-}
 
 const (
 	colorReset = "[-::-]" // 重置前景色、背景色和属性，否则 refs 的粗体会延续到 subject
@@ -154,13 +43,13 @@ var authorColors = []string{
 
 // authorColorMap 按 commit 列表中作者首次出现的顺序分配颜色，
 // 保证同一作者在整个列表里颜色一致。
-func authorColorMap(commits []commit) map[string]string {
+func authorColorMap(commits []core.Commit) map[string]string {
 	colors := make(map[string]string, len(commits))
 	for _, commit := range commits {
-		if _, ok := colors[commit.author]; ok {
+		if _, ok := colors[commit.Author]; ok {
 			continue
 		}
-		colors[commit.author] = authorColors[len(colors)%len(authorColors)]
+		colors[commit.Author] = authorColors[len(colors)%len(authorColors)]
 	}
 	return colors
 }
@@ -217,13 +106,13 @@ func (c cell) glyphs() (line, conn string) {
 	}
 }
 
-func renderGraph(commits []commit, graph graph) []string {
+func renderGraph(commits []core.Commit, graph core.Graph) []string {
 	colorOf := authorColorMap(commits)
 
-	lines := make([]string, 0, len(graph.rows))
-	for r, row := range graph.rows {
+	lines := make([]string, 0, len(graph.Rows))
+	for r, row := range graph.Rows {
 		var out strings.Builder
-		cells := make([]cell, graph.laneCount)
+		cells := make([]cell, graph.LaneCount)
 
 		inRange := func(i int) bool {
 			return i >= 0 && i < len(cells)
@@ -257,22 +146,22 @@ func renderGraph(commits []commit, graph graph) []string {
 			}
 		}
 
-		for _, e := range row.top {
+		for _, e := range row.Top {
 			drawEdge(e[0], e[1], true)
 		}
-		for _, e := range row.bottom {
+		for _, e := range row.Bottom {
 			drawEdge(e[1], e[0], false)
 		}
 
 		commit := commits[r]
-		// lane 数超过 MAX_LANES 时节点可能落在可视范围外，钳到最后一列保证每行都有节点
-		nodeCol := min(row.nodeCol, len(cells)-1)
+		// lane 数超过 maxLanes 时节点可能落在可视范围外，钳到最后一列保证每行都有节点
+		nodeCol := min(row.NodeCol, len(cells)-1)
 		for i, c := range cells {
 			var char, conn string
 			charColor := c.vColor
 			if i == nodeCol {
 				char = "◯"
-				if len(commit.parents) > 1 {
+				if len(commit.Parents) > 1 {
 					char = "◎"
 				}
 				charColor = laneColor(i)
@@ -289,16 +178,16 @@ func renderGraph(commits []commit, graph graph) []string {
 			fmt.Fprintf(&out, "%s%s%s%s%s", charColor, char, c.hColor, conn, colorReset)
 		}
 
-		hash := commit.hash
+		hash := commit.Hash
 		if len(hash) > 7 {
 			hash = hash[:7]
 		}
 		fmt.Fprintf(&out, " %s%s%s", colorHash, hash, colorReset)
-		fmt.Fprintf(&out, " %s%s%s", colorOf[commit.author], tview.Escape(authorInitial(commit.author)), colorReset)
-		if commit.refs != "" {
-			fmt.Fprintf(&out, " %s(%s)%s", colorRefs, tview.Escape(commit.refs), colorReset)
+		fmt.Fprintf(&out, " %s%s%s", colorOf[commit.Author], tview.Escape(authorInitial(commit.Author)), colorReset)
+		if commit.Refs != "" {
+			fmt.Fprintf(&out, " %s(%s)%s", colorRefs, tview.Escape(commit.Refs), colorReset)
 		}
-		fmt.Fprintf(&out, " %s", tview.Escape(commit.subject))
+		fmt.Fprintf(&out, " %s", tview.Escape(commit.Subject))
 
 		lines = append(lines, out.String())
 	}

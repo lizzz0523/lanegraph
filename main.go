@@ -3,6 +3,9 @@ package main
 import (
 	"log"
 	"os"
+
+	"lanegraph/internal/core"
+	"lanegraph/internal/tui"
 )
 
 func main() {
@@ -14,12 +17,12 @@ func main() {
 		repo = os.Args[1]
 	}
 
-	st, err := newState(repo)
+	st, err := core.NewState(repo)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	if err := (&tui{state: st}).run(); err != nil {
+	if err := tui.New(st).Run(); err != nil {
 		log.Fatal(err)
 	}
 }
