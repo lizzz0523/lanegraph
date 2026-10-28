@@ -121,6 +121,8 @@ func (t *TUI) Run() error {
 	defer t.localDiff.Close()
 	defer t.checkout.Close()
 
+	t.switchTabStyles()
+	t.refreshBranches("")
 	t.refreshCommit(true)
 
 	return app.Run()
@@ -457,7 +459,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		if row := t.commitRow(t.HeadHash); row >= 0 {
 			commitList.setCurrentItem(row)
 		}
-		if node := t.findBranchNode(t.HeadRef); node != nil {
+		if node := t.branchNode(t.HeadRef); node != nil {
 			branchList.SetCurrentNode(node)
 			t.app.SetFocus(branchList)
 		}
@@ -548,8 +550,6 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.selectedStyle = selectedStyle
 	t.headerStyle = headerStyle
 	t.headerSelectedStyle = headerSelectedStyle
-	t.switchTabStyles()
-	t.renderBranches("")
 
 	return root
 }
@@ -630,6 +630,71 @@ func (t *TUI) setTabStyle(button *tview.Button, active bool) {
 	button.SetStyle(style).SetActivatedStyle(style)
 }
 
+// refreshBranches 按当前 Branches 重建分支树；selectName 为要选中的本地分支，
+// 为空或找不到时默认选中第一个分支。
+func (t *TUI) refreshBranches(selected string) {
+	if t.branchList == nil {
+		return
+	}
+
+	// 隐藏 root，用 Local / Remote 作为分组标题。
+	localNode := tview.NewTreeNode("Local").
+		SetTextStyle(t.headerStyle).
+		SetSelectedTextStyle(t.headerSelectedStyle)
+	remoteNode := tview.NewTreeNode("Remote").
+		SetTextStyle(t.headerStyle).
+		SetSelectedTextStyle(t.headerSelectedStyle)
+	branchRoot := tview.NewTreeNode("").
+		AddChild(localNode).
+		AddChild(remoteNode)
+
+	for _, b := range t.Branches {
+		parent := localNode
+		if b.Remote {
+			parent = remoteNode
+		}
+
+		// HEAD 指向的本地分支前面加绿色对勾；其余本地分支用等宽空格对齐。
+		// Escape 防止分支名里的 [ 被当作颜色标签。
+		label := tview.Escape(b.Name)
+		isHead := !b.Remote && b.Name == t.HeadRef
+		switch {
+		case isHead:
+			label = "[green]✓[-] " + label
+		case !b.Remote:
+			label = "  " + label
+		}
+
+		child := tview.NewTreeNode(label).
+			SetReference(b).
+			SetSelectedTextStyle(t.selectedStyle).
+			SetSelectedFunc(func() {
+				// commits 刷新后行号会变化，每次跳转都按当前列表查询。
+				if row := t.commitRow(b.Hash); row >= 0 {
+					t.commitList.setCurrentItem(row)
+				}
+			})
+		parent.AddChild(child)
+	}
+
+	if len(remoteNode.GetChildren()) == 0 {
+		branchRoot.RemoveChild(remoteNode)
+	}
+
+	t.branchList.SetRoot(branchRoot)
+
+	if node := t.branchNode(selected); node != nil {
+		t.branchList.SetCurrentNode(node)
+		return
+	}
+	// 默认选中第一个分支，而不是分组标题
+	if children := localNode.GetChildren(); len(children) > 0 {
+		t.branchList.SetCurrentNode(children[0])
+	} else if children := remoteNode.GetChildren(); len(children) > 0 {
+		t.branchList.SetCurrentNode(children[0])
+	}
+}
+
 // refreshCommit 更新 commit 面板与 commit 信息，并异步请求文件列表。
 // force 用于宽度变化等必须重绘 commitInfo 的场景；否则仅在选中 commit 变化时重绘。
 func (t *TUI) refreshCommit(force bool) {
@@ -690,6 +755,24 @@ func (t *TUI) commitRow(hash string) int {
 		}
 	}
 	return -1
+}
+
+// branchNode 返回本地分支 name 对应的节点；name 为空或不存在时返回 nil。
+func (t *TUI) branchNode(name string) *tview.TreeNode {
+	if name == "" || t.branchList == nil || t.branchList.GetRoot() == nil {
+		return nil
+	}
+
+	var found *tview.TreeNode
+	t.branchList.GetRoot().Walk(func(node, _ *tview.TreeNode) bool {
+		branch, ok := node.GetReference().(core.Branch)
+		if ok && !branch.Remote && branch.Name == name {
+			found = node
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 // localChange 返回当前选中项对应的文件变更；目录/分组节点返回零值。
@@ -1006,94 +1089,9 @@ func (t *TUI) showCheckout(_ checkoutRequest, result core.Checkout, err error) {
 		t.branchHead.SetText(t.HeadRef)
 	}
 	// 远端分支 checkout 后选中新建成切换到的本地分支，而不是原来那条远端分支。
-	t.renderBranches(result.Branch)
+	t.refreshBranches(result.Branch)
 	// commit 列表里的 HEAD -> xxx 标记也随 checkout 变化。
 	t.reloadCommits()
-}
-
-/** BRANCH */
-
-// renderBranches 按当前 Branches 重建分支树；selectName 为要选中的本地分支，
-// 为空或找不到时默认选中第一个分支。
-func (t *TUI) renderBranches(selectName string) {
-	if t.branchList == nil {
-		return
-	}
-
-	// 隐藏 root，用 Local / Remote 作为分组标题。
-	localNode := tview.NewTreeNode("Local").
-		SetTextStyle(t.headerStyle).
-		SetSelectedTextStyle(t.headerSelectedStyle)
-	remoteNode := tview.NewTreeNode("Remote").
-		SetTextStyle(t.headerStyle).
-		SetSelectedTextStyle(t.headerSelectedStyle)
-	branchRoot := tview.NewTreeNode("").
-		AddChild(localNode).
-		AddChild(remoteNode)
-
-	for _, b := range t.Branches {
-		parent := localNode
-		if b.Remote {
-			parent = remoteNode
-		}
-
-		// HEAD 指向的本地分支前面加绿色对勾；其余本地分支用等宽空格对齐。
-		// Escape 防止分支名里的 [ 被当作颜色标签。
-		label := tview.Escape(b.Name)
-		isHead := !b.Remote && b.Name == t.HeadRef
-		switch {
-		case isHead:
-			label = "[green]✓[-] " + label
-		case !b.Remote:
-			label = "  " + label
-		}
-
-		child := tview.NewTreeNode(label).
-			SetReference(b).
-			SetSelectedTextStyle(t.selectedStyle).
-			SetSelectedFunc(func() {
-				// commits 刷新后行号会变化，每次跳转都按当前列表查询。
-				if row := t.commitRow(b.Hash); row >= 0 {
-					t.commitList.setCurrentItem(row)
-				}
-			})
-		parent.AddChild(child)
-	}
-
-	if len(remoteNode.GetChildren()) == 0 {
-		branchRoot.RemoveChild(remoteNode)
-	}
-
-	t.branchList.SetRoot(branchRoot)
-
-	if node := t.findBranchNode(selectName); node != nil {
-		t.branchList.SetCurrentNode(node)
-		return
-	}
-	// 默认选中第一个分支，而不是分组标题
-	if children := localNode.GetChildren(); len(children) > 0 {
-		t.branchList.SetCurrentNode(children[0])
-	} else if children := remoteNode.GetChildren(); len(children) > 0 {
-		t.branchList.SetCurrentNode(children[0])
-	}
-}
-
-// findBranchNode 返回本地分支 name 对应的节点；name 为空或不存在时返回 nil。
-func (t *TUI) findBranchNode(name string) *tview.TreeNode {
-	if name == "" || t.branchList == nil || t.branchList.GetRoot() == nil {
-		return nil
-	}
-
-	var found *tview.TreeNode
-	t.branchList.GetRoot().Walk(func(node, _ *tview.TreeNode) bool {
-		branch, ok := node.GetReference().(core.Branch)
-		if ok && !branch.Remote && branch.Name == name {
-			found = node
-			return false
-		}
-		return true
-	})
-	return found
 }
 
 /** STATUS */
