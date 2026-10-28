@@ -420,7 +420,18 @@ func (t *TUI) setupUI() tview.Primitive {
 			parent = remoteNode
 		}
 
-		child := tview.NewTreeNode(b.Name).
+		// HEAD 指向的本地分支前面加绿色对勾；其余本地分支用等宽空格对齐。
+		// Escape 防止分支名里的 [ 被当作颜色标签。
+		label := tview.Escape(b.Name)
+		isHead := !b.Remote && b.Name == t.HeadRef
+		switch {
+		case isHead:
+			label = "[green]✓[-] " + label
+		case !b.Remote:
+			label = "  " + label
+		}
+
+		child := tview.NewTreeNode(label).
 			SetSelectedTextStyle(selectedStyle).
 			SetSelectedFunc(func() {
 				// commits 刷新后行号会变化，每次跳转都按当前列表查询。
@@ -429,7 +440,7 @@ func (t *TUI) setupUI() tview.Primitive {
 				}
 			})
 
-		if !b.Remote && b.Name == t.HeadRef {
+		if isHead {
 			headNode = child
 		}
 
