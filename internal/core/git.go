@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -45,6 +46,25 @@ type Branch struct {
 	Name   string
 	Hash   string
 	Remote bool
+	// RemoteName 是远端分支所属的 remote（如 origin）；本地分支为空。
+	// 用于把 origin/foo 这类远端分支映射到同名本地分支 foo。
+	RemoteName string
+}
+
+// LocalName 返回分支对应的本地分支名：本地分支返回自身，
+// 远端分支去掉 remote 前缀（如 origin/foo → foo）。
+func (b Branch) LocalName() string {
+	if !b.Remote {
+		return b.Name
+	}
+	if b.RemoteName != "" && strings.HasPrefix(b.Name, b.RemoteName+"/") {
+		return strings.TrimPrefix(b.Name, b.RemoteName+"/")
+	}
+	// RemoteName 缺失时退化为去掉第一段。
+	if _, rest, ok := strings.Cut(b.Name, "/"); ok {
+		return rest
+	}
+	return b.Name
 }
 
 func GitBranches(ctx context.Context, repo string) ([]Branch, error) {
@@ -68,13 +88,46 @@ func GitBranches(ctx context.Context, repo string) ([]Branch, error) {
 		if len(parts) != 4 || parts[3] != "" {
 			continue
 		}
-		branches = append(branches, Branch{
+
+		branch := Branch{
 			Name:   parts[1],
 			Hash:   parts[2],
 			Remote: strings.HasPrefix(parts[0], "refs/remotes/"),
-		})
+		}
+		if branch.Remote {
+			// 用完整 refname 解析 remote，分支名里带 / 时也能正确去掉前缀
+			if remote, _, ok := strings.Cut(strings.TrimPrefix(parts[0], "refs/remotes/"), "/"); ok {
+				branch.RemoteName = remote
+			}
+		}
+		branches = append(branches, branch)
 	}
 	return branches, nil
+}
+
+// GitCheckout 切换到 branch 对应的本地分支。
+// 本地分支直接 checkout；远端分支切换到同名本地分支，
+// 本地分支不存在时从该远端分支创建跟踪分支。返回实际检出的本地分支名。
+func GitCheckout(ctx context.Context, repo string, branch Branch) (string, error) {
+	local := branch.LocalName()
+
+	// 远端分支对应的本地分支已存在时直接切换，不重置、不改 upstream。
+	if branch.Remote && !gitRefExists(ctx, repo, "refs/heads/"+local) {
+		if _, err := gitOutputUntrimmed(ctx, repo, "checkout", "-b", local, "--track", branch.Name); err != nil {
+			return "", fmt.Errorf("git checkout error: %w", gitStderr(err))
+		}
+		return local, nil
+	}
+
+	if _, err := gitOutputUntrimmed(ctx, repo, "checkout", local); err != nil {
+		return "", fmt.Errorf("git checkout error: %w", gitStderr(err))
+	}
+	return local, nil
+}
+
+func gitRefExists(ctx context.Context, repo, ref string) bool {
+	_, err := gitOutput(ctx, repo, "show-ref", "--verify", "--quiet", ref)
+	return err == nil
 }
 
 type Commit struct {
@@ -285,6 +338,18 @@ func gitDiffNoIndex(ctx context.Context, repo, path string) (string, error) {
 		return "", err
 	}
 	return string(output), nil
+}
+
+// gitStderr 取出 git 写进 stderr 的原文（如未提交改动冲突），
+// 否则调用方只能看到 "exit status 1"。
+func gitStderr(err error) error {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		if message := strings.TrimSpace(string(exitErr.Stderr)); message != "" {
+			return errors.New(message)
+		}
+	}
+	return err
 }
 
 func gitOutput(ctx context.Context, repo string, args ...string) (string, error) {
