@@ -121,7 +121,7 @@ func (t *TUI) Run() error {
 	defer t.localDiff.Close()
 	defer t.checkout.Close()
 
-	t.switchTabStyles()
+	t.refreshTabStyles()
 	t.refreshBranches("")
 	t.refreshCommit(true)
 
@@ -461,8 +461,8 @@ func (t *TUI) setupUI() tview.Primitive {
 		}
 		if node := t.branchNode(t.HeadRef); node != nil {
 			branchList.SetCurrentNode(node)
-			t.app.SetFocus(branchList)
 		}
+		t.app.SetFocus(branchList)
 		return tview.MouseConsumed, nil
 	})
 
@@ -600,7 +600,7 @@ func (t *TUI) switchTab(tag string) {
 
 	t.activeTab = tag
 	t.mainPanels.SwitchToPage(tag)
-	t.switchTabStyles()
+	t.refreshTabStyles()
 
 	if tag == tabChange {
 		t.reloadLocal()
@@ -617,7 +617,7 @@ func (t *TUI) switchTab(tag string) {
 	}
 }
 
-func (t *TUI) switchTabStyles() {
+func (t *TUI) refreshTabStyles() {
 	t.setTabStyle(t.changeTab, t.activeTab == tabChange)
 	t.setTabStyle(t.commitTab, t.activeTab == tabCommit)
 }
@@ -762,7 +762,6 @@ func (t *TUI) branchNode(name string) *tview.TreeNode {
 	if name == "" || t.branchList == nil || t.branchList.GetRoot() == nil {
 		return nil
 	}
-
 	var found *tview.TreeNode
 	t.branchList.GetRoot().Walk(func(node, _ *tview.TreeNode) bool {
 		branch, ok := node.GetReference().(core.Branch)
