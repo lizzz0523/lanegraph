@@ -66,10 +66,6 @@ type TUI struct {
 	checkoutLoading bool // checkout 进行中：忽略重复按键
 }
 
-type checkoutRequest struct {
-	branch core.Branch
-}
-
 type commitsRequest struct{}
 
 type filesRequest struct {
@@ -85,6 +81,10 @@ type localFilesRequest struct{}
 
 type localDiffRequest struct {
 	change core.FileChange
+}
+
+type checkoutRequest struct {
+	branch core.Branch
 }
 
 func New(st *core.State) *TUI {
@@ -743,6 +743,19 @@ func (t *TUI) selectLocalFile(node *tview.TreeNode) {
 	t.requestLocalDiff(node)
 }
 
+// checkoutBranch 对当前选中的分支执行 checkout：
+// 本地分支直接切换；远端分支切换到同名本地分支，不存在时创建跟踪分支。
+func (t *TUI) checkoutBranch() {
+	if t.checkout == nil || t.checkoutLoading {
+		return
+	}
+	node := t.branchList.GetCurrentNode()
+	if node == nil {
+		return
+	}
+	t.reloadCheckout(node)
+}
+
 // commitRow 返回 hash 在提交列表中的行号；hash 为空或不存在时返回 -1。
 // 刷新 commits 后行号会整体移动，分支跳转必须按当前列表重新查询。
 func (t *TUI) commitRow(hash string) int {
@@ -1050,21 +1063,12 @@ func (t *TUI) clearDiff(view *tview.TextView, slot, message string) {
 
 /** CHECKOUT */
 
-// checkoutBranch 对当前选中的分支执行 checkout：
-// 本地分支直接切换；远端分支切换到同名本地分支，不存在时创建跟踪分支。
-func (t *TUI) checkoutBranch() {
-	if t.checkout == nil || t.checkoutLoading {
-		return
-	}
-	node := t.branchList.GetCurrentNode()
-	if node == nil {
-		return
-	}
+// reloadCheckout 通过节点引用取分支并绕过缓存，保证每次按空格都真正执行 git checkout。
+func (t *TUI) reloadCheckout(node *tview.TreeNode) {
 	branch, ok := node.GetReference().(core.Branch)
 	if !ok {
 		return // Local / Remote 分组标题
 	}
-	// Reload 绕过缓存，保证每次按空格都真正执行 git checkout。
 	t.checkout.Reload(checkoutRequest{branch: branch})
 }
 
