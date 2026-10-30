@@ -25,10 +25,10 @@ type TUI struct {
 
 	app *tview.Application
 
-	branchList *tview.TreeView
-	branchHead *tview.TextView
+	repoHead   *tview.TextView
 	changeTab  *tview.Button
 	commitTab  *tview.Button
+	branchList *tview.TreeView
 	mainPanels *tview.Pages
 	statusBar  *tview.TextView
 
@@ -291,7 +291,6 @@ func (t *TUI) setupUI() tview.Primitive {
 	}
 
 	commitList := newLaneView(selectedStyle)
-	commitList.setSelectedFunc(func() { t.refreshCommit(false) })
 
 	commitList.SetTitle(" all commits ").
 		SetTitleAlign(tview.AlignLeft).
@@ -301,6 +300,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetBlurFunc(func() { setFocusBorder(commitList.Box, false) })
 
 	commitList.setLines(renderGraph(t.Commits, core.ComputeGraph(t.Commits)))
+	commitList.setSelectedFunc(func() { t.refreshCommit(false) })
 
 	commitInfo := tview.NewTextView().
 		SetWrap(false).
@@ -319,10 +319,8 @@ func (t *TUI) setupUI() tview.Primitive {
 			return x, y, width, height
 		})
 
-	fileRoot := buildFileTree(nil, selectedStyle)
-
 	fileList := tview.NewTreeView().
-		SetRoot(fileRoot).
+		SetRoot(buildFileTree(nil, selectedStyle)).
 		SetTopLevel(1).
 		SetGraphics(false)
 
@@ -444,16 +442,16 @@ func (t *TUI) setupUI() tview.Primitive {
 
 	focusOnScrollTree(branchList)
 
-	branchHead := tview.NewTextView().
+	repoHead := tview.NewTextView().
 		SetText(t.HeadRef).
 		SetWrap(false)
 
-	branchHead.SetTitle(" "+t.RepoName+" ").
+	repoHead.SetTitle(" "+t.RepoName+" ").
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1)
 
-	branchHead.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
-		if action != tview.MouseLeftClick || !branchHead.InRect(event.Position()) {
+	repoHead.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if action != tview.MouseLeftClick || !repoHead.InRect(event.Position()) {
 			return action, event
 		}
 		if row := t.commitRow(t.HeadHash); row >= 0 {
@@ -496,7 +494,7 @@ func (t *TUI) setupUI() tview.Primitive {
 
 	branchPanel := tview.NewFlex().
 		SetDirection(tview.FlexRow).
-		AddItem(branchHead, 3, 0, false).
+		AddItem(repoHead, 3, 0, false).
 		AddItem(mainTabs, 2, 0, false).
 		AddItem(branchList, 0, 1, false)
 
@@ -529,22 +527,26 @@ func (t *TUI) setupUI() tview.Primitive {
 	setFocusBorder(changeList.Box, false)
 	setFocusBorder(changeDiff.Box, false)
 
-	t.branchList = branchList
-	t.branchHead = branchHead
+	t.repoHead = repoHead
 	t.changeTab = changeTab
 	t.commitTab = commitTab
+	t.branchList = branchList
 	t.mainPanels = mainPanels
+	t.statusBar = statusBar
+
 	t.commitPanel = commitPanel
-	t.changePanel = changePanel
 	t.commitList = commitList
 	t.commitInfo = commitInfo
 	t.fileList = fileList
 	t.fileDiff = fileDiff
+
+	t.changePanel = changePanel
 	t.changeList = changeList
 	t.changeDiff = changeDiff
+
 	t.activeTab = tabCommit
-	t.statusBar = statusBar
 	t.statusBusy = make(map[string]string)
+
 	t.tabStyle = defaultStyle
 	t.tabActiveStyle = selectedStyle
 	t.selectedStyle = selectedStyle
@@ -1088,8 +1090,8 @@ func (t *TUI) showCheckout(_ checkoutRequest, result core.Checkout, err error) {
 	t.statusDone("checkout", "checkout "+result.Branch)
 
 	t.ApplyCheckout(result)
-	if t.branchHead != nil {
-		t.branchHead.SetText(t.HeadRef)
+	if t.repoHead != nil {
+		t.repoHead.SetText(t.HeadRef)
 	}
 	// 远端分支 checkout 后选中新建成切换到的本地分支，而不是原来那条远端分支。
 	t.refreshBranches(result.Branch)
