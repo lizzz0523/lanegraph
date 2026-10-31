@@ -53,15 +53,19 @@ type TUI struct {
 	headerStyle         tcell.Style
 	headerSelectedStyle tcell.Style
 
+	refs    *async.Loader[core.Refs, refsRequest]
 	commits *async.Loader[[]core.Commit, commitsRequest]
-	diff    *async.Loader[string, diffRequest]
-	files   *async.Loader[[]core.FileChange, filesRequest]
+
+	diff  *async.Loader[string, diffRequest]
+	files *async.Loader[[]core.FileChange, filesRequest]
 
 	localDiff  *async.Loader[string, localDiffRequest]
 	localFiles *async.Loader[[]core.FileChange, localFilesRequest]
 
 	checkout *async.Loader[core.Checkout, checkoutRequest]
 }
+
+type refsRequest struct{}
 
 type commitsRequest struct{}
 
@@ -111,6 +115,7 @@ func (t *TUI) Run() error {
 	t.app = app
 
 	t.initAsync()
+	defer t.refs.Close()
 	defer t.commits.Close()
 	defer t.files.Close()
 	defer t.diff.Close()
@@ -128,10 +133,20 @@ func (t *TUI) Run() error {
 func (t *TUI) initAsync() {
 	post := func(f func()) { t.app.QueueUpdateDraw(f) }
 
+	t.refs = async.New(async.Config[core.Refs, refsRequest]{
+		Key: func(refsRequest) string { return "refs" },
+		Load: func(ctx context.Context, _ refsRequest) (core.Refs, error) {
+			return t.Refs(ctx)
+		},
+		Post:      post,
+		OnLoading: t.showRefsLoading,
+		OnResult:  t.showRefs,
+	})
+
 	t.commits = async.New(async.Config[[]core.Commit, commitsRequest]{
 		Key: func(commitsRequest) string { return "commits" },
 		Load: func(ctx context.Context, _ commitsRequest) ([]core.Commit, error) {
-			return core.GitCommits(ctx, t.Repo)
+			return t.History(ctx)
 		},
 		Post:      post,
 		OnLoading: t.showCommitsLoading,
@@ -574,12 +589,7 @@ func (t *TUI) focusChain() []tview.Primitive {
 func (t *TUI) switchTab(tag string) {
 	if tag == t.activeTab {
 		// 再点一次当前 tab 也刷新，方便在外部 git 操作后重新读取数据。
-		switch tag {
-		case tabChange:
-			t.reloadLocal()
-		case tabCommit:
-			t.reloadCommits()
-		}
+		t.refreshTab(tag)
 		return
 	}
 
@@ -595,20 +605,27 @@ func (t *TUI) switchTab(tag string) {
 	t.activeTab = tag
 	t.mainPanels.SwitchToPage(tag)
 	t.refreshTabStyles()
+	t.refreshTab(tag)
 
 	// 焦点原本在内容区时，切页后交给新页的列表，避免焦点留在被隐藏的页面上；
 	// 焦点在左侧分支列表时 hiddenFocused 为 false，保持不动。
-	if tag == tabChange {
-		t.reloadLocal()
-		if hiddenFocused {
+	if hiddenFocused {
+		if tag == tabChange {
 			t.app.SetFocus(t.changeList)
-		}
-	} else {
-		t.reloadCommits()
-		if hiddenFocused {
+		} else {
 			t.app.SetFocus(t.commitList)
 		}
 	}
+}
+
+// refreshTab 刷新仓库级 refs 和当前 tab 的数据。
+func (t *TUI) refreshTab(tag string) {
+	t.reloadRefs()
+	if tag == tabChange {
+		t.reloadLocal()
+		return
+	}
+	t.reloadCommits()
 }
 
 func (t *TUI) refreshTabStyles() {
@@ -624,7 +641,7 @@ func (t *TUI) setTabStyle(button *tview.Button, active bool) {
 	button.SetStyle(style).SetActivatedStyle(style)
 }
 
-// refreshBranches 按当前 Branches 重建分支树；selectName 为要选中的本地分支，
+// refreshBranches 按当前 Branches 重建分支树；selected 为要选中的分支名，
 // 为空或找不到时默认选中第一个分支。
 func (t *TUI) refreshBranches(selected string) {
 	if t.branchList == nil {
@@ -775,7 +792,7 @@ func (t *TUI) commitRow(hash string) int {
 	return -1
 }
 
-// branchNode 返回本地分支 name 对应的节点；name 为空或不存在时返回 nil。
+// branchNode 返回分支 name 对应的节点，本地和远端都会匹配；name 为空或不存在时返回 nil。
 func (t *TUI) branchNode(name string) *tview.TreeNode {
 	if name == "" || t.branchList == nil || t.branchList.GetRoot() == nil {
 		return nil
@@ -783,13 +800,26 @@ func (t *TUI) branchNode(name string) *tview.TreeNode {
 	var found *tview.TreeNode
 	t.branchList.GetRoot().Walk(func(node, _ *tview.TreeNode) bool {
 		branch, ok := node.GetReference().(core.Branch)
-		if ok && !branch.Remote && branch.Name == name {
+		if ok && branch.Name == name {
 			found = node
 			return false
 		}
 		return true
 	})
 	return found
+}
+
+// branchName 返回分支列表当前选中的分支名；分组标题返回空。
+func (t *TUI) branchName() string {
+	if t.branchList == nil {
+		return ""
+	}
+	node := t.branchList.GetCurrentNode()
+	if node == nil {
+		return ""
+	}
+	branch, _ := node.GetReference().(core.Branch)
+	return branch.Name
 }
 
 // localChange 返回当前选中项对应的文件变更；目录/分组节点返回零值。
@@ -803,6 +833,36 @@ func (t *TUI) localChange() core.FileChange {
 	}
 	change, _ := node.GetReference().(core.FileChange)
 	return change
+}
+
+/** REFS */
+
+// reloadRefs 重新读取仓库级 refs（分支和 HEAD）。
+func (t *TUI) reloadRefs() {
+	t.refs.Reload(refsRequest{})
+}
+
+func (t *TUI) showRefsLoading(_ refsRequest) {
+	t.statusStart("branches", "branches")
+}
+
+func (t *TUI) showRefs(_ refsRequest, snapshot core.Refs, err error) {
+	if err != nil {
+		t.statusDone("branches", "branches: "+err.Error())
+		return
+	}
+	t.statusDone("branches", "")
+
+	selected := t.branchName()
+
+	t.Branches = snapshot.Branches
+	t.HeadRef = snapshot.HeadRef
+	t.HeadHash = snapshot.HeadHash
+
+	if t.repoHead != nil {
+		t.repoHead.SetText(t.HeadRef)
+	}
+	t.refreshBranches(selected)
 }
 
 /** COMMIT */
@@ -1082,6 +1142,10 @@ func (t *TUI) showCheckout(_ checkoutRequest, result core.Checkout, err error) {
 		return
 	}
 	t.statusDone("checkout", "checkout "+result.Branch)
+
+	// checkout 快照比在途的 refs 刷新更新，取消它避免旧结果覆盖。
+	t.refs.Cancel()
+	t.statusDone("branches", "")
 
 	t.ApplyCheckout(result)
 	if t.repoHead != nil {

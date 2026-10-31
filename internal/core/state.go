@@ -15,26 +15,50 @@ type State struct {
 	CurrentCommit Commit
 }
 
+// Refs 是仓库的分支与 HEAD 快照。
+type Refs struct {
+	Branches []Branch
+	HeadRef  string
+	HeadHash string
+}
+
 func NewState(ctx context.Context, repo string) (State, error) {
-	commits, err := GitCommits(ctx, repo)
+	s := State{Repo: repo}
+
+	refs, err := s.Refs(ctx)
 	if err != nil {
 		return State{}, err
 	}
 
-	branches, err := GitBranches(ctx, repo)
+	commits, err := s.History(ctx)
 	if err != nil {
 		return State{}, err
 	}
 
-	headRef, headHash := GitRepoHead(ctx, repo)
+	s.RepoName = GitRepoName(ctx, repo)
+	s.HeadRef = refs.HeadRef
+	s.HeadHash = refs.HeadHash
+	s.Branches = refs.Branches
+	s.Commits = commits
+	return s, nil
+}
 
-	return State{
-		Repo:     repo,
-		RepoName: GitRepoName(ctx, repo),
+// History 返回仓库的提交历史。
+func (s *State) History(ctx context.Context) ([]Commit, error) {
+	return GitCommits(ctx, s.Repo)
+}
+
+// Refs 返回仓库的分支与 HEAD 快照。
+func (s *State) Refs(ctx context.Context) (Refs, error) {
+	branches, err := GitBranches(ctx, s.Repo)
+	if err != nil {
+		return Refs{}, err
+	}
+	headRef, headHash := GitRepoHead(ctx, s.Repo)
+	return Refs{
+		Branches: branches,
 		HeadRef:  headRef,
 		HeadHash: headHash,
-		Commits:  commits,
-		Branches: branches,
 	}, nil
 }
 
