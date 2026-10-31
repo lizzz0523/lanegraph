@@ -42,10 +42,11 @@ type TUI struct {
 	changeList  *tview.TreeView
 	changeDiff  *tview.TextView
 
-	activeTab  string // 当前显示的主面板 tab
-	infoWidth  int
-	statusMsg  string            // 最近一次操作结果，loading 结束后保留
-	statusBusy map[string]string // statusBar 当前展示的 loading 项，key 为槽位
+	activeTab     string // 当前显示的主面板 tab
+	infoWidth     int
+	statusMsg     string            // 最近一次操作结果，loading 结束后保留
+	statusBusy    map[string]string // statusBar 当前展示的 loading 项，key 为槽位
+	pendingBranch string            // checkout 后等待 refs 刷新完成再选中的分支
 
 	tabStyle            tcell.Style
 	tabActiveStyle      tcell.Style
@@ -62,7 +63,7 @@ type TUI struct {
 	localDiff  *async.Loader[string, localDiffRequest]
 	localFiles *async.Loader[[]core.FileChange, localFilesRequest]
 
-	checkout *async.Loader[core.Checkout, checkoutRequest]
+	checkout *async.Loader[string, checkoutRequest]
 }
 
 type refsRequest struct{}
@@ -197,9 +198,9 @@ func (t *TUI) initAsync() {
 		OnResult:  t.showLocalDiff,
 	})
 
-	t.checkout = async.New(async.Config[core.Checkout, checkoutRequest]{
+	t.checkout = async.New(async.Config[string, checkoutRequest]{
 		Key: func(req checkoutRequest) string { return req.branch.Name },
-		Load: func(ctx context.Context, req checkoutRequest) (core.Checkout, error) {
+		Load: func(ctx context.Context, req checkoutRequest) (string, error) {
 			return t.Checkout(ctx, req.branch)
 		},
 		Post:      post,
@@ -847,13 +848,17 @@ func (t *TUI) showRefsLoading(_ refsRequest) {
 }
 
 func (t *TUI) showRefs(_ refsRequest, refs core.Refs, err error) {
+	selected := t.pendingBranch
+	t.pendingBranch = ""
+	if selected == "" {
+		selected = t.branchName()
+	}
+
 	if err != nil {
 		t.statusDone("branches", "branches: "+err.Error())
 		return
 	}
 	t.statusDone("branches", "")
-
-	selected := t.branchName()
 
 	t.ApplyRefs(refs)
 	if t.repoHead != nil {
@@ -1131,26 +1136,18 @@ func (t *TUI) showCheckoutLoading(req checkoutRequest) {
 	t.statusStart("checkout", "checkout "+req.branch.Name)
 }
 
-func (t *TUI) showCheckout(_ checkoutRequest, result core.Checkout, err error) {
+func (t *TUI) showCheckout(_ checkoutRequest, branch string, err error) {
 	if err != nil {
 		// git 的错误可能是多行，压成一行避免撑坏单行 statusBar。
 		message := strings.Join(strings.Fields(err.Error()), " ")
 		t.statusDone("checkout", "checkout failed: "+message)
 		return
 	}
-	t.statusDone("checkout", "checkout "+result.Branch)
+	t.statusDone("checkout", "checkout "+branch)
 
-	// checkout 快照比在途的 refs 刷新更新，取消它避免旧结果覆盖。
-	t.refs.Cancel()
-	t.statusDone("branches", "")
-
-	t.ApplyRefs(result.Refs)
-	if t.repoHead != nil {
-		t.repoHead.SetText(t.HeadRef)
-	}
-	// 远端分支 checkout 后选中新建成切换到的本地分支，而不是原来那条远端分支。
-	t.refreshBranches(result.Branch)
-	// commit 列表里的 HEAD -> xxx 标记也随 checkout 变化。
+	// refs 刷新后选中刚检出的分支；commit 列表里的 HEAD 标记也随 checkout 变化。
+	t.pendingBranch = branch
+	t.reloadRefs()
 	t.reloadCommits()
 }
 

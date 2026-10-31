@@ -90,24 +90,7 @@ func (s *State) LocalDiff(ctx context.Context, change FileChange) (string, error
 	return GitLocalFileDiff(ctx, s.Repo, change)
 }
 
-// Checkout 是 checkout 后重新读取的 refs 快照。
-type Checkout struct {
-	Branch string // 实际检出的本地分支名
-	Refs   Refs
-}
-
-// Checkout 切换分支，并在后台重新读取分支列表与 HEAD 信息。
-// 返回的快照需由调用方在 UI 线程用 ApplyRefs 写回。
-func (s *State) Checkout(ctx context.Context, branch Branch) (Checkout, error) {
-	name, err := GitCheckout(ctx, s.Repo, branch)
-	if err != nil {
-		return Checkout{}, err
-	}
-
-	// 必须先 checkout 再读 refs，否则拿到的是切换前的分支列表。
-	refs, err := s.Refs(ctx)
-	if err != nil {
-		return Checkout{}, err
-	}
-	return Checkout{Branch: name, Refs: refs}, nil
+// Checkout 切换分支并返回实际检出的本地分支名。
+func (s *State) Checkout(ctx context.Context, branch Branch) (string, error) {
+	return GitCheckout(ctx, s.Repo, branch)
 }
