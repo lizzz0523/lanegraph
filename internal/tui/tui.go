@@ -1080,11 +1080,9 @@ func (t *TUI) showLocal(_ localFilesRequest, changes []core.FileChange, err erro
 	case err != nil:
 		changeRoot = tview.NewTreeNode("")
 		changeRoot.AddChild(tview.NewTreeNode("[red]error[-] " + tview.Escape(err.Error())))
-	case len(changes) == 0:
-		title = " local changes (0) "
-		changeRoot = tview.NewTreeNode("")
-		changeRoot.AddChild(tview.NewTreeNode("[gray](no changes)[-]"))
 	default:
+		// 即使没有变更也保留分组 header，和初始化时的占位树保持一致，
+		// 避免第一次切到本页时列表从两组 header 跳成一行占位文本。
 		title = fmt.Sprintf(" local changes (%d) ", len(changes))
 		changeRoot = buildLocalTree(changes, t.selectedStyle, t.headerStyle)
 	}
