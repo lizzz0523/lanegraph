@@ -53,17 +53,14 @@ type TUI struct {
 	headerStyle         tcell.Style
 	headerSelectedStyle tcell.Style
 
-	commits      *async.Loader[[]core.Commit, commitsRequest]
-	diff         *async.Loader[string, diffRequest]
-	files        *async.Loader[[]core.FileChange, filesRequest]
-	filesLoading bool // 文件列表加载中：保留旧树并忽略交互
+	commits *async.Loader[[]core.Commit, commitsRequest]
+	diff    *async.Loader[string, diffRequest]
+	files   *async.Loader[[]core.FileChange, filesRequest]
 
-	localDiff         *async.Loader[string, localDiffRequest]
-	localFiles        *async.Loader[[]core.FileChange, localFilesRequest]
-	localFilesLoading bool // 本地变更列表加载中：保留旧树并忽略交互
+	localDiff  *async.Loader[string, localDiffRequest]
+	localFiles *async.Loader[[]core.FileChange, localFilesRequest]
 
-	checkout        *async.Loader[core.Checkout, checkoutRequest]
-	checkoutLoading bool // checkout 进行中：忽略重复按键
+	checkout *async.Loader[core.Checkout, checkoutRequest]
 }
 
 type commitsRequest struct{}
@@ -336,7 +333,7 @@ func (t *TUI) setupUI() tview.Primitive {
 
 	// 文件预览由 changed 负责，这里只处理目录展开/收起。
 	fileList.SetSelectedFunc(func(node *tview.TreeNode) {
-		if t.filesLoading || len(node.GetChildren()) == 0 {
+		if t.files.Loading() || len(node.GetChildren()) == 0 {
 			return
 		}
 		setFolderExpanded(node, !node.IsExpanded())
@@ -387,7 +384,7 @@ func (t *TUI) setupUI() tview.Primitive {
 
 	// 文件预览由 changed 负责，这里只处理目录展开/收起。
 	changeList.SetSelectedFunc(func(node *tview.TreeNode) {
-		if t.localFilesLoading || len(node.GetChildren()) == 0 {
+		if t.localFiles.Loading() || len(node.GetChildren()) == 0 {
 			return
 		}
 		setFolderExpanded(node, !node.IsExpanded())
@@ -737,7 +734,7 @@ func (t *TUI) refreshCommitInfo(force bool) (core.Commit, bool) {
 
 func (t *TUI) selectFile(node *tview.TreeNode) {
 	// 文件列表加载中时，旧树节点属于旧 commit，不能拿来请求新 commit 的 diff。
-	if t.filesLoading {
+	if t.files.Loading() {
 		return
 	}
 	t.requestFileDiff(t.CurrentCommit, node)
@@ -745,7 +742,7 @@ func (t *TUI) selectFile(node *tview.TreeNode) {
 
 func (t *TUI) selectLocalFile(node *tview.TreeNode) {
 	// 列表加载中时，旧树节点属于旧数据，不能拿来发起新的 diff 请求。
-	if t.localFilesLoading {
+	if t.localFiles.Loading() {
 		return
 	}
 	t.requestLocalDiff(node)
@@ -754,7 +751,7 @@ func (t *TUI) selectLocalFile(node *tview.TreeNode) {
 // checkoutBranch 对当前选中的分支执行 checkout：
 // 本地分支直接切换；远端分支切换到同名本地分支，不存在时创建跟踪分支。
 func (t *TUI) checkoutBranch() {
-	if t.checkout == nil || t.checkoutLoading {
+	if t.checkout == nil || t.checkout.Loading() {
 		return
 	}
 	node := t.branchList.GetCurrentNode()
@@ -839,7 +836,6 @@ func (t *TUI) showCommits(_ commitsRequest, commits []core.Commit, err error) {
 
 	if len(commits) == 0 {
 		t.CurrentCommit = core.Commit{}
-		t.filesLoading = false
 		t.files.Cancel()
 		t.statusDone("files", "")
 		t.commitInfo.SetText("")
@@ -869,13 +865,10 @@ func (t *TUI) showFilesLoading(_ filesRequest) {
 	t.diff.Cancel()
 	t.statusDone("diff", "")
 
-	t.filesLoading = true
 	t.statusStart("files", "file changes")
 }
 
 func (t *TUI) showFiles(_ filesRequest, changes []core.FileChange, err error) {
-	t.filesLoading = false
-
 	title := " file changes "
 	var fileRoot *tview.TreeNode
 	switch {
@@ -963,13 +956,10 @@ func (t *TUI) showLocalLoading(_ localFilesRequest) {
 	t.localDiff.Reset()
 	t.statusDone("local-diff", "")
 
-	t.localFilesLoading = true
 	t.statusStart("local", "local changes")
 }
 
 func (t *TUI) showLocal(_ localFilesRequest, changes []core.FileChange, err error) {
-	t.localFilesLoading = false
-
 	// 刷新后尽量恢复原来的选中文件，避免每次切 tab 都跳回第一项。
 	previous := t.localChange()
 
@@ -1081,12 +1071,10 @@ func (t *TUI) reloadCheckout(node *tview.TreeNode) {
 }
 
 func (t *TUI) showCheckoutLoading(req checkoutRequest) {
-	t.checkoutLoading = true
 	t.statusStart("checkout", "checkout "+req.branch.Name)
 }
 
 func (t *TUI) showCheckout(_ checkoutRequest, result core.Checkout, err error) {
-	t.checkoutLoading = false
 	if err != nil {
 		// git 的错误可能是多行，压成一行避免撑坏单行 statusBar。
 		message := strings.Join(strings.Fields(err.Error()), " ")

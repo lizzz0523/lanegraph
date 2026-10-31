@@ -64,6 +64,13 @@ func New[T, K any](cfg Config[T, K]) *Loader[T, K] {
 	}
 }
 
+// Loading 表示当前槽位仍在等待结果或等待结果交付。
+func (l *Loader[T, K]) Loading() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.slot.phase == phaseLoading
+}
+
 // Request 请求 arg 对应的值。只能在 UI 线程调用。
 func (l *Loader[T, K]) Request(arg K) {
 	key := l.cfg.Key(arg)
@@ -251,14 +258,8 @@ func (l *Loader[T, K]) loop() {
 		l.mu.Lock()
 		l.slot.cancel = nil
 		canceled := ctx.Err() != nil
-		if !canceled {
-			if err != nil {
-				if seq == l.seq {
-					l.slot.phase = phaseFailed
-				}
-			} else {
-				l.cache[key] = entry[T]{value: value}
-			}
+		if !canceled && err == nil {
+			l.cache[key] = entry[T]{value: value}
 		}
 		l.mu.Unlock()
 		cancel()
