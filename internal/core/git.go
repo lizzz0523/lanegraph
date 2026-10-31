@@ -142,8 +142,9 @@ type Commit struct {
 
 func GitCommits(ctx context.Context, repo string) ([]Commit, error) {
 	// 起点为 HEAD + 本地分支 + 远端分支 + 标签（不含 stash），未合并的分支也会被画出来
+	// topo-order 让同一分支的提交连续输出，减少 lane 交错；它和 date-order 一样保证父提交在子提交之后
 	// -z 用 NUL 分隔记录，body 里的换行才不会把一条记录拆成多行
-	log, err := gitOutput(ctx, repo, "log", "-z", "--date-order", "--branches",
+	log, err := gitOutput(ctx, repo, "log", "-z", "--topo-order", "--branches",
 		"--remotes", "--tags", "HEAD", "--format=%H%x00%P%x00%D%x00%an%x00%ct%x00%s%x00%b")
 	if err != nil {
 		return nil, fmt.Errorf("git log error: %w", err)

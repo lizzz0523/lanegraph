@@ -314,7 +314,8 @@ func (t *TUI) setupUI() tview.Primitive {
 			x, y, width, height := commitInfo.GetInnerRect()
 			if width != t.infoWidth {
 				t.infoWidth = width
-				t.refreshCommit(true)
+				// 宽度变化只需重排文本
+				t.refreshCommitInfo(true)
 			}
 			return x, y, width, height
 		})
@@ -604,18 +605,18 @@ func (t *TUI) switchTab(tag string) {
 	t.mainPanels.SwitchToPage(tag)
 	t.refreshTabStyles()
 
+	// 焦点原本在内容区时，切页后交给新页的列表，避免焦点留在被隐藏的页面上；
+	// 焦点在左侧分支列表时 hiddenFocused 为 false，保持不动。
 	if tag == tabChange {
 		t.reloadLocal()
-		// 焦点原本在左侧分支列表时保留，避免切 tab 抢走焦点。
 		if hiddenFocused {
 			t.app.SetFocus(t.changeList)
 		}
-		return
-	}
-
-	t.reloadCommits()
-	if hiddenFocused {
-		t.app.SetFocus(t.commitList)
+	} else {
+		t.reloadCommits()
+		if hiddenFocused {
+			t.app.SetFocus(t.commitList)
+		}
 	}
 }
 
@@ -697,12 +698,23 @@ func (t *TUI) refreshBranches(selected string) {
 	}
 }
 
-// refreshCommit 更新 commit 面板与 commit 信息，并异步请求文件列表。
-// force 用于宽度变化等必须重绘 commitInfo 的场景；否则仅在选中 commit 变化时重绘。
+// refreshCommit 刷新 commit 信息，并异步请求文件列表。
+// force 为 true 时无论选中项是否变化都重绘 commitInfo。
 func (t *TUI) refreshCommit(force bool) {
+	commit, ok := t.refreshCommitInfo(force)
+	if !ok {
+		return
+	}
+	t.requestFiles(commit)
+}
+
+// refreshCommitInfo 按 commitList 当前行刷新 CurrentCommit 与 commitInfo 文本。
+// force=false 时仅在选中 commit 变化时重绘。
+// 返回当前 commit 以及当前行号是否有效（列表为空时无效）。
+func (t *TUI) refreshCommitInfo(force bool) (core.Commit, bool) {
 	row := t.commitList.currentItem()
 	if row >= len(t.Commits) {
-		return
+		return core.Commit{}, false
 	}
 
 	commit := t.Commits[row]
@@ -726,7 +738,7 @@ func (t *TUI) refreshCommit(force bool) {
 		t.commitInfo.SetText(text)
 	}
 
-	t.requestFiles(commit)
+	return commit, true
 }
 
 func (t *TUI) selectFile(node *tview.TreeNode) {
@@ -821,7 +833,7 @@ func (t *TUI) showCommits(_ commitsRequest, commits []core.Commit, err error) {
 	}
 	t.statusDone("commits", "")
 
-	// 按 hash 恢复选中项：新提交只会插到列表前面，不应该把用户甩到别的提交。
+	// 按 hash 恢复选中项：topo-order 下刷新可能重排已有提交，不能依赖行号不变。
 	row := t.commitList.currentItem()
 	previous := ""
 	if row < len(t.Commits) {
