@@ -587,6 +587,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		AddItem(statusBar, 1, 0, false)
 
 	// SetRoot 只会对 commitList 触发 focus 回调，其余需手动初始化为未聚焦
+	setFocusBorder(filterText.Box, false)
 	setFocusBorder(branchList.Box, false)
 	setFocusBorder(commitList.Box, true)
 	setFocusBorder(fileList.Box, false)
