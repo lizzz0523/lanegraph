@@ -39,7 +39,7 @@ type Loader[T, K any] struct {
 	cfg Config[T, K]
 
 	mu    sync.Mutex
-	cache map[string]entry[T]
+	cache *cache[T]
 	slot  slot[K]
 	seq   uint64
 
@@ -50,15 +50,10 @@ type Loader[T, K any] struct {
 	done chan struct{}
 }
 
-type entry[T any] struct {
-	value T
-	err   error
-}
-
 func New[T, K any](cfg Config[T, K]) *Loader[T, K] {
 	return &Loader[T, K]{
 		cfg:   cfg,
-		cache: make(map[string]entry[T]),
+		cache: newCache[T](defaultCacheSize),
 		wake:  make(chan struct{}, 1),
 		done:  make(chan struct{}),
 	}
@@ -81,7 +76,7 @@ func (l *Loader[T, K]) Request(arg K) {
 		return
 	}
 	if key == l.slot.key {
-		if cached, ok := l.cache[key]; ok {
+		if cached, ok := l.cache.Get(key); ok {
 			if l.slot.phase == phaseShown {
 				l.mu.Unlock()
 				return
@@ -105,7 +100,7 @@ func (l *Loader[T, K]) Request(arg K) {
 
 	cancel := l.slot.cancel
 	l.slot.cancel = nil
-	cached, ok := l.cache[key]
+	cached, ok := l.cache.Get(key)
 	if ok {
 		l.slot.phase = phaseShown
 	}
@@ -136,7 +131,7 @@ func (l *Loader[T, K]) Reload(arg K) {
 	// 在锁内取消在途请求，确保旧结果不会在删除缓存后重新写回；
 	// 否则 Request 可能命中刚刚写回的旧缓存。
 	l.cancelLocked()
-	delete(l.cache, key)
+	l.cache.Delete(key)
 	// 之前请求的就是同一个 key 时，Request 会把它当成重复请求直接返回，
 	// 因此这里先让槽位失效，让下面的 Request 真正发起加载。
 	if l.slot.key == key {
@@ -157,7 +152,7 @@ func (l *Loader[T, K]) Reset() {
 		return
 	}
 	l.cancelLocked()
-	l.cache = make(map[string]entry[T])
+	l.cache.Clear()
 	l.resetLocked()
 	l.mu.Unlock()
 }
@@ -243,7 +238,7 @@ func (l *Loader[T, K]) loop() {
 			l.mu.Unlock()
 			continue
 		}
-		if cached, ok := l.cache[key]; ok {
+		if cached, ok := l.cache.Get(key); ok {
 			l.mu.Unlock()
 			l.deliver(arg, key, seq, cached)
 			continue
@@ -259,7 +254,7 @@ func (l *Loader[T, K]) loop() {
 		l.slot.cancel = nil
 		canceled := ctx.Err() != nil
 		if !canceled && err == nil {
-			l.cache[key] = entry[T]{value: value}
+			l.cache.Put(key, entry[T]{value: value})
 		}
 		l.mu.Unlock()
 		cancel()
