@@ -33,6 +33,12 @@ type slot[K any] struct {
 	cancel context.CancelFunc
 }
 
+// LoaderLifecycle 统一描述 Loader 的关闭与等待操作，便于管理不同泛型实例。
+type LoaderLifecycle interface {
+	Close()
+	Wait()
+}
+
 // Loader 是一个单槽位的异步取值器：同一时间只关心最新一次请求。
 // 缓存命中时同步返回；未命中时在后台加载，过期的成功结果只写缓存、不回写 UI。
 type Loader[T, K any] struct {
@@ -45,6 +51,7 @@ type Loader[T, K any] struct {
 
 	started bool
 	closed  bool
+	loopWG  sync.WaitGroup
 
 	wake chan struct{}
 	done chan struct{}
@@ -182,6 +189,11 @@ func (l *Loader[T, K]) Close() {
 	}
 }
 
+// Wait 等待后台 loop 退出。调用前应先 Close，否则可能一直阻塞。
+func (l *Loader[T, K]) Wait() {
+	l.loopWG.Wait()
+}
+
 // resetLocked 让当前槽位失效，并让在途结果的 seq 过期。
 func (l *Loader[T, K]) resetLocked() {
 	l.slot.key = ""
@@ -216,8 +228,13 @@ func (l *Loader[T, K]) start() {
 		return
 	}
 	l.started = true
+	l.loopWG.Add(1)
 	l.mu.Unlock()
-	go l.loop()
+
+	go func() {
+		defer l.loopWG.Done()
+		l.loop()
+	}()
 }
 
 func (l *Loader[T, K]) loop() {

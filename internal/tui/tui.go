@@ -46,6 +46,7 @@ type TUI struct {
 	statusMsg     string            // 最近一次操作结果，loading 结束后保留
 	statusBusy    map[string]string // statusBar 当前展示的 loading 项，key 为槽位
 	pendingBranch string            // checkout 后等待 refs 刷新完成再选中的分支
+	quitting      bool              // 退出流程已启动，忽略重复退出
 
 	tabStyle            tcell.Style
 	tabActiveStyle      tcell.Style
@@ -100,7 +101,7 @@ func (t *TUI) Run() error {
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch {
 		case event.Key() == tcell.KeyCtrlQ || (event.Key() == tcell.KeyRune && event.Rune() == 'q'):
-			app.Stop()
+			t.quit()
 			return nil
 		case event.Key() == tcell.KeyTab:
 			app.SetFocus(t.nextFocus(1))
@@ -114,14 +115,8 @@ func (t *TUI) Run() error {
 
 	t.app = app
 
-	t.initAsync()
-	defer t.refs.Close()
-	defer t.commits.Close()
-	defer t.files.Close()
-	defer t.diff.Close()
-	defer t.localFiles.Close()
-	defer t.localDiff.Close()
-	defer t.checkout.Close()
+	t.initLoaders()
+	defer t.closeLoaders()
 
 	t.refreshTabStyles()
 	t.refreshBranches("")
@@ -130,7 +125,24 @@ func (t *TUI) Run() error {
 	return app.Run()
 }
 
-func (t *TUI) initAsync() {
+// quit 先停止 Loader，再等后台 goroutine 退出，最后停止事件循环。
+// 不能在事件循环里同步等待，否则 Post 无法被消费。
+func (t *TUI) quit() {
+	if t.quitting {
+		return
+	}
+	t.quitting = true
+
+	// Close 是非阻塞的，先阻止新的请求并取消在途 Load。
+	t.closeLoaders()
+
+	go func() {
+		t.waitLoaders()
+		t.app.Stop()
+	}()
+}
+
+func (t *TUI) initLoaders() {
 	post := func(f func()) { t.app.QueueUpdateDraw(f) }
 
 	t.refs = async.New(async.Config[core.Refs, refsRequest]{
@@ -206,6 +218,30 @@ func (t *TUI) initAsync() {
 		OnLoading: t.showCheckoutLoading,
 		OnResult:  t.showCheckout,
 	})
+}
+
+func (t *TUI) loaders() []async.LoaderLifecycle {
+	return []async.LoaderLifecycle{
+		t.refs,
+		t.commits,
+		t.files,
+		t.diff,
+		t.localFiles,
+		t.localDiff,
+		t.checkout,
+	}
+}
+
+func (t *TUI) closeLoaders() {
+	for _, loader := range t.loaders() {
+		loader.Close()
+	}
+}
+
+func (t *TUI) waitLoaders() {
+	for _, loader := range t.loaders() {
+		loader.Wait()
+	}
 }
 
 func (t *TUI) setupUI() tview.Primitive {
