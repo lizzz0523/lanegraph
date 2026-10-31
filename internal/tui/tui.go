@@ -895,8 +895,8 @@ func (t *TUI) showFiles(_ filesRequest, changes []core.FileChange, err error) {
 
 	switch {
 	case err != nil:
+		// 失败由 Loader 记录，下次请求同一 commit 时会重试。
 		t.clearFileDiff("failed to load file changes")
-		t.files.Cancel() // 下次刷新/重新选中时重试
 	case len(changes) == 0:
 		t.clearFileDiff("no changes")
 	default:
@@ -992,8 +992,8 @@ func (t *TUI) showLocal(_ localFilesRequest, changes []core.FileChange, err erro
 
 	switch {
 	case err != nil:
+		// 失败由 Loader 记录，下次请求本地变更时会重试。
 		t.clearLocalDiff("failed to load local changes")
-		t.localFiles.Cancel() // 下次切回时重试
 	case len(changes) == 0:
 		t.clearLocalDiff("no changes")
 	default:

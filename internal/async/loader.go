@@ -15,18 +15,33 @@ type Config[T, K any] struct {
 	OnResult  func(K, T, error) // Post 非 nil 时在 UI 线程
 }
 
+// phase 是当前槽位的结果状态。
+type phase uint8
+
+const (
+	phaseIdle phase = iota
+	phaseLoading
+	phaseShown
+	phaseFailed
+)
+
+// slot 是 Loader 当前关心的唯一请求。
+type slot[K any] struct {
+	arg    K
+	key    string
+	phase  phase
+	cancel context.CancelFunc
+}
+
 // Loader 是一个单槽位的异步取值器：同一时间只关心最新一次请求。
 // 缓存命中时同步返回；未命中时在后台加载，过期的成功结果只写缓存、不回写 UI。
 type Loader[T, K any] struct {
 	cfg Config[T, K]
 
-	mu        sync.Mutex
-	cache     map[string]entry[T]
-	latest    K
-	latestKey string
-	seq       uint64
-	shownKey  string
-	cancel    context.CancelFunc
+	mu    sync.Mutex
+	cache map[string]entry[T]
+	slot  slot[K]
+	seq   uint64
 
 	started bool
 	closed  bool
@@ -58,26 +73,34 @@ func (l *Loader[T, K]) Request(arg K) {
 		l.mu.Unlock()
 		return
 	}
-	if key == l.latestKey {
-		if cached, ok := l.cache[key]; ok && l.shownKey != key {
-			l.shownKey = key
+	if key == l.slot.key {
+		if cached, ok := l.cache[key]; ok {
+			if l.slot.phase == phaseShown {
+				l.mu.Unlock()
+				return
+			}
+			l.slot.phase = phaseShown
 			l.mu.Unlock()
 			l.result(arg, cached)
 			return
 		}
-		l.mu.Unlock()
-		return
+		// 没有缓存：只有上次请求失败才重试，加载中/空闲直接返回。
+		if l.slot.phase != phaseFailed {
+			l.mu.Unlock()
+			return
+		}
 	}
 
-	l.latest = arg
-	l.latestKey = key
+	l.slot.arg = arg
+	l.slot.key = key
+	l.slot.phase = phaseLoading
 	l.seq++
-	cancel := l.cancel
-	l.cancel = nil
-	l.shownKey = ""
+
+	cancel := l.slot.cancel
+	l.slot.cancel = nil
 	cached, ok := l.cache[key]
 	if ok {
-		l.shownKey = key
+		l.slot.phase = phaseShown
 	}
 	l.mu.Unlock()
 
@@ -90,14 +113,7 @@ func (l *Loader[T, K]) Request(arg K) {
 		return
 	}
 
-	if l.cfg.OnLoading != nil {
-		l.cfg.OnLoading(arg)
-	}
-	l.start()
-	select {
-	case l.wake <- struct{}{}:
-	default:
-	}
+	l.startLoad(arg)
 }
 
 // Reload 丢弃 arg 对应的缓存并重新请求，用于切换面板时强制刷新。
@@ -112,17 +128,12 @@ func (l *Loader[T, K]) Reload(arg K) {
 	}
 	// 在锁内取消在途请求，确保旧结果不会在删除缓存后重新写回；
 	// 否则 Request 可能命中刚刚写回的旧缓存。
-	if l.cancel != nil {
-		l.cancel()
-		l.cancel = nil
-	}
+	l.cancelLocked()
 	delete(l.cache, key)
 	// 之前请求的就是同一个 key 时，Request 会把它当成重复请求直接返回，
-	// 因此这里先清掉最新请求标记，让下面的 Request 真正发起加载。
-	if l.latestKey == key {
-		l.latestKey = ""
-		l.shownKey = ""
-		l.seq++
+	// 因此这里先让槽位失效，让下面的 Request 真正发起加载。
+	if l.slot.key == key {
+		l.resetLocked()
 	}
 	l.mu.Unlock()
 
@@ -138,31 +149,18 @@ func (l *Loader[T, K]) Reset() {
 		l.mu.Unlock()
 		return
 	}
-	// 在锁内取消在途请求，避免旧结果在清空缓存后重新写回。
-	if l.cancel != nil {
-		l.cancel()
-		l.cancel = nil
-	}
+	l.cancelLocked()
 	l.cache = make(map[string]entry[T])
-	l.latestKey = ""
-	l.shownKey = ""
-	l.seq++
+	l.resetLocked()
 	l.mu.Unlock()
 }
 
 // Cancel 让当前在途结果失效，并取消当前 Load 的 context。
 func (l *Loader[T, K]) Cancel() {
 	l.mu.Lock()
-	l.latestKey = ""
-	l.seq++
-	l.shownKey = ""
-	cancel := l.cancel
-	l.cancel = nil
+	l.cancelLocked()
+	l.resetLocked()
 	l.mu.Unlock()
-
-	if cancel != nil {
-		cancel()
-	}
 }
 
 func (l *Loader[T, K]) Close() {
@@ -173,12 +171,39 @@ func (l *Loader[T, K]) Close() {
 	}
 	l.closed = true
 	close(l.done)
-	cancel := l.cancel
-	l.cancel = nil
+	cancel := l.slot.cancel
+	l.slot.cancel = nil
 	l.mu.Unlock()
 
 	if cancel != nil {
 		cancel()
+	}
+}
+
+// resetLocked 让当前槽位失效，并让在途结果的 seq 过期。
+func (l *Loader[T, K]) resetLocked() {
+	l.slot.key = ""
+	l.slot.phase = phaseIdle
+	l.seq++
+}
+
+// cancelLocked 取消当前在途加载。
+func (l *Loader[T, K]) cancelLocked() {
+	if l.slot.cancel != nil {
+		l.slot.cancel()
+		l.slot.cancel = nil
+	}
+}
+
+// startLoad 通知 UI 并唤醒后台加载。
+func (l *Loader[T, K]) startLoad(arg K) {
+	if l.cfg.OnLoading != nil {
+		l.cfg.OnLoading(arg)
+	}
+	l.start()
+	select {
+	case l.wake <- struct{}{}:
+	default:
 	}
 }
 
@@ -206,7 +231,7 @@ func (l *Loader[T, K]) loop() {
 			l.mu.Unlock()
 			return
 		}
-		arg, key, seq := l.latest, l.latestKey, l.seq
+		arg, key, seq := l.slot.arg, l.slot.key, l.seq
 		if key == "" {
 			l.mu.Unlock()
 			continue
@@ -218,16 +243,22 @@ func (l *Loader[T, K]) loop() {
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
-		l.cancel = cancel
+		l.slot.cancel = cancel
 		l.mu.Unlock()
 
 		value, err := l.cfg.Load(ctx, arg)
 
 		l.mu.Lock()
-		l.cancel = nil
+		l.slot.cancel = nil
 		canceled := ctx.Err() != nil
-		if !canceled && err == nil {
-			l.cache[key] = entry[T]{value: value}
+		if !canceled {
+			if err != nil {
+				if seq == l.seq {
+					l.slot.phase = phaseFailed
+				}
+			} else {
+				l.cache[key] = entry[T]{value: value}
+			}
 		}
 		l.mu.Unlock()
 		cancel()
@@ -239,16 +270,20 @@ func (l *Loader[T, K]) loop() {
 	}
 }
 
-func (l *Loader[T, K]) deliver(arg K, key string, seq uint64, cached entry[T]) {
+func (l *Loader[T, K]) deliver(arg K, key string, seq uint64, value entry[T]) {
 	apply := func() {
 		l.mu.Lock()
-		if l.closed || seq != l.seq || key != l.latestKey || l.shownKey == key {
+		if l.closed || seq != l.seq || key != l.slot.key || l.slot.phase == phaseShown {
 			l.mu.Unlock()
 			return
 		}
-		l.shownKey = key
+		if value.err != nil {
+			l.slot.phase = phaseFailed
+		} else {
+			l.slot.phase = phaseShown
+		}
 		l.mu.Unlock()
-		l.result(arg, cached)
+		l.result(arg, value)
 	}
 
 	if l.cfg.Post != nil {
@@ -258,8 +293,8 @@ func (l *Loader[T, K]) deliver(arg K, key string, seq uint64, cached entry[T]) {
 	apply()
 }
 
-func (l *Loader[T, K]) result(arg K, cached entry[T]) {
+func (l *Loader[T, K]) result(arg K, value entry[T]) {
 	if l.cfg.OnResult != nil {
-		l.cfg.OnResult(arg, cached.value, cached.err)
+		l.cfg.OnResult(arg, value.value, value.err)
 	}
 }
