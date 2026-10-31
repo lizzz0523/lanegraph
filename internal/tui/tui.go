@@ -10,7 +10,6 @@ import (
 	"lanegraph/internal/core"
 
 	"github.com/gdamore/tcell/v2"
-	"github.com/mattn/go-runewidth"
 	"github.com/rivo/tview"
 )
 
@@ -327,8 +326,8 @@ func (t *TUI) setupUI() tview.Primitive {
 			x, y, width, height := commitInfo.GetInnerRect()
 			if width != t.infoWidth {
 				t.infoWidth = width
-				// 宽度变化只需重排文本
-				t.refreshCommitInfo(true)
+				// 宽度变化只需重排文本，不修改选择状态。
+				commitInfo.SetText(renderCommit(t.CurrentCommit, width))
 			}
 			return x, y, width, height
 		})
@@ -707,23 +706,12 @@ func (t *TUI) refreshBranches(selected string) {
 	}
 }
 
-// refreshCommit 刷新 commit 信息，并异步请求文件列表。
+// refreshCommit 刷新选中 commit 的信息，并异步请求文件列表。
 // force 为 true 时无论选中项是否变化都重绘 commitInfo。
 func (t *TUI) refreshCommit(force bool) {
-	commit, ok := t.refreshCommitInfo(force)
-	if !ok {
-		return
-	}
-	t.requestFiles(commit)
-}
-
-// refreshCommitInfo 按 commitList 当前行刷新 CurrentCommit 与 commitInfo 文本。
-// force=false 时仅在选中 commit 变化时重绘。
-// 返回当前 commit 以及当前行号是否有效（列表为空时无效）。
-func (t *TUI) refreshCommitInfo(force bool) (core.Commit, bool) {
 	row := t.commitList.currentItem()
 	if row >= len(t.Commits) {
-		return core.Commit{}, false
+		return
 	}
 
 	commit := t.Commits[row]
@@ -731,23 +719,9 @@ func (t *TUI) refreshCommitInfo(force bool) (core.Commit, bool) {
 	t.CurrentCommit = commit
 
 	if force || changed {
-		text := fmt.Sprintf("[aqua]%v[-] [gray]%v[-]  [::b]%v[-::-]", tview.Escape(commit.Author), commit.Date.Format("2006-01-02 15:04:05"), tview.Escape(commit.Subject))
-		if body := strings.TrimLeft(commit.Body, "\r\n"); body != "" {
-			first, _, more := strings.Cut(body, "\n")
-			if t.infoWidth > 4 {
-				if truncate := runewidth.Truncate(first, t.infoWidth-4, ""); truncate != first {
-					first, more = truncate, true
-				}
-			}
-			text += "\n" + tview.Escape(first)
-			if more {
-				text += " [gray]...[-]"
-			}
-		}
-		t.commitInfo.SetText(text)
+		t.commitInfo.SetText(renderCommit(commit, t.infoWidth))
 	}
-
-	return commit, true
+	t.requestFiles(commit)
 }
 
 func (t *TUI) selectFile(node *tview.TreeNode) {

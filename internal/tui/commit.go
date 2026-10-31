@@ -7,6 +7,7 @@ import (
 
 	"lanegraph/internal/core"
 
+	"github.com/mattn/go-runewidth"
 	"github.com/rivo/tview"
 )
 
@@ -193,4 +194,26 @@ func renderGraph(commits []core.Commit, graph core.Graph) []string {
 	}
 
 	return lines
+}
+
+// renderCommit 生成 commit 信息面板的文本；width 用于截断正文首行。
+func renderCommit(commit core.Commit, width int) string {
+	if commit.Hash == "" {
+		return ""
+	}
+
+	text := fmt.Sprintf("[aqua]%v[-] [gray]%v[-]  [::b]%v[-::-]", tview.Escape(commit.Author), commit.Date.Format("2006-01-02 15:04:05"), tview.Escape(commit.Subject))
+	if body := strings.TrimLeft(commit.Body, "\r\n"); body != "" {
+		first, _, more := strings.Cut(body, "\n")
+		if width > 4 {
+			if truncate := runewidth.Truncate(first, width-4, ""); truncate != first {
+				first, more = truncate, true
+			}
+		}
+		text += "\n" + tview.Escape(first)
+		if more {
+			text += " [gray]...[-]"
+		}
+	}
+	return text
 }
