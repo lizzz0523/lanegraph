@@ -826,7 +826,7 @@ func (t *TUI) checkoutBranch() {
 	if node == nil {
 		return
 	}
-	t.reloadCheckout(node)
+	t.executeCheckout(node)
 }
 
 // commitRow 返回 hash 在提交列表中的行号；hash 为空或不存在时返回 -1。
@@ -1171,8 +1171,8 @@ func (t *TUI) clearDiff(view *tview.TextView, slot, message string) {
 
 /** CHECKOUT */
 
-// reloadCheckout 通过节点引用取分支并绕过缓存，保证每次按空格都真正执行 git checkout。
-func (t *TUI) reloadCheckout(node *tview.TreeNode) {
+// executeCheckout 通过节点引用取分支并绕过缓存，保证每次按空格都真正执行 git checkout。
+func (t *TUI) executeCheckout(node *tview.TreeNode) {
 	branch, ok := node.GetReference().(core.Branch)
 	if !ok {
 		return // Local / Remote 分组标题
