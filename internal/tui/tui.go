@@ -334,12 +334,9 @@ func (t *TUI) setupUI() tview.Primitive {
 
 	focusOnScrollTree(fileList)
 
+	// 文件预览由 changed 负责，这里只处理目录展开/收起。
 	fileList.SetSelectedFunc(func(node *tview.TreeNode) {
-		if t.filesLoading {
-			return
-		}
-		if len(node.GetChildren()) == 0 {
-			t.selectFile(node)
+		if t.filesLoading || len(node.GetChildren()) == 0 {
 			return
 		}
 		setFolderExpanded(node, !node.IsExpanded())
@@ -388,12 +385,9 @@ func (t *TUI) setupUI() tview.Primitive {
 
 	focusOnScrollTree(changeList)
 
+	// 文件预览由 changed 负责，这里只处理目录展开/收起。
 	changeList.SetSelectedFunc(func(node *tview.TreeNode) {
-		if t.localFilesLoading {
-			return
-		}
-		if len(node.GetChildren()) == 0 {
-			t.selectLocalFile(node)
+		if t.localFilesLoading || len(node.GetChildren()) == 0 {
 			return
 		}
 		setFolderExpanded(node, !node.IsExpanded())
@@ -858,8 +852,8 @@ func (t *TUI) showCommits(_ commitsRequest, commits []core.Commit, err error) {
 	if found := t.commitRow(previous); found >= 0 {
 		row = found
 	}
+	// setCurrentItem 会像用户选中一样触发 refreshCommit，这里不再额外请求。
 	t.commitList.setCurrentItem(row)
-	t.refreshCommit(true)
 }
 
 /** FILES */
@@ -879,7 +873,7 @@ func (t *TUI) showFilesLoading(_ filesRequest) {
 	t.statusStart("files", "file changes")
 }
 
-func (t *TUI) showFiles(req filesRequest, changes []core.FileChange, err error) {
+func (t *TUI) showFiles(_ filesRequest, changes []core.FileChange, err error) {
 	t.filesLoading = false
 
 	title := " file changes "
@@ -911,8 +905,8 @@ func (t *TUI) showFiles(req filesRequest, changes []core.FileChange, err error) 
 			t.clearFileDiff("select a file")
 			break
 		}
+		// 只设置选中项；下一次 Draw 的 changed 回调会统一发起 diff 请求。
 		t.fileList.SetCurrentNode(node)
-		t.requestFileDiff(req.commit, node)
 	}
 	t.statusDone("files", "")
 }
@@ -1011,8 +1005,8 @@ func (t *TUI) showLocal(_ localFilesRequest, changes []core.FileChange, err erro
 			t.clearLocalDiff("select a file")
 			break
 		}
+		// 只设置选中项；下一次 Draw 的 changed 回调会统一发起 diff 请求。
 		t.changeList.SetCurrentNode(node)
-		t.requestLocalDiff(node)
 	}
 	t.statusDone("local", "")
 }
