@@ -15,13 +15,6 @@ type State struct {
 	CurrentCommit Commit
 }
 
-// Refs 是仓库的分支与 HEAD 快照。
-type Refs struct {
-	Branches []Branch
-	HeadRef  string
-	HeadHash string
-}
-
 func NewState(ctx context.Context, repo string) (State, error) {
 	s := State{Repo: repo}
 
@@ -48,6 +41,13 @@ func (s *State) History(ctx context.Context) ([]Commit, error) {
 	return GitCommits(ctx, s.Repo)
 }
 
+// Refs 是仓库的分支与 HEAD 快照。
+type Refs struct {
+	Branches []Branch
+	HeadRef  string
+	HeadHash string
+}
+
 // Refs 返回仓库的分支与 HEAD 快照。
 func (s *State) Refs(ctx context.Context) (Refs, error) {
 	branches, err := GitBranches(ctx, s.Repo)
@@ -60,6 +60,13 @@ func (s *State) Refs(ctx context.Context) (Refs, error) {
 		HeadRef:  headRef,
 		HeadHash: headHash,
 	}, nil
+}
+
+// ApplyRefs 把 refs 快照写回 State。只能在 UI 线程调用。
+func (s *State) ApplyRefs(refs Refs) {
+	s.Branches = refs.Branches
+	s.HeadRef = refs.HeadRef
+	s.HeadHash = refs.HeadHash
 }
 
 // Files 返回某个 commit 的文件变更列表。
@@ -85,14 +92,12 @@ func (s *State) LocalDiff(ctx context.Context, change FileChange) (string, error
 
 // Checkout 是 checkout 后重新读取的 refs 快照。
 type Checkout struct {
-	Branch   string // 实际检出的本地分支名
-	Branches []Branch
-	HeadRef  string
-	HeadHash string
+	Branch string // 实际检出的本地分支名
+	Refs   Refs
 }
 
 // Checkout 切换分支，并在后台重新读取分支列表与 HEAD 信息。
-// 返回的快照需由调用方在 UI 线程用 ApplyCheckout 写回。
+// 返回的快照需由调用方在 UI 线程用 ApplyRefs 写回。
 func (s *State) Checkout(ctx context.Context, branch Branch) (Checkout, error) {
 	name, err := GitCheckout(ctx, s.Repo, branch)
 	if err != nil {
@@ -100,22 +105,9 @@ func (s *State) Checkout(ctx context.Context, branch Branch) (Checkout, error) {
 	}
 
 	// 必须先 checkout 再读 refs，否则拿到的是切换前的分支列表。
-	branches, err := GitBranches(ctx, s.Repo)
+	refs, err := s.Refs(ctx)
 	if err != nil {
 		return Checkout{}, err
 	}
-	headRef, headHash := GitRepoHead(ctx, s.Repo)
-	return Checkout{
-		Branch:   name,
-		Branches: branches,
-		HeadRef:  headRef,
-		HeadHash: headHash,
-	}, nil
-}
-
-// ApplyCheckout 把 checkout 结果写回 State。只能在 UI 线程调用。
-func (s *State) ApplyCheckout(result Checkout) {
-	s.Branches = result.Branches
-	s.HeadRef = result.HeadRef
-	s.HeadHash = result.HeadHash
+	return Checkout{Branch: name, Refs: refs}, nil
 }

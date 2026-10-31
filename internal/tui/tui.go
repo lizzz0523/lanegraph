@@ -846,7 +846,7 @@ func (t *TUI) showRefsLoading(_ refsRequest) {
 	t.statusStart("branches", "branches")
 }
 
-func (t *TUI) showRefs(_ refsRequest, snapshot core.Refs, err error) {
+func (t *TUI) showRefs(_ refsRequest, refs core.Refs, err error) {
 	if err != nil {
 		t.statusDone("branches", "branches: "+err.Error())
 		return
@@ -855,10 +855,7 @@ func (t *TUI) showRefs(_ refsRequest, snapshot core.Refs, err error) {
 
 	selected := t.branchName()
 
-	t.Branches = snapshot.Branches
-	t.HeadRef = snapshot.HeadRef
-	t.HeadHash = snapshot.HeadHash
-
+	t.ApplyRefs(refs)
 	if t.repoHead != nil {
 		t.repoHead.SetText(t.HeadRef)
 	}
@@ -1147,7 +1144,7 @@ func (t *TUI) showCheckout(_ checkoutRequest, result core.Checkout, err error) {
 	t.refs.Cancel()
 	t.statusDone("branches", "")
 
-	t.ApplyCheckout(result)
+	t.ApplyRefs(result.Refs)
 	if t.repoHead != nil {
 		t.repoHead.SetText(t.HeadRef)
 	}
