@@ -27,6 +27,7 @@ type TUI struct {
 	repoHead   *tview.TextView
 	changeTab  *tview.Button
 	commitTab  *tview.Button
+	filterText *tview.TextArea
 	branchList *tview.TreeView
 	mainPanels *tview.Pages
 	statusBar  *tview.TextView
@@ -99,9 +100,15 @@ func (t *TUI) Run() error {
 		EnableMouse(true)
 
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		filtering := t.filterText != nil && t.filterText.HasFocus()
 		switch {
-		case event.Key() == tcell.KeyCtrlQ || (event.Key() == tcell.KeyRune && event.Rune() == 'q'):
+		// filter 输入框里要能正常输入 q；Ctrl+Q 仍然随时可退出。
+		case event.Key() == tcell.KeyCtrlQ || (event.Key() == tcell.KeyRune && event.Rune() == 'q' && !filtering):
 			t.quit()
+			return nil
+		case event.Key() == tcell.KeyEscape && filtering:
+			t.filterText.SetText("", false)
+			app.SetFocus(t.branchList)
 			return nil
 		case event.Key() == tcell.KeyTab:
 			app.SetFocus(t.nextFocus(1))
@@ -348,7 +355,10 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetBlurFunc(func() { setFocusBorder(commitList.Box, false) })
 
 	commitList.setLines(renderGraph(t.Commits, core.ComputeGraph(t.Commits)))
-	commitList.setSelectedFunc(func() { t.refreshCommit(false) })
+
+	commitList.setSelectedFunc(func() {
+		t.refreshCommit(false)
+	})
 
 	commitInfo := tview.NewTextView().
 		SetWrap(false).
@@ -464,6 +474,18 @@ func (t *TUI) setupUI() tview.Primitive {
 		AddItem(changeList, 40, 1, true).
 		AddItem(changeDiff, 0, 1, false)
 
+	filterText := tview.NewTextArea()
+
+	filterText.SetTitle(" filter ").
+		SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1).
+		SetFocusFunc(func() { setFocusBorder(filterText.Box, true) }).
+		SetBlurFunc(func() { setFocusBorder(filterText.Box, false) })
+
+	filterText.SetChangedFunc(func() {
+		t.refreshBranches(t.branchName())
+	})
+
 	branchList := tview.NewTreeView().
 		SetTopLevel(1).
 		SetGraphics(false)
@@ -539,6 +561,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetDirection(tview.FlexRow).
 		AddItem(repoHead, 3, 0, false).
 		AddItem(mainTabs, 2, 0, false).
+		AddItem(filterText, 3, 0, false).
 		AddItem(branchList, 0, 1, false)
 
 	// Pages 会先把整块区域刷成背景色再画当前页，
@@ -573,6 +596,7 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.repoHead = repoHead
 	t.changeTab = changeTab
 	t.commitTab = commitTab
+	t.filterText = filterText
 	t.branchList = branchList
 	t.mainPanels = mainPanels
 	t.statusBar = statusBar
@@ -617,9 +641,9 @@ func (t *TUI) nextFocus(step int) tview.Primitive {
 // focusChain 是当前 tab 下 Tab/Backtab 的循环顺序。
 func (t *TUI) focusChain() []tview.Primitive {
 	if t.activeTab == tabChange {
-		return []tview.Primitive{t.branchList, t.changeList, t.changeDiff}
+		return []tview.Primitive{t.filterText, t.branchList, t.changeList, t.changeDiff}
 	}
-	return []tview.Primitive{t.branchList, t.commitList, t.fileList, t.fileDiff}
+	return []tview.Primitive{t.filterText, t.branchList, t.commitList, t.fileList, t.fileDiff}
 }
 
 func (t *TUI) switchTab(tag string) {
@@ -695,13 +719,24 @@ func (t *TUI) refreshBranches(selected string) {
 		AddChild(localNode).
 		AddChild(remoteNode)
 
+	filter := ""
+	if t.filterText != nil {
+		filter = strings.ToLower(strings.TrimSpace(t.filterText.GetText()))
+	}
+
 	for _, b := range t.Branches {
+		// 本地和远端分支都按完整分支名做大小写不敏感的 contains 过滤；
+		// 远端分支的完整名带 remote 前缀（如 origin/foo）。
+		if filter != "" && !strings.Contains(strings.ToLower(b.Name), filter) {
+			continue
+		}
+
 		parent := localNode
 		if b.Remote {
 			parent = remoteNode
 		}
 
-		// HEAD 指向的本地分支前面加绿色对勾；其余本地分支用等宽空格对齐。
+		// HEAD 指向的本地分支前面加绿色对勾；其余本地分支用分支符号占位对齐。
 		// Escape 防止分支名里的 [ 被当作颜色标签。
 		label := tview.Escape(b.Name)
 		isHead := !b.Remote && b.Name == t.HeadRef
@@ -709,7 +744,7 @@ func (t *TUI) refreshBranches(selected string) {
 		case isHead:
 			label = "[green]✓[-] " + label
 		case !b.Remote:
-			label = "  " + label
+			label = "[gray]↘[-] " + label
 		}
 
 		child := tview.NewTreeNode(label).
@@ -724,6 +759,9 @@ func (t *TUI) refreshBranches(selected string) {
 		parent.AddChild(child)
 	}
 
+	if len(localNode.GetChildren()) == 0 {
+		branchRoot.RemoveChild(localNode)
+	}
 	if len(remoteNode.GetChildren()) == 0 {
 		branchRoot.RemoveChild(remoteNode)
 	}
