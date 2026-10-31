@@ -561,6 +561,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetDirection(tview.FlexRow).
 		AddItem(repoHead, 3, 0, false).
 		AddItem(mainTabs, 2, 0, false).
+		AddItem(nil, 1, 0, false).
 		AddItem(filterText, 3, 0, false).
 		AddItem(branchList, 0, 1, false)
 
