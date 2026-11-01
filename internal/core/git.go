@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -51,9 +52,9 @@ type Branch struct {
 	RemoteName string
 }
 
-// LocalName 返回分支对应的本地分支名：本地分支返回自身，
+// localName 返回分支对应的本地分支名：本地分支返回自身，
 // 远端分支去掉 remote 前缀（如 origin/foo → foo）。
-func (b Branch) LocalName() string {
+func (b Branch) localName() string {
 	if !b.Remote {
 		return b.Name
 	}
@@ -109,7 +110,7 @@ func GitBranches(ctx context.Context, repo string) ([]Branch, error) {
 // 本地分支直接 checkout；远端分支切换到同名本地分支，
 // 本地分支不存在时从该远端分支创建跟踪分支。返回实际检出的本地分支名。
 func GitCheckout(ctx context.Context, repo string, branch Branch) (string, error) {
-	local := branch.LocalName()
+	local := branch.localName()
 
 	// 远端分支对应的本地分支已存在时直接切换，不重置、不改 upstream。
 	if branch.Remote && !gitRefExists(ctx, repo, "refs/heads/"+local) {
@@ -191,6 +192,14 @@ type FileChange struct {
 	Scope   ChangeScope
 }
 
+// paths 返回需要传给 git 的路径；重命名/复制同时包含旧路径和新路径。
+func (c FileChange) paths() []string {
+	if c.OldPath != "" {
+		return []string{c.OldPath, c.Path}
+	}
+	return []string{c.Path}
+}
+
 // GitCommitFiles 相对第一个 parent 计算文件变更；根提交没有 parent，只能把全部文件视为新增。
 func GitCommitFiles(ctx context.Context, repo string, commit Commit) ([]FileChange, error) {
 	var args []string
@@ -261,6 +270,117 @@ func parseNameStatus(output string, scope ChangeScope) []FileChange {
 		changes = append(changes, change)
 	}
 	return changes
+}
+
+// GitStage 把 change 对应的改动加入暂存区；删除和重命名也会一并在索引中更新。
+func GitStage(ctx context.Context, repo string, change FileChange) error {
+	if change.Path == "" {
+		return nil
+	}
+	args := append([]string{"add", "-A", "--"}, change.paths()...)
+	if _, err := gitOutputUntrimmed(ctx, repo, args...); err != nil {
+		return fmt.Errorf("git stage error: %w", gitStderr(err))
+	}
+	return nil
+}
+
+// GitUnstage 把 change 从暂存区移回工作区。
+func GitUnstage(ctx context.Context, repo string, change FileChange) error {
+	if change.Path == "" {
+		return nil
+	}
+	paths := change.paths()
+
+	// 空仓库还没有 HEAD，reset 无法执行，只能把文件从索引里移除。
+	if !gitRefExists(ctx, repo, "HEAD") {
+		args := append([]string{"rm", "-r", "--cached", "-q", "--"}, paths...)
+		if _, err := gitOutputUntrimmed(ctx, repo, args...); err != nil {
+			return fmt.Errorf("git unstage error: %w", gitStderr(err))
+		}
+		return nil
+	}
+
+	args := append([]string{"reset", "-q", "HEAD", "--"}, paths...)
+	if _, err := gitOutputUntrimmed(ctx, repo, args...); err != nil {
+		return fmt.Errorf("git unstage error: %w", gitStderr(err))
+	}
+	return nil
+}
+
+// GitDiscard 丢弃 change 对应的改动：
+// 未跟踪文件直接删除，未暂存改动恢复成索引版本，已暂存改动重置回 HEAD。
+func GitDiscard(ctx context.Context, repo string, change FileChange) error {
+	if change.Path == "" {
+		return nil
+	}
+	switch change.Scope {
+	case ScopeUntracked:
+		return removeWorktree(repo, change.Path)
+	case ScopeUnstaged:
+		return discardWorktree(ctx, repo, change)
+	case ScopeStaged:
+		return discardStaged(ctx, repo, change)
+	default:
+		return fmt.Errorf("unknown change scope: %d", change.Scope)
+	}
+}
+
+// discardWorktree 丢弃工作区改动；重命名需要恢复旧路径并删除新路径。
+func discardWorktree(ctx context.Context, repo string, change FileChange) error {
+	if change.OldPath != "" {
+		if err := restoreWorktree(ctx, repo, change.OldPath); err != nil {
+			return err
+		}
+		return removeWorktree(repo, change.Path)
+	}
+	return restoreWorktree(ctx, repo, change.Path)
+}
+
+// discardStaged 把文件重置回 HEAD：先重置索引，再按状态恢复或删除工作区文件。
+func discardStaged(ctx context.Context, repo string, change FileChange) error {
+	if !gitRefExists(ctx, repo, "HEAD") {
+		args := append([]string{"rm", "-r", "--cached", "-q", "--"}, change.paths()...)
+		if _, err := gitOutputUntrimmed(ctx, repo, args...); err != nil {
+			return fmt.Errorf("git discard error: %w", gitStderr(err))
+		}
+		return removeWorktree(repo, change.Path)
+	}
+
+	args := append([]string{"reset", "-q", "HEAD", "--"}, change.paths()...)
+	if _, err := gitOutputUntrimmed(ctx, repo, args...); err != nil {
+		return fmt.Errorf("git discard error: %w", gitStderr(err))
+	}
+
+	switch {
+	case change.OldPath != "":
+		if err := restoreWorktree(ctx, repo, change.OldPath); err != nil {
+			return err
+		}
+		return removeWorktree(repo, change.Path)
+	case change.Status != "" && change.Status[0] == 'A':
+		// 已暂存的新文件在 HEAD 里不存在，重置索引后还要删掉工作区文件。
+		return removeWorktree(repo, change.Path)
+	default:
+		return restoreWorktree(ctx, repo, change.Path)
+	}
+}
+
+// restoreWorktree 用索引里的版本覆盖工作区文件。
+func restoreWorktree(ctx context.Context, repo string, paths ...string) error {
+	args := append([]string{"restore", "--worktree", "--"}, paths...)
+	if _, err := gitOutputUntrimmed(ctx, repo, args...); err != nil {
+		return fmt.Errorf("git restore error: %w", gitStderr(err))
+	}
+	return nil
+}
+
+// removeWorktree 删除工作区文件；文件已不存在时视为成功。
+func removeWorktree(repo, path string) error {
+	err := os.Remove(filepath.Join(repo, path))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove file error: %w", err)
+	}
+	return nil
 }
 
 // GitFileDiff 相对第一个 parent 计算单个文件的 diff，并交给 git-delta 着色。

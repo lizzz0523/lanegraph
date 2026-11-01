@@ -62,13 +62,6 @@ func (s *State) Refs(ctx context.Context) (Refs, error) {
 	}, nil
 }
 
-// ApplyRefs 把 refs 快照写回 State。只能在 UI 线程调用。
-func (s *State) ApplyRefs(refs Refs) {
-	s.Branches = refs.Branches
-	s.HeadRef = refs.HeadRef
-	s.HeadHash = refs.HeadHash
-}
-
 // Files 返回某个 commit 的文件变更列表。
 func (s *State) Files(ctx context.Context, commit Commit) ([]FileChange, error) {
 	return GitCommitFiles(ctx, s.Repo, commit)
@@ -88,6 +81,21 @@ func (s *State) LocalChanges(ctx context.Context) ([]FileChange, error) {
 // LocalDiff 返回本地单个文件的 diff，通常是 git-delta 的 ANSI 输出。
 func (s *State) LocalDiff(ctx context.Context, change FileChange) (string, error) {
 	return GitLocalFileDiff(ctx, s.Repo, change)
+}
+
+// Stage 把单个文件变更加入暂存区。
+func (s *State) Stage(ctx context.Context, change FileChange) error {
+	return GitStage(ctx, s.Repo, change)
+}
+
+// Unstage 把单个文件变更移回工作区。
+func (s *State) Unstage(ctx context.Context, change FileChange) error {
+	return GitUnstage(ctx, s.Repo, change)
+}
+
+// Discard 丢弃单个文件的改动。
+func (s *State) Discard(ctx context.Context, change FileChange) error {
+	return GitDiscard(ctx, s.Repo, change)
 }
 
 // Checkout 切换分支并返回实际检出的本地分支名。

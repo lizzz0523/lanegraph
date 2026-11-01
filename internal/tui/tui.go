@@ -24,6 +24,8 @@ type TUI struct {
 
 	app *tview.Application
 
+	// root 包住整个界面，弹窗作为独立页面叠在 main 上，从而覆盖全屏。
+	root       *tview.Pages
 	repoHead   *tview.TextView
 	changeTab  *tview.Button
 	commitTab  *tview.Button
@@ -47,6 +49,7 @@ type TUI struct {
 	statusMsg     string            // 最近一次操作结果，loading 结束后保留
 	statusBusy    map[string]string // statusBar 当前展示的 loading 项，key 为槽位
 	pendingBranch string            // checkout 后等待 refs 刷新完成再选中的分支
+	promptVisible bool              // discard 确认弹窗是否正在显示
 	quitting      bool              // 退出流程已启动，忽略重复退出
 
 	tabStyle            tcell.Style
@@ -64,6 +67,7 @@ type TUI struct {
 	localDiff  *async.Loader[string, localDiffRequest]
 	localFiles *async.Loader[[]core.FileChange, localFilesRequest]
 
+	changeOp *async.Loader[string, changeOpRequest]
 	checkout *async.Loader[string, checkoutRequest]
 }
 
@@ -86,6 +90,20 @@ type localDiffRequest struct {
 	change core.FileChange
 }
 
+// changeOp 是本地变更列表上的操作类型。
+type changeOp uint8
+
+const (
+	opStage changeOp = iota
+	opUnstage
+	opDiscard
+)
+
+type changeOpRequest struct {
+	op     changeOp
+	change core.FileChange
+}
+
 type checkoutRequest struct {
 	branch core.Branch
 }
@@ -103,17 +121,17 @@ func (t *TUI) Run() error {
 		filtering := t.filterText != nil && t.filterText.HasFocus()
 		switch {
 		// filter 输入框里要能正常输入 q；Ctrl+Q 仍然随时可退出。
-		case event.Key() == tcell.KeyCtrlQ || (event.Key() == tcell.KeyRune && event.Rune() == 'q' && !filtering):
+		case event.Key() == tcell.KeyCtrlQ || (event.Key() == tcell.KeyRune && event.Rune() == 'q' && !filtering && !t.promptVisible):
 			t.quit()
 			return nil
 		case event.Key() == tcell.KeyEscape && filtering:
 			t.filterText.SetText("", false)
 			app.SetFocus(t.branchList)
 			return nil
-		case event.Key() == tcell.KeyTab:
+		case event.Key() == tcell.KeyTab && !t.promptVisible:
 			app.SetFocus(t.nextFocus(1))
 			return nil
-		case event.Key() == tcell.KeyBacktab:
+		case event.Key() == tcell.KeyBacktab && !t.promptVisible:
 			app.SetFocus(t.nextFocus(-1))
 			return nil
 		}
@@ -216,6 +234,25 @@ func (t *TUI) initLoaders() {
 		OnResult:  t.showLocalDiff,
 	})
 
+	t.changeOp = async.New(async.Config[string, changeOpRequest]{
+		Key: func(req changeOpRequest) string {
+			return fmt.Sprintf("%d\x00%d\x00%s", req.op, req.change.Scope, req.change.Path)
+		},
+		Load: func(ctx context.Context, req changeOpRequest) (string, error) {
+			switch req.op {
+			case opStage:
+				return req.change.Path, t.Stage(ctx, req.change)
+			case opUnstage:
+				return req.change.Path, t.Unstage(ctx, req.change)
+			default:
+				return req.change.Path, t.Discard(ctx, req.change)
+			}
+		},
+		Post:      post,
+		OnLoading: t.showChangeOpLoading,
+		OnResult:  t.showChangeOp,
+	})
+
 	t.checkout = async.New(async.Config[string, checkoutRequest]{
 		Key: func(req checkoutRequest) string { return req.branch.Name },
 		Load: func(ctx context.Context, req checkoutRequest) (string, error) {
@@ -235,6 +272,7 @@ func (t *TUI) loaders() []async.LoaderLifecycle {
 		t.diff,
 		t.localFiles,
 		t.localDiff,
+		t.changeOp,
 		t.checkout,
 	}
 }
@@ -289,13 +327,6 @@ func (t *TUI) setupUI() tview.Primitive {
 			color = tcell.ColorAqua
 		}
 		box.SetBorderColor(color).SetTitleColor(color)
-	}
-
-	setFolderExpanded := func(node *tview.TreeNode, expanded bool) {
-		node.SetExpanded(expanded)
-		if name, ok := node.GetReference().(string); ok {
-			node.SetText(folderLabel(name, expanded))
-		}
 	}
 
 	// scrollFocusable 是内嵌 *tview.Box 的控件（TextView / TreeView 都满足）。
@@ -441,6 +472,22 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetFocusFunc(func() { setFocusBorder(changeList.Box, true) }).
 		SetBlurFunc(func() { setFocusBorder(changeList.Box, false) })
 
+	// 空格切换暂存状态，D 丢弃改动；目录节点保留 TreeView 的展开/收起行为。
+	changeList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() != tcell.KeyRune {
+			return event
+		}
+		switch event.Rune() {
+		case ' ':
+			t.toggleLocalChange()
+			return nil
+		case 'd', 'D':
+			t.promptDiscard()
+			return nil
+		}
+		return event
+	})
+
 	focusOnScrollTree(changeList)
 
 	// 文件预览由 changed 负责，这里只处理目录展开/收起。
@@ -581,10 +628,13 @@ func (t *TUI) setupUI() tview.Primitive {
 
 	statusBar.SetBorderPadding(0, 0, 1, 1)
 
-	root := tview.NewFlex().
+	mainPage := tview.NewFlex().
 		SetDirection(tview.FlexRow).
 		AddItem(mainContent, 0, 1, true).
 		AddItem(statusBar, 1, 0, false)
+
+	root := tview.NewPages().
+		AddPage("main", mainPage, true, true)
 
 	// SetRoot 只会对 commitList 触发 focus 回调，其余需手动初始化为未聚焦
 	setFocusBorder(filterText.Box, false)
@@ -595,6 +645,7 @@ func (t *TUI) setupUI() tview.Primitive {
 	setFocusBorder(changeList.Box, false)
 	setFocusBorder(changeDiff.Box, false)
 
+	t.root = root
 	t.repoHead = repoHead
 	t.changeTab = changeTab
 	t.commitTab = commitTab
@@ -816,6 +867,84 @@ func (t *TUI) selectLocalFile(node *tview.TreeNode) {
 	t.requestLocalDiff(node)
 }
 
+// toggleLocalChange 用空格在暂存区和未暂存区之间移动当前文件。
+func (t *TUI) toggleLocalChange() {
+	if t.changeOp == nil || t.localFiles.Loading() || t.changeOp.Loading() {
+		return
+	}
+	node := t.changeList.GetCurrentNode()
+	if node == nil {
+		return
+	}
+
+	change, ok := node.GetReference().(core.FileChange)
+	if !ok {
+		// 目录节点：空格仍然展开/收起。
+		if _, isFolder := node.GetReference().(string); isFolder {
+			setFolderExpanded(node, !node.IsExpanded())
+		}
+		return
+	}
+
+	op := opStage
+	if change.Scope == core.ScopeStaged {
+		op = opUnstage
+	}
+	t.executeChangeOp(op, change)
+}
+
+// promptDiscard 先弹窗确认，再丢弃当前文件的改动。
+func (t *TUI) promptDiscard() {
+	if t.changeOp == nil || t.root == nil || t.promptVisible || t.localFiles.Loading() || t.changeOp.Loading() {
+		return
+	}
+	node := t.changeList.GetCurrentNode()
+	if node == nil {
+		return
+	}
+	change, ok := node.GetReference().(core.FileChange)
+	if !ok {
+		return
+	}
+
+	var message string
+	switch change.Scope {
+	case core.ScopeStaged:
+		message = fmt.Sprintf("Discard all changes to %s?\n\nThe file will be reset to HEAD. This cannot be undone.", tview.Escape(change.Path))
+	case core.ScopeUntracked:
+		message = fmt.Sprintf("Delete untracked file %s?\n\nThis cannot be undone.", tview.Escape(change.Path))
+	default:
+		message = fmt.Sprintf("Discard changes to %s?\n\nThis cannot be undone.", tview.Escape(change.Path))
+	}
+
+	prompt := tview.NewModal().
+		SetText(message).
+		AddButtons([]string{"Cancel", "Discard"}).
+		SetDoneFunc(func(buttonIndex int, _ string) {
+			t.root.RemovePage("discard")
+			t.promptVisible = false
+			t.app.SetFocus(t.changeList)
+			if buttonIndex == 1 {
+				t.executeChangeOp(opDiscard, change)
+			}
+		})
+
+	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
+	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
+	prompt.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+	prompt.Box.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+
+	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
+	// 固定成白底黑字，保证按钮文字始终是深色。
+	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
+		Background(tview.Styles.PrimaryTextColor).
+		Foreground(tcell.ColorBlack))
+
+	t.promptVisible = true
+	t.root.AddPage("discard", prompt, true, true)
+	t.app.SetFocus(prompt)
+}
+
 // checkoutBranch 对当前选中的分支执行 checkout：
 // 本地分支直接切换；远端分支切换到同名本地分支，不存在时创建跟踪分支。
 func (t *TUI) checkoutBranch() {
@@ -910,7 +1039,9 @@ func (t *TUI) showRefs(_ refsRequest, refs core.Refs, err error) {
 	}
 	t.statusDone("branches", "")
 
-	t.ApplyRefs(refs)
+	t.Branches = refs.Branches
+	t.HeadRef = refs.HeadRef
+	t.HeadHash = refs.HeadHash
 	if t.repoHead != nil {
 		t.repoHead.SetText(t.HeadRef)
 	}
@@ -1109,6 +1240,45 @@ func (t *TUI) showLocal(_ localFilesRequest, changes []core.FileChange, err erro
 		t.changeList.SetCurrentNode(node)
 	}
 	t.statusDone("local", "")
+}
+
+/** CHANGE */
+
+func (t *TUI) executeChangeOp(op changeOp, change core.FileChange) {
+	t.changeOp.Reload(changeOpRequest{op: op, change: change})
+}
+
+func (t *TUI) showChangeOpLoading(req changeOpRequest) {
+	var message string
+	switch req.op {
+	case opStage:
+		message = "staging " + req.change.Path
+	case opUnstage:
+		message = "unstaging " + req.change.Path
+	case opDiscard:
+		message = "discarding " + req.change.Path
+	}
+	t.statusStart("change", message)
+}
+
+func (t *TUI) showChangeOp(req changeOpRequest, _ string, err error) {
+	var message string
+	switch req.op {
+	case opStage:
+		message = "staged " + req.change.Path
+	case opUnstage:
+		message = "unstaged " + req.change.Path
+	default:
+		message = "discarded " + req.change.Path
+	}
+	if err != nil {
+		// git 的错误可能是多行，压成一行避免撑坏单行 statusBar。
+		message += " failed: " + strings.Join(strings.Fields(err.Error()), " ")
+		t.statusDone("change", message)
+		return
+	}
+	t.statusDone("change", message)
+	t.reloadLocal()
 }
 
 /** LOCAL DIFF */

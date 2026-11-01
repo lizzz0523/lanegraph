@@ -155,22 +155,38 @@ func firstFileNode(node *tview.TreeNode) *tview.TreeNode {
 }
 
 // findLocalNode 在重建后的树里按来源和路径找回之前选中的文件。
+// 文件在暂存区和未暂存区之间移动后来源会变化，因此再退一步只按路径匹配。
 func findLocalNode(node *tview.TreeNode, target core.FileChange) *tview.TreeNode {
 	if target.Path == "" {
 		return nil
 	}
+	if found := findLocalNodeBy(node, target, true); found != nil {
+		return found
+	}
+	return findLocalNodeBy(node, target, false)
+}
+
+func findLocalNodeBy(node *tview.TreeNode, target core.FileChange, matchScope bool) *tview.TreeNode {
 	for _, child := range node.GetChildren() {
 		if change, ok := child.GetReference().(core.FileChange); ok {
-			if change.Scope == target.Scope && change.Path == target.Path {
+			if change.Path == target.Path && (!matchScope || change.Scope == target.Scope) {
 				return child
 			}
 			continue
 		}
-		if found := findLocalNode(child, target); found != nil {
+		if found := findLocalNodeBy(child, target, matchScope); found != nil {
 			return found
 		}
 	}
 	return nil
+}
+
+// setFolderExpanded 同步目录节点的展开状态和箭头图标。
+func setFolderExpanded(node *tview.TreeNode, expanded bool) {
+	node.SetExpanded(expanded)
+	if name, ok := node.GetReference().(string); ok {
+		node.SetText(folderLabel(name, expanded))
+	}
 }
 
 // loadDiff 统一处理 git-delta 的输出；delta 不可用时退回到原始 diff。
