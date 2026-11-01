@@ -1242,45 +1242,6 @@ func (t *TUI) showLocal(_ localFilesRequest, changes []core.FileChange, err erro
 	t.statusDone("local", "")
 }
 
-/** CHANGE */
-
-func (t *TUI) executeChangeOp(op changeOp, change core.FileChange) {
-	t.changeOp.Reload(changeOpRequest{op: op, change: change})
-}
-
-func (t *TUI) showChangeOpLoading(req changeOpRequest) {
-	var message string
-	switch req.op {
-	case opStage:
-		message = "staging " + req.change.Path
-	case opUnstage:
-		message = "unstaging " + req.change.Path
-	case opDiscard:
-		message = "discarding " + req.change.Path
-	}
-	t.statusStart("change", message)
-}
-
-func (t *TUI) showChangeOp(req changeOpRequest, _ string, err error) {
-	var message string
-	switch req.op {
-	case opStage:
-		message = "staged " + req.change.Path
-	case opUnstage:
-		message = "unstaged " + req.change.Path
-	default:
-		message = "discarded " + req.change.Path
-	}
-	if err != nil {
-		// git 的错误可能是多行，压成一行避免撑坏单行 statusBar。
-		message += " failed: " + strings.Join(strings.Fields(err.Error()), " ")
-		t.statusDone("change", message)
-		return
-	}
-	t.statusDone("change", message)
-	t.reloadLocal()
-}
-
 /** LOCAL DIFF */
 
 func (t *TUI) requestLocalDiff(node *tview.TreeNode) {
@@ -1337,6 +1298,45 @@ func (t *TUI) clearDiff(view *tview.TextView, slot, message string) {
 		view.SetText("[gray](" + tview.Escape(message) + ")[-]")
 	}
 	view.ScrollToBeginning()
+}
+
+/** CHANGE OP */
+
+func (t *TUI) executeChangeOp(op changeOp, change core.FileChange) {
+	t.changeOp.Reload(changeOpRequest{op: op, change: change})
+}
+
+func (t *TUI) showChangeOpLoading(req changeOpRequest) {
+	var message string
+	switch req.op {
+	case opStage:
+		message = "staging " + req.change.Path
+	case opUnstage:
+		message = "unstaging " + req.change.Path
+	case opDiscard:
+		message = "discarding " + req.change.Path
+	}
+	t.statusStart("change", message)
+}
+
+func (t *TUI) showChangeOp(req changeOpRequest, _ string, err error) {
+	var message string
+	switch req.op {
+	case opStage:
+		message = "staged " + req.change.Path
+	case opUnstage:
+		message = "unstaged " + req.change.Path
+	default:
+		message = "discarded " + req.change.Path
+	}
+	if err != nil {
+		// git 的错误可能是多行，压成一行避免撑坏单行 statusBar。
+		message += " failed: " + strings.Join(strings.Fields(err.Error()), " ")
+		t.statusDone("change", message)
+		return
+	}
+	t.statusDone("change", message)
+	t.reloadLocal()
 }
 
 /** CHECKOUT */
