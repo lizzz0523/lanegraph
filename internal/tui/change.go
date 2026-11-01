@@ -189,19 +189,19 @@ func setFolderExpanded(node *tview.TreeNode, expanded bool) {
 	}
 }
 
-// loadDiff 统一处理 git-delta 的输出；delta 不可用时退回到原始 diff。
-func loadDiff(output string, err error) (string, error) {
+// renderDiff 统一处理 git-delta 的输出；delta 不可用时退回到原始 diff。
+func renderDiff(output string, err error) (string, error) {
 	switch {
 	case err != nil && output == "":
 		return "", err
 	case err != nil:
-		return buildPlainDiff(output), nil
+		return renderPlainDiff(output), nil
 	default:
-		return buildDeltaDiff(output), nil
+		return renderDeltaDiff(output), nil
 	}
 }
 
-func buildDeltaDiff(output string) string {
+func renderDeltaDiff(output string) string {
 	output = strings.ReplaceAll(output, "\r", "")
 	// delta 输出首尾可能带空行；末尾空行会在 TextView 中多出一行
 	output = strings.Trim(output, "\n")
@@ -241,8 +241,8 @@ func buildDeltaDiff(output string) string {
 	return out.String()
 }
 
-// buildPlainDiff 是 git-delta 不可用时的兜底着色。
-func buildPlainDiff(diff string) string {
+// renderPlainDiff 是 git-delta 不可用时的兜底着色。
+func renderPlainDiff(diff string) string {
 	if diff == "" {
 		return ""
 	}

@@ -205,7 +205,7 @@ func (t *TUI) initLoaders() {
 			return req.commit.Hash + "\x00" + req.change.Path
 		},
 		Load: func(ctx context.Context, req diffRequest) (string, error) {
-			return loadDiff(t.Diff(ctx, req.commit, req.change))
+			return renderDiff(t.Diff(ctx, req.commit, req.change))
 		},
 		Post:      post,
 		OnLoading: t.showFileDiffLoading,
@@ -227,7 +227,7 @@ func (t *TUI) initLoaders() {
 			return fmt.Sprintf("%d\x00%s", req.change.Scope, req.change.Path)
 		},
 		Load: func(ctx context.Context, req localDiffRequest) (string, error) {
-			return loadDiff(t.LocalDiff(ctx, req.change))
+			return renderDiff(t.LocalDiff(ctx, req.change))
 		},
 		Post:      post,
 		OnLoading: t.showLocalDiffLoading,
