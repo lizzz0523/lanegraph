@@ -482,7 +482,7 @@ func (t *TUI) setupUI() tview.Primitive {
 			t.toggleLocalChange()
 			return nil
 		case 'd', 'D':
-			t.promptDiscard()
+			t.discardLocalChange()
 			return nil
 		}
 		return event
@@ -893,8 +893,8 @@ func (t *TUI) toggleLocalChange() {
 	t.executeChangeOp(op, change)
 }
 
-// promptDiscard 先弹窗确认，再丢弃当前文件的改动。
-func (t *TUI) promptDiscard() {
+// discardLocalChange 先弹窗确认，再丢弃当前文件的改动。
+func (t *TUI) discardLocalChange() {
 	if t.changeOp == nil || t.root == nil || t.promptVisible || t.localFiles.Loading() || t.changeOp.Loading() {
 		return
 	}
