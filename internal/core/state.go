@@ -13,10 +13,12 @@ type State struct {
 	Branches []Branch
 
 	CurrentCommit Commit
+	// IgnoreWhitespace 表示 diff 是否忽略纯空白改动。
+	IgnoreWhitespace bool
 }
 
 func NewState(ctx context.Context, repo string) (State, error) {
-	s := State{Repo: repo}
+	s := State{Repo: repo, IgnoreWhitespace: true}
 
 	refs, err := s.Refs(ctx)
 	if err != nil {
@@ -68,9 +70,9 @@ func (s *State) Files(ctx context.Context, commit Commit) ([]FileChange, error) 
 }
 
 // Diff 返回单个文件的 diff，通常是 git-delta 的 ANSI 输出。
-// git-delta 不可用时返回原始 diff 和错误，由调用方决定如何展示。
-func (s *State) Diff(ctx context.Context, commit Commit, change FileChange) (string, error) {
-	return GitFileDiff(ctx, s.Repo, commit, change)
+// ignoreWhitespace 为 true 时忽略纯空白改动；git-delta 不可用时返回原始 diff 和错误，由调用方决定如何展示。
+func (s *State) Diff(ctx context.Context, commit Commit, change FileChange, ignoreWhitespace bool) (string, error) {
+	return GitFileDiff(ctx, s.Repo, commit, change, ignoreWhitespace)
 }
 
 // LocalChanges 返回暂存区、未暂存和未跟踪的全部本地变更。
@@ -79,8 +81,9 @@ func (s *State) LocalChanges(ctx context.Context) ([]FileChange, error) {
 }
 
 // LocalDiff 返回本地单个文件的 diff，通常是 git-delta 的 ANSI 输出。
-func (s *State) LocalDiff(ctx context.Context, change FileChange) (string, error) {
-	return GitLocalFileDiff(ctx, s.Repo, change)
+// ignoreWhitespace 为 true 时忽略纯空白改动。
+func (s *State) LocalDiff(ctx context.Context, change FileChange, ignoreWhitespace bool) (string, error) {
+	return GitLocalFileDiff(ctx, s.Repo, change, ignoreWhitespace)
 }
 
 // Stage 把单个文件变更加入暂存区。

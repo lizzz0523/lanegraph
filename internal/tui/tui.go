@@ -80,14 +80,16 @@ type filesRequest struct {
 }
 
 type diffRequest struct {
-	commit core.Commit
-	change core.FileChange
+	commit           core.Commit
+	change           core.FileChange
+	ignoreWhitespace bool
 }
 
 type localFilesRequest struct{}
 
 type localDiffRequest struct {
-	change core.FileChange
+	change           core.FileChange
+	ignoreWhitespace bool
 }
 
 // changeOp 是本地变更列表上的操作类型。
@@ -139,6 +141,7 @@ func (t *TUI) Run() error {
 	})
 
 	t.app = app
+	app.SetAfterDrawFunc(t.drawWhitespaceBadge)
 
 	t.initLoaders()
 	defer t.closeLoaders()
@@ -202,10 +205,10 @@ func (t *TUI) initLoaders() {
 
 	t.diff = async.New(async.Config[string, diffRequest]{
 		Key: func(req diffRequest) string {
-			return req.commit.Hash + "\x00" + req.change.Path
+			return fmt.Sprintf("%s\x00%s\x00%t", req.commit.Hash, req.change.Path, req.ignoreWhitespace)
 		},
 		Load: func(ctx context.Context, req diffRequest) (string, error) {
-			return renderDiff(t.Diff(ctx, req.commit, req.change))
+			return renderDiff(t.Diff(ctx, req.commit, req.change, req.ignoreWhitespace))
 		},
 		Post:      post,
 		OnLoading: t.showFileDiffLoading,
@@ -224,10 +227,10 @@ func (t *TUI) initLoaders() {
 
 	t.localDiff = async.New(async.Config[string, localDiffRequest]{
 		Key: func(req localDiffRequest) string {
-			return fmt.Sprintf("%d\x00%s", req.change.Scope, req.change.Path)
+			return fmt.Sprintf("%d\x00%s\x00%t", req.change.Scope, req.change.Path, req.ignoreWhitespace)
 		},
 		Load: func(ctx context.Context, req localDiffRequest) (string, error) {
-			return renderDiff(t.LocalDiff(ctx, req.change))
+			return renderDiff(t.LocalDiff(ctx, req.change, req.ignoreWhitespace))
 		},
 		Post:      post,
 		OnLoading: t.showLocalDiffLoading,
@@ -448,6 +451,14 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetFocusFunc(func() { setFocusBorder(fileDiff.Box, true) }).
 		SetBlurFunc(func() { setFocusBorder(fileDiff.Box, false) })
 
+	fileDiff.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyRune && event.Rune() == 'w' {
+			t.toggleWhitespace()
+			return nil
+		}
+		return event
+	})
+
 	focusOnScroll(fileDiff)
 
 	commitDetail := tview.NewFlex().
@@ -514,6 +525,14 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetBorderPadding(0, 0, 1, 1).
 		SetFocusFunc(func() { setFocusBorder(changeDiff.Box, true) }).
 		SetBlurFunc(func() { setFocusBorder(changeDiff.Box, false) })
+
+	changeDiff.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyRune && event.Rune() == 'w' {
+			t.toggleWhitespace()
+			return nil
+		}
+		return event
+	})
 
 	focusOnScroll(changeDiff)
 
@@ -945,6 +964,26 @@ func (t *TUI) discardLocalChange() {
 	t.app.SetFocus(prompt)
 }
 
+// toggleWhitespace 切换 diff 是否忽略纯空白改动，并重新加载当前聚焦的 diff。
+func (t *TUI) toggleWhitespace() {
+	t.IgnoreWhitespace = !t.IgnoreWhitespace
+
+	switch {
+	case t.fileDiff != nil && t.fileDiff.HasFocus():
+		if node := t.fileList.GetCurrentNode(); node != nil {
+			if _, ok := node.GetReference().(core.FileChange); ok {
+				t.requestFileDiff(t.CurrentCommit, node)
+			}
+		}
+	case t.changeDiff != nil && t.changeDiff.HasFocus():
+		if node := t.changeList.GetCurrentNode(); node != nil {
+			if _, ok := node.GetReference().(core.FileChange); ok {
+				t.requestLocalDiff(node)
+			}
+		}
+	}
+}
+
 // checkoutBranch 对当前选中的分支执行 checkout：
 // 本地分支直接切换；远端分支切换到同名本地分支，不存在时创建跟踪分支。
 func (t *TUI) checkoutBranch() {
@@ -1158,7 +1197,11 @@ func (t *TUI) requestFileDiff(commit core.Commit, node *tview.TreeNode) {
 		}
 		return
 	}
-	t.diff.Request(diffRequest{commit: commit, change: change})
+	t.diff.Request(diffRequest{
+		commit:           commit,
+		change:           change,
+		ignoreWhitespace: t.IgnoreWhitespace,
+	})
 }
 
 // showFileDiffLoading 保留旧 diff，只通过 statusBar 提示加载。
@@ -1253,7 +1296,10 @@ func (t *TUI) requestLocalDiff(node *tview.TreeNode) {
 		}
 		return
 	}
-	t.localDiff.Request(localDiffRequest{change: change})
+	t.localDiff.Request(localDiffRequest{
+		change:           change,
+		ignoreWhitespace: t.IgnoreWhitespace,
+	})
 }
 
 // showLocalDiffLoading 保留旧 diff，只通过 statusBar 提示加载。
@@ -1298,6 +1344,34 @@ func (t *TUI) clearDiff(view *tview.TextView, slot, message string) {
 		view.SetText("[gray](" + tview.Escape(message) + ")[-]")
 	}
 	view.ScrollToBeginning()
+}
+
+// drawWhitespaceBadge 在当前 diff 面板标题右侧画加粗的 W 提示。
+func (t *TUI) drawWhitespaceBadge(screen tcell.Screen) {
+	if !t.IgnoreWhitespace {
+		return
+	}
+
+	view := t.fileDiff
+	if t.activeTab == tabChange {
+		view = t.changeDiff
+	}
+	if view == nil {
+		return
+	}
+
+	const badge = " W "
+	x, y, width, _ := view.GetRect()
+	// 终端太窄时不画，避免覆盖左侧 " file diff: path " 标题。
+	if width-2 < tview.TaggedStringWidth(view.GetTitle())+len(badge)+1 {
+		return
+	}
+
+	start := x + width - len(badge) - 1
+	for i, r := range badge {
+		_, _, style, _ := screen.GetContent(start+i, y)
+		screen.SetContent(start+i, y, r, nil, style.Bold(true))
+	}
 }
 
 /** CHANGE OP */

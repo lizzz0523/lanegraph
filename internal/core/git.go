@@ -384,13 +384,15 @@ func removeWorktree(repo, path string) error {
 }
 
 // GitFileDiff 相对第一个 parent 计算单个文件的 diff，并交给 git-delta 着色。
-// -w 忽略纯空白改动；git-delta 失败时返回原始 diff，由调用方决定如何展示。
-func GitFileDiff(ctx context.Context, repo string, commit Commit, change FileChange) (string, error) {
+// ignoreWhitespace 为 true 时用 -w 忽略纯空白改动；git-delta 失败时返回原始 diff，由调用方决定如何展示。
+func GitFileDiff(ctx context.Context, repo string, commit Commit, change FileChange, ignoreWhitespace bool) (string, error) {
 	var args []string
 	if len(commit.Parents) > 0 {
-		args = []string{"diff", "-w", "-M", "--no-color", "--no-ext-diff", commit.Parents[0], commit.Hash, "--"}
+		args = diffArgs([]string{"diff", "-M", "--no-color", "--no-ext-diff"}, ignoreWhitespace,
+			commit.Parents[0], commit.Hash, "--")
 	} else {
-		args = []string{"show", "--format=", "-w", "-M", "--no-color", "--no-ext-diff", commit.Hash, "--"}
+		args = diffArgs([]string{"show", "--format=", "-M", "--no-color", "--no-ext-diff"}, ignoreWhitespace,
+			commit.Hash, "--")
 	}
 	// 重命名/复制需要同时限制新旧路径，否则 git 会把新路径识别成新增文件
 	if change.OldPath != "" {
@@ -410,16 +412,16 @@ func GitFileDiff(ctx context.Context, repo string, commit Commit, change FileCha
 
 // GitLocalFileDiff 计算本地单个文件的 diff：暂存区相对 HEAD、工作区相对暂存区，
 // 未跟踪文件则与 /dev/null 对比，生成可直接展示的新增 diff。
-// 已跟踪文件用 -w 忽略纯空白改动；未跟踪文件与 /dev/null 对比，无需该参数。
-func GitLocalFileDiff(ctx context.Context, repo string, change FileChange) (string, error) {
+// 已跟踪文件按 ignoreWhitespace 决定是否用 -w 忽略纯空白改动；未跟踪文件与 /dev/null 对比，无需该参数。
+func GitLocalFileDiff(ctx context.Context, repo string, change FileChange, ignoreWhitespace bool) (string, error) {
 	var diff string
 	var err error
 
 	switch change.Scope {
 	case ScopeStaged:
-		diff, err = gitWorkingDiff(ctx, repo, change, "diff", "-w", "--cached", "-M")
+		diff, err = gitWorkingDiff(ctx, repo, change, diffArgs([]string{"diff", "--cached", "-M"}, ignoreWhitespace)...)
 	case ScopeUnstaged:
-		diff, err = gitWorkingDiff(ctx, repo, change, "diff", "-w", "-M")
+		diff, err = gitWorkingDiff(ctx, repo, change, diffArgs([]string{"diff", "-M"}, ignoreWhitespace)...)
 	case ScopeUntracked:
 		diff, err = gitDiffNoIndex(ctx, repo, change.Path)
 	default:
@@ -432,6 +434,16 @@ func GitLocalFileDiff(ctx context.Context, repo string, change FileChange) (stri
 		return "", ctx.Err()
 	}
 	return colorizeDiff(ctx, diff)
+}
+
+// diffArgs 生成 git diff 参数：ignoreWhitespace 为 true 时在路径分隔符前插入 -w。
+func diffArgs(command []string, ignoreWhitespace bool, rest ...string) []string {
+	args := make([]string, 0, len(command)+len(rest)+1)
+	args = append(args, command...)
+	if ignoreWhitespace {
+		args = append(args, "-w")
+	}
+	return append(args, rest...)
 }
 
 // gitWorkingDiff 限制到单个文件；重命名/复制需要同时传入旧路径，否则会被识别成新增文件。
