@@ -154,145 +154,6 @@ func (t *TUI) Run() error {
 	return app.Run()
 }
 
-// quit 先停止 Loader，再等后台 goroutine 退出，最后停止事件循环。
-// 不能在事件循环里同步等待，否则 Post 无法被消费。
-func (t *TUI) quit() {
-	if t.quitting {
-		return
-	}
-	t.quitting = true
-
-	// Close 是非阻塞的，先阻止新的请求并取消在途 Load。
-	t.closeLoaders()
-
-	go func() {
-		t.waitLoaders()
-		t.app.Stop()
-	}()
-}
-
-func (t *TUI) initLoaders() {
-	post := func(f func()) { t.app.QueueUpdateDraw(f) }
-
-	t.refs = async.New(async.Config[core.Refs, refsRequest]{
-		Key: func(refsRequest) string { return "refs" },
-		Load: func(ctx context.Context, _ refsRequest) (core.Refs, error) {
-			return t.Refs(ctx)
-		},
-		Post:      post,
-		OnLoading: t.showRefsLoading,
-		OnResult:  t.showRefs,
-	})
-
-	t.commits = async.New(async.Config[[]core.Commit, commitsRequest]{
-		Key: func(commitsRequest) string { return "commits" },
-		Load: func(ctx context.Context, _ commitsRequest) ([]core.Commit, error) {
-			return t.History(ctx)
-		},
-		Post:      post,
-		OnLoading: t.showCommitsLoading,
-		OnResult:  t.showCommits,
-	})
-
-	t.files = async.New(async.Config[[]core.FileChange, filesRequest]{
-		Key: func(req filesRequest) string { return req.commit.Hash },
-		Load: func(ctx context.Context, req filesRequest) ([]core.FileChange, error) {
-			return t.Files(ctx, req.commit)
-		},
-		Post:      post,
-		OnLoading: t.showFilesLoading,
-		OnResult:  t.showFiles,
-	})
-
-	t.diff = async.New(async.Config[string, diffRequest]{
-		Key: func(req diffRequest) string {
-			return fmt.Sprintf("%s\x00%s\x00%s", req.commit.Hash, req.change.Path, req.options)
-		},
-		Load: func(ctx context.Context, req diffRequest) (string, error) {
-			return renderDiff(t.Diff(ctx, req.commit, req.change, req.options))
-		},
-		Post:      post,
-		OnLoading: t.showFileDiffLoading,
-		OnResult:  t.showFileDiff,
-	})
-
-	t.localFiles = async.New(async.Config[[]core.FileChange, localFilesRequest]{
-		Key: func(localFilesRequest) string { return "local" },
-		Load: func(ctx context.Context, _ localFilesRequest) ([]core.FileChange, error) {
-			return t.LocalFiles(ctx)
-		},
-		Post:      post,
-		OnLoading: t.showLocalLoading,
-		OnResult:  t.showLocal,
-	})
-
-	t.localDiff = async.New(async.Config[string, localDiffRequest]{
-		Key: func(req localDiffRequest) string {
-			return fmt.Sprintf("%d\x00%s\x00%s", req.change.Scope, req.change.Path, req.options)
-		},
-		Load: func(ctx context.Context, req localDiffRequest) (string, error) {
-			return renderDiff(t.LocalDiff(ctx, req.change, req.options))
-		},
-		Post:      post,
-		OnLoading: t.showLocalDiffLoading,
-		OnResult:  t.showLocalDiff,
-	})
-
-	t.changeOp = async.New(async.Config[string, changeOpRequest]{
-		Key: func(req changeOpRequest) string {
-			return fmt.Sprintf("%d\x00%d\x00%s", req.op, req.change.Scope, req.change.Path)
-		},
-		Load: func(ctx context.Context, req changeOpRequest) (string, error) {
-			switch req.op {
-			case opStage:
-				return req.change.Path, t.Stage(ctx, req.change)
-			case opUnstage:
-				return req.change.Path, t.Unstage(ctx, req.change)
-			default:
-				return req.change.Path, t.Discard(ctx, req.change)
-			}
-		},
-		Post:      post,
-		OnLoading: t.showChangeOpLoading,
-		OnResult:  t.showChangeOp,
-	})
-
-	t.checkout = async.New(async.Config[string, checkoutRequest]{
-		Key: func(req checkoutRequest) string { return req.branch.Name },
-		Load: func(ctx context.Context, req checkoutRequest) (string, error) {
-			return t.Checkout(ctx, req.branch)
-		},
-		Post:      post,
-		OnLoading: t.showCheckoutLoading,
-		OnResult:  t.showCheckout,
-	})
-}
-
-func (t *TUI) loaders() []async.LoaderLifecycle {
-	return []async.LoaderLifecycle{
-		t.refs,
-		t.commits,
-		t.files,
-		t.diff,
-		t.localFiles,
-		t.localDiff,
-		t.changeOp,
-		t.checkout,
-	}
-}
-
-func (t *TUI) closeLoaders() {
-	for _, loader := range t.loaders() {
-		loader.Close()
-	}
-}
-
-func (t *TUI) waitLoaders() {
-	for _, loader := range t.loaders() {
-		loader.Wait()
-	}
-}
-
 func (t *TUI) setupUI() tview.Primitive {
 	tview.Borders.TopLeft, tview.Borders.TopRight = '╭', '╮'
 	tview.Borders.BottomLeft, tview.Borders.BottomRight = '╰', '╯'
@@ -715,6 +576,145 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.headerSelectedStyle = headerSelectedStyle
 
 	return root
+}
+
+func (t *TUI) initLoaders() {
+	post := func(f func()) { t.app.QueueUpdateDraw(f) }
+
+	t.refs = async.New(async.Config[core.Refs, refsRequest]{
+		Key: func(refsRequest) string { return "refs" },
+		Load: func(ctx context.Context, _ refsRequest) (core.Refs, error) {
+			return t.Refs(ctx)
+		},
+		Post:      post,
+		OnLoading: t.showRefsLoading,
+		OnResult:  t.showRefs,
+	})
+
+	t.commits = async.New(async.Config[[]core.Commit, commitsRequest]{
+		Key: func(commitsRequest) string { return "commits" },
+		Load: func(ctx context.Context, _ commitsRequest) ([]core.Commit, error) {
+			return t.History(ctx)
+		},
+		Post:      post,
+		OnLoading: t.showCommitsLoading,
+		OnResult:  t.showCommits,
+	})
+
+	t.files = async.New(async.Config[[]core.FileChange, filesRequest]{
+		Key: func(req filesRequest) string { return req.commit.Hash },
+		Load: func(ctx context.Context, req filesRequest) ([]core.FileChange, error) {
+			return t.Files(ctx, req.commit)
+		},
+		Post:      post,
+		OnLoading: t.showFilesLoading,
+		OnResult:  t.showFiles,
+	})
+
+	t.diff = async.New(async.Config[string, diffRequest]{
+		Key: func(req diffRequest) string {
+			return fmt.Sprintf("%s\x00%s\x00%s", req.commit.Hash, req.change.Path, req.options)
+		},
+		Load: func(ctx context.Context, req diffRequest) (string, error) {
+			return renderDiff(t.Diff(ctx, req.commit, req.change, req.options))
+		},
+		Post:      post,
+		OnLoading: t.showFileDiffLoading,
+		OnResult:  t.showFileDiff,
+	})
+
+	t.localFiles = async.New(async.Config[[]core.FileChange, localFilesRequest]{
+		Key: func(localFilesRequest) string { return "local" },
+		Load: func(ctx context.Context, _ localFilesRequest) ([]core.FileChange, error) {
+			return t.LocalFiles(ctx)
+		},
+		Post:      post,
+		OnLoading: t.showLocalLoading,
+		OnResult:  t.showLocal,
+	})
+
+	t.localDiff = async.New(async.Config[string, localDiffRequest]{
+		Key: func(req localDiffRequest) string {
+			return fmt.Sprintf("%d\x00%s\x00%s", req.change.Scope, req.change.Path, req.options)
+		},
+		Load: func(ctx context.Context, req localDiffRequest) (string, error) {
+			return renderDiff(t.LocalDiff(ctx, req.change, req.options))
+		},
+		Post:      post,
+		OnLoading: t.showLocalDiffLoading,
+		OnResult:  t.showLocalDiff,
+	})
+
+	t.changeOp = async.New(async.Config[string, changeOpRequest]{
+		Key: func(req changeOpRequest) string {
+			return fmt.Sprintf("%d\x00%d\x00%s", req.op, req.change.Scope, req.change.Path)
+		},
+		Load: func(ctx context.Context, req changeOpRequest) (string, error) {
+			switch req.op {
+			case opStage:
+				return req.change.Path, t.Stage(ctx, req.change)
+			case opUnstage:
+				return req.change.Path, t.Unstage(ctx, req.change)
+			default:
+				return req.change.Path, t.Discard(ctx, req.change)
+			}
+		},
+		Post:      post,
+		OnLoading: t.showChangeOpLoading,
+		OnResult:  t.showChangeOp,
+	})
+
+	t.checkout = async.New(async.Config[string, checkoutRequest]{
+		Key: func(req checkoutRequest) string { return req.branch.Name },
+		Load: func(ctx context.Context, req checkoutRequest) (string, error) {
+			return t.Checkout(ctx, req.branch)
+		},
+		Post:      post,
+		OnLoading: t.showCheckoutLoading,
+		OnResult:  t.showCheckout,
+	})
+}
+
+func (t *TUI) loaders() []async.LoaderLifecycle {
+	return []async.LoaderLifecycle{
+		t.refs,
+		t.commits,
+		t.files,
+		t.diff,
+		t.localFiles,
+		t.localDiff,
+		t.changeOp,
+		t.checkout,
+	}
+}
+
+func (t *TUI) closeLoaders() {
+	for _, loader := range t.loaders() {
+		loader.Close()
+	}
+}
+
+func (t *TUI) waitLoaders() {
+	for _, loader := range t.loaders() {
+		loader.Wait()
+	}
+}
+
+// quit 先停止 Loader，再等后台 goroutine 退出，最后停止事件循环。
+// 不能在事件循环里同步等待，否则 Post 无法被消费。
+func (t *TUI) quit() {
+	if t.quitting {
+		return
+	}
+	t.quitting = true
+
+	// Close 是非阻塞的，先阻止新的请求并取消在途 Load。
+	t.closeLoaders()
+
+	go func() {
+		t.waitLoaders()
+		t.app.Stop()
+	}()
 }
 
 // nextFocus 在当前 tab 的循环顺序里前进 step（±1）。
