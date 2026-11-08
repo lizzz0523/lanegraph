@@ -383,15 +383,30 @@ func removeWorktree(repo, path string) error {
 	return nil
 }
 
+// DiffOptions 是渲染单个文件 diff 时的展示选项。
+// 它只作为方法参数使用，由调用方按当前状态动态组装，不保存在 State 中。
+type DiffOptions struct {
+	IgnoreWhitespace bool
+	SideBySide       bool
+	// Width 是 side-by-side 布局的目标宽度（面板内宽）；<=0 时使用默认宽度。
+	Width int
+}
+
+// String 把影响 diff 渲染结果的选项编码成稳定的缓存 key。
+func (o DiffOptions) String() string {
+	return fmt.Sprintf("%t\x00%t\x00%d", o.IgnoreWhitespace, o.SideBySide, o.Width)
+}
+
 // GitFileDiff 相对第一个 parent 计算单个文件的 diff，并交给 git-delta 着色。
-// ignoreWhitespace 为 true 时用 -w 忽略纯空白改动；git-delta 失败时返回原始 diff，由调用方决定如何展示。
-func GitFileDiff(ctx context.Context, repo string, commit Commit, change FileChange, ignoreWhitespace bool) (string, error) {
+// options.IgnoreWhitespace 为 true 时用 -w 忽略纯空白改动；
+// git-delta 失败时返回原始 diff，由调用方决定如何展示。
+func GitFileDiff(ctx context.Context, repo string, commit Commit, change FileChange, options DiffOptions) (string, error) {
 	var args []string
 	if len(commit.Parents) > 0 {
-		args = diffArgs([]string{"diff", "-M", "--no-color", "--no-ext-diff"}, ignoreWhitespace,
+		args = diffArgs([]string{"diff", "-M", "--no-color", "--no-ext-diff"}, options.IgnoreWhitespace,
 			commit.Parents[0], commit.Hash, "--")
 	} else {
-		args = diffArgs([]string{"show", "--format=", "-M", "--no-color", "--no-ext-diff"}, ignoreWhitespace,
+		args = diffArgs([]string{"show", "--format=", "-M", "--no-color", "--no-ext-diff"}, options.IgnoreWhitespace,
 			commit.Hash, "--")
 	}
 	// 重命名/复制需要同时限制新旧路径，否则 git 会把新路径识别成新增文件
@@ -407,21 +422,22 @@ func GitFileDiff(ctx context.Context, repo string, commit Commit, change FileCha
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
-	return colorizeDiff(ctx, diff)
+	return colorizeDiff(ctx, diff, options)
 }
 
 // GitLocalFileDiff 计算本地单个文件的 diff：暂存区相对 HEAD、工作区相对暂存区，
 // 未跟踪文件则与 /dev/null 对比，生成可直接展示的新增 diff。
-// 已跟踪文件按 ignoreWhitespace 决定是否用 -w 忽略纯空白改动；未跟踪文件与 /dev/null 对比，无需该参数。
-func GitLocalFileDiff(ctx context.Context, repo string, change FileChange, ignoreWhitespace bool) (string, error) {
+// 已跟踪文件按 options.IgnoreWhitespace 决定是否用 -w 忽略纯空白改动；
+// 未跟踪文件与 /dev/null 对比，无需该参数。
+func GitLocalFileDiff(ctx context.Context, repo string, change FileChange, options DiffOptions) (string, error) {
 	var diff string
 	var err error
 
 	switch change.Scope {
 	case ScopeStaged:
-		diff, err = gitWorkingDiff(ctx, repo, change, diffArgs([]string{"diff", "--cached", "-M"}, ignoreWhitespace)...)
+		diff, err = gitWorkingDiff(ctx, repo, change, diffArgs([]string{"diff", "--cached", "-M"}, options.IgnoreWhitespace)...)
 	case ScopeUnstaged:
-		diff, err = gitWorkingDiff(ctx, repo, change, diffArgs([]string{"diff", "-M"}, ignoreWhitespace)...)
+		diff, err = gitWorkingDiff(ctx, repo, change, diffArgs([]string{"diff", "-M"}, options.IgnoreWhitespace)...)
 	case ScopeUntracked:
 		diff, err = gitDiffNoIndex(ctx, repo, change.Path)
 	default:
@@ -433,7 +449,7 @@ func GitLocalFileDiff(ctx context.Context, repo string, change FileChange, ignor
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
-	return colorizeDiff(ctx, diff)
+	return colorizeDiff(ctx, diff, options)
 }
 
 // diffArgs 生成 git diff 参数：ignoreWhitespace 为 true 时在路径分隔符前插入 -w。
@@ -509,17 +525,35 @@ func gitOutputUntrimmed(ctx context.Context, repo string, args ...string) (strin
 }
 
 // colorizeDiff 把原始 diff 交给 git-delta 着色；
+// side-by-side 使用固定宽度（面板内宽）并无限折行以完整展示内容，其余情况保持 variable 宽度。
 // git-delta 失败时返回原始 diff，由调用方决定如何展示。
-func colorizeDiff(ctx context.Context, diff string) (string, error) {
-	cmd := exec.CommandContext(ctx, "delta",
-		"--paging=never", "--no-gitconfig", "--width=variable", "--true-color=always",
+func colorizeDiff(ctx context.Context, diff string, options DiffOptions) (string, error) {
+	args := []string{
+		"--paging=never", "--no-gitconfig", "--true-color=always",
 		"--line-numbers", "--file-style=omit",
 		"--hunk-header-decoration-style=gray box",
 		"--hunk-header-line-number-style=gray",
 		"--whitespace-error-style=magenta dim",
 		"--line-numbers-left-style=gray",
 		"--line-numbers-right-style=gray",
-		"--line-numbers-zero-style=gray")
+		"--line-numbers-zero-style=gray",
+		"--inline-hint-style=gray",
+	}
+	if options.SideBySide {
+		width := options.Width
+		if width <= 0 {
+			width = 80
+		}
+		args = append(args,
+			"--side-by-side",
+			fmt.Sprintf("--width=%d", width),
+			"--wrap-max-lines=unlimited",
+		)
+	} else {
+		args = append(args, "--width=variable")
+	}
+
+	cmd := exec.CommandContext(ctx, "delta", args...)
 	cmd.Stdin = strings.NewReader(diff)
 	output, err := cmd.Output()
 	if err != nil {

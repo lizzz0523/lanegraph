@@ -46,6 +46,7 @@ type TUI struct {
 
 	activeTab     string // 当前显示的主面板 tab
 	infoWidth     int
+	diffWidth     int               // 当前 diff 渲染使用的面板内宽（side-by-side 时有效）
 	statusMsg     string            // 最近一次操作结果，loading 结束后保留
 	statusBusy    map[string]string // statusBar 当前展示的 loading 项，key 为槽位
 	pendingBranch string            // checkout 后等待 refs 刷新完成再选中的分支
@@ -80,16 +81,16 @@ type filesRequest struct {
 }
 
 type diffRequest struct {
-	commit           core.Commit
-	change           core.FileChange
-	ignoreWhitespace bool
+	commit  core.Commit
+	change  core.FileChange
+	options core.DiffOptions
 }
 
 type localFilesRequest struct{}
 
 type localDiffRequest struct {
-	change           core.FileChange
-	ignoreWhitespace bool
+	change  core.FileChange
+	options core.DiffOptions
 }
 
 // changeOp 是本地变更列表上的操作类型。
@@ -141,7 +142,7 @@ func (t *TUI) Run() error {
 	})
 
 	t.app = app
-	app.SetAfterDrawFunc(t.drawWhitespaceBadge)
+	app.SetAfterDrawFunc(t.drawDiffBadges)
 
 	t.initLoaders()
 	defer t.closeLoaders()
@@ -205,10 +206,10 @@ func (t *TUI) initLoaders() {
 
 	t.diff = async.New(async.Config[string, diffRequest]{
 		Key: func(req diffRequest) string {
-			return fmt.Sprintf("%s\x00%s\x00%t", req.commit.Hash, req.change.Path, req.ignoreWhitespace)
+			return fmt.Sprintf("%s\x00%s\x00%s", req.commit.Hash, req.change.Path, req.options)
 		},
 		Load: func(ctx context.Context, req diffRequest) (string, error) {
-			return renderDiff(t.Diff(ctx, req.commit, req.change, req.ignoreWhitespace))
+			return renderDiff(t.Diff(ctx, req.commit, req.change, req.options))
 		},
 		Post:      post,
 		OnLoading: t.showFileDiffLoading,
@@ -227,10 +228,10 @@ func (t *TUI) initLoaders() {
 
 	t.localDiff = async.New(async.Config[string, localDiffRequest]{
 		Key: func(req localDiffRequest) string {
-			return fmt.Sprintf("%d\x00%s\x00%t", req.change.Scope, req.change.Path, req.ignoreWhitespace)
+			return fmt.Sprintf("%d\x00%s\x00%s", req.change.Scope, req.change.Path, req.options)
 		},
 		Load: func(ctx context.Context, req localDiffRequest) (string, error) {
-			return renderDiff(t.LocalDiff(ctx, req.change, req.ignoreWhitespace))
+			return renderDiff(t.LocalDiff(ctx, req.change, req.options))
 		},
 		Post:      post,
 		OnLoading: t.showLocalDiffLoading,
@@ -403,13 +404,8 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
 		SetDrawFunc(func(_ tcell.Screen, _, _, _, _ int) (int, int, int, int) {
-			x, y, width, height := commitInfo.GetInnerRect()
-			if width != t.infoWidth {
-				t.infoWidth = width
-				// 宽度变化只需重排文本，不修改选择状态。
-				commitInfo.SetText(renderCommit(t.CurrentCommit, width))
-			}
-			return x, y, width, height
+			t.syncInfoWidth(commitInfo)
+			return commitInfo.GetInnerRect()
 		})
 
 	fileList := tview.NewTreeView().
@@ -452,11 +448,24 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetBlurFunc(func() { setFocusBorder(fileDiff.Box, false) })
 
 	fileDiff.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyRune && event.Rune() == 'w' {
+		if event.Key() != tcell.KeyRune {
+			return event
+		}
+		switch event.Rune() {
+		case 'w':
 			t.toggleWhitespace()
+			return nil
+		case 's':
+			t.toggleSideBySide()
 			return nil
 		}
 		return event
+	})
+
+	// 在控件绘制前按当前内宽重渲染 side-by-side；此时 Flex 已设置本帧的 rect。
+	fileDiff.SetDrawFunc(func(_ tcell.Screen, _, _, _, _ int) (int, int, int, int) {
+		t.syncDiffWidth(fileDiff)
+		return fileDiff.GetInnerRect()
 	})
 
 	focusOnScroll(fileDiff)
@@ -527,11 +536,24 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetBlurFunc(func() { setFocusBorder(changeDiff.Box, false) })
 
 	changeDiff.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyRune && event.Rune() == 'w' {
+		if event.Key() != tcell.KeyRune {
+			return event
+		}
+		switch event.Rune() {
+		case 'w':
 			t.toggleWhitespace()
+			return nil
+		case 's':
+			t.toggleSideBySide()
 			return nil
 		}
 		return event
+	})
+
+	// 在控件绘制前按当前内宽重渲染 side-by-side；此时 Flex 已设置本帧的 rect。
+	changeDiff.SetDrawFunc(func(_ tcell.Screen, _, _, _, _ int) (int, int, int, int) {
+		t.syncDiffWidth(changeDiff)
+		return changeDiff.GetInnerRect()
 	})
 
 	focusOnScroll(changeDiff)
@@ -755,9 +777,13 @@ func (t *TUI) refreshTab(tag string) {
 	t.reloadRefs()
 	if tag == tabChange {
 		t.reloadLocal()
-		return
+	} else {
+		t.reloadCommits()
 	}
-	t.reloadCommits()
+
+	// 数据可能命中 Loader 缓存而不会触发 changed 回调，
+	// 这里主动按当前 tab 和最新 options 重渲染 diff。
+	t.refreshActiveDiff()
 }
 
 func (t *TUI) refreshTabStyles() {
@@ -964,22 +990,38 @@ func (t *TUI) discardLocalChange() {
 	t.app.SetFocus(prompt)
 }
 
-// toggleWhitespace 切换 diff 是否忽略纯空白改动，并重新加载当前聚焦的 diff。
+// toggleWhitespace 切换 diff 是否忽略纯空白改动，并重新加载当前 diff。
 func (t *TUI) toggleWhitespace() {
 	t.IgnoreWhitespace = !t.IgnoreWhitespace
+	t.refreshActiveDiff()
+}
 
-	switch {
-	case t.fileDiff != nil && t.fileDiff.HasFocus():
-		if node := t.fileList.GetCurrentNode(); node != nil {
-			if _, ok := node.GetReference().(core.FileChange); ok {
-				t.requestFileDiff(t.CurrentCommit, node)
-			}
+// toggleSideBySide 切换 diff 是否使用左右对照布局，并重新加载当前 diff。
+func (t *TUI) toggleSideBySide() {
+	t.SideBySide = !t.SideBySide
+	t.refreshActiveDiff()
+}
+
+// refreshActiveDiff 重新请求当前 tab 中选中文件的 diff。
+func (t *TUI) refreshActiveDiff() {
+	if t.activeTab == tabChange {
+		if t.changeList == nil || (t.localFiles != nil && t.localFiles.Loading()) {
+			return
 		}
-	case t.changeDiff != nil && t.changeDiff.HasFocus():
 		if node := t.changeList.GetCurrentNode(); node != nil {
 			if _, ok := node.GetReference().(core.FileChange); ok {
 				t.requestLocalDiff(node)
 			}
+		}
+		return
+	}
+
+	if t.fileList == nil || (t.files != nil && t.files.Loading()) {
+		return
+	}
+	if node := t.fileList.GetCurrentNode(); node != nil {
+		if _, ok := node.GetReference().(core.FileChange); ok {
+			t.requestFileDiff(t.CurrentCommit, node)
 		}
 	}
 }
@@ -995,63 +1037,6 @@ func (t *TUI) checkoutBranch() {
 		return
 	}
 	t.executeCheckout(node)
-}
-
-// commitRow 返回 hash 在提交列表中的行号；hash 为空或不存在时返回 -1。
-// 刷新 commits 后行号会整体移动，分支跳转必须按当前列表重新查询。
-func (t *TUI) commitRow(hash string) int {
-	if hash == "" {
-		return -1
-	}
-	for i, commit := range t.Commits {
-		if commit.Hash == hash {
-			return i
-		}
-	}
-	return -1
-}
-
-// branchNode 返回分支 name 对应的节点，本地和远端都会匹配；name 为空或不存在时返回 nil。
-func (t *TUI) branchNode(name string) *tview.TreeNode {
-	if name == "" || t.branchList == nil || t.branchList.GetRoot() == nil {
-		return nil
-	}
-	var found *tview.TreeNode
-	t.branchList.GetRoot().Walk(func(node, _ *tview.TreeNode) bool {
-		branch, ok := node.GetReference().(core.Branch)
-		if ok && branch.Name == name {
-			found = node
-			return false
-		}
-		return true
-	})
-	return found
-}
-
-// branchName 返回分支列表当前选中的分支名；分组标题返回空。
-func (t *TUI) branchName() string {
-	if t.branchList == nil {
-		return ""
-	}
-	node := t.branchList.GetCurrentNode()
-	if node == nil {
-		return ""
-	}
-	branch, _ := node.GetReference().(core.Branch)
-	return branch.Name
-}
-
-// localChange 返回当前选中项对应的文件变更；目录/分组节点返回零值。
-func (t *TUI) localChange() core.FileChange {
-	if t.changeList == nil {
-		return core.FileChange{}
-	}
-	node := t.changeList.GetCurrentNode()
-	if node == nil {
-		return core.FileChange{}
-	}
-	change, _ := node.GetReference().(core.FileChange)
-	return change
 }
 
 /** REFS */
@@ -1085,6 +1070,36 @@ func (t *TUI) showRefs(_ refsRequest, refs core.Refs, err error) {
 		t.repoHead.SetText(t.HeadRef)
 	}
 	t.refreshBranches(selected)
+}
+
+// branchNode 返回分支 name 对应的节点，本地和远端都会匹配；name 为空或不存在时返回 nil。
+func (t *TUI) branchNode(name string) *tview.TreeNode {
+	if name == "" || t.branchList == nil || t.branchList.GetRoot() == nil {
+		return nil
+	}
+	var found *tview.TreeNode
+	t.branchList.GetRoot().Walk(func(node, _ *tview.TreeNode) bool {
+		branch, ok := node.GetReference().(core.Branch)
+		if ok && branch.Name == name {
+			found = node
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// branchName 返回分支列表当前选中的分支名；分组标题返回空。
+func (t *TUI) branchName() string {
+	if t.branchList == nil {
+		return ""
+	}
+	node := t.branchList.GetCurrentNode()
+	if node == nil {
+		return ""
+	}
+	branch, _ := node.GetReference().(core.Branch)
+	return branch.Name
 }
 
 /** COMMIT */
@@ -1132,6 +1147,31 @@ func (t *TUI) showCommits(_ commitsRequest, commits []core.Commit, err error) {
 	}
 	// setCurrentItem 会像用户选中一样触发 refreshCommit，这里不再额外请求。
 	t.commitList.setCurrentItem(row)
+}
+
+// commitRow 返回 hash 在提交列表中的行号；hash 为空或不存在时返回 -1。
+// 刷新 commits 后行号会整体移动，分支跳转必须按当前列表重新查询。
+func (t *TUI) commitRow(hash string) int {
+	if hash == "" {
+		return -1
+	}
+	for i, commit := range t.Commits {
+		if commit.Hash == hash {
+			return i
+		}
+	}
+	return -1
+}
+
+// syncInfoWidth 在 commit 信息面板宽度变化时重排文本。
+func (t *TUI) syncInfoWidth(view *tview.TextView) {
+	_, _, width, _ := view.GetInnerRect()
+	if width <= 0 || width == t.infoWidth {
+		return
+	}
+	t.infoWidth = width
+	// 宽度变化只需重排文本，不修改选择状态。
+	view.SetText(renderCommit(t.CurrentCommit, width))
 }
 
 /** FILES */
@@ -1198,9 +1238,9 @@ func (t *TUI) requestFileDiff(commit core.Commit, node *tview.TreeNode) {
 		return
 	}
 	t.diff.Request(diffRequest{
-		commit:           commit,
-		change:           change,
-		ignoreWhitespace: t.IgnoreWhitespace,
+		commit:  commit,
+		change:  change,
+		options: t.diffOptions(t.fileDiff),
 	})
 }
 
@@ -1285,6 +1325,19 @@ func (t *TUI) showLocal(_ localFilesRequest, changes []core.FileChange, err erro
 	t.statusDone("local", "")
 }
 
+// localChange 返回当前选中项对应的文件变更；目录/分组节点返回零值。
+func (t *TUI) localChange() core.FileChange {
+	if t.changeList == nil {
+		return core.FileChange{}
+	}
+	node := t.changeList.GetCurrentNode()
+	if node == nil {
+		return core.FileChange{}
+	}
+	change, _ := node.GetReference().(core.FileChange)
+	return change
+}
+
 /** LOCAL DIFF */
 
 func (t *TUI) requestLocalDiff(node *tview.TreeNode) {
@@ -1297,8 +1350,8 @@ func (t *TUI) requestLocalDiff(node *tview.TreeNode) {
 		return
 	}
 	t.localDiff.Request(localDiffRequest{
-		change:           change,
-		ignoreWhitespace: t.IgnoreWhitespace,
+		change:  change,
+		options: t.diffOptions(t.changeDiff),
 	})
 }
 
@@ -1346,21 +1399,48 @@ func (t *TUI) clearDiff(view *tview.TextView, slot, message string) {
 	view.ScrollToBeginning()
 }
 
-// drawWhitespaceBadge 在当前 diff 面板标题右侧画加粗的 W 提示。
-func (t *TUI) drawWhitespaceBadge(screen tcell.Screen) {
-	if t.IgnoreWhitespace {
-		return
-	}
-
-	view := t.fileDiff
+// diffView 返回当前 tab 显示的 diff 面板。
+func (t *TUI) diffView() *tview.TextView {
 	if t.activeTab == tabChange {
-		view = t.changeDiff
+		return t.changeDiff
 	}
+	return t.fileDiff
+}
+
+// diffOptions 按当前状态和 diff 面板宽度动态组装展示选项。
+func (t *TUI) diffOptions(view *tview.TextView) core.DiffOptions {
+	options := core.DiffOptions{
+		IgnoreWhitespace: t.IgnoreWhitespace,
+		SideBySide:       t.SideBySide,
+	}
+	if t.SideBySide && view != nil {
+		if _, _, width, _ := view.GetInnerRect(); width > 0 {
+			t.diffWidth = width
+		}
+		options.Width = t.diffWidth
+	}
+	return options
+}
+
+// drawDiffBadges 在当前 diff 面板标题右侧画加粗的 W / S 提示。
+func (t *TUI) drawDiffBadges(screen tcell.Screen) {
+	view := t.diffView()
 	if view == nil {
 		return
 	}
 
-	const badge = " W "
+	var parts []string
+	if !t.IgnoreWhitespace {
+		parts = append(parts, "W")
+	}
+	if t.SideBySide {
+		parts = append(parts, "S")
+	}
+	if len(parts) == 0 {
+		return
+	}
+	badge := " " + strings.Join(parts, "") + " "
+
 	x, y, width, _ := view.GetRect()
 	// 终端太窄时不画，避免覆盖左侧 " file diff: path " 标题。
 	if width-2 < tview.TaggedStringWidth(view.GetTitle())+len(badge)+1 {
@@ -1372,6 +1452,20 @@ func (t *TUI) drawWhitespaceBadge(screen tcell.Screen) {
 		_, _, style, _ := screen.GetContent(start+i, y)
 		screen.SetContent(start+i, y, r, nil, style.Bold(true))
 	}
+}
+
+// syncDiffWidth 在 side-by-side 模式下按当前面板内宽重新请求 diff。
+// 由 diff 面板的 DrawFunc 调用，此时 Flex 已设置好本帧的 rect。
+func (t *TUI) syncDiffWidth(view *tview.TextView) {
+	if !t.SideBySide {
+		return
+	}
+	_, _, width, _ := view.GetInnerRect()
+	if width <= 0 || width == t.diffWidth {
+		return
+	}
+	t.diffWidth = width
+	t.refreshActiveDiff()
 }
 
 /** CHANGE OP */
