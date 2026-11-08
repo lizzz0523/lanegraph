@@ -1018,12 +1018,15 @@ func (t *TUI) refreshBranches(selected string) {
 		t.branchList.SetCurrentNode(node)
 		return
 	}
-	// 默认选中第一个分支，而不是分组标题或 remote 目录
+	// 默认选中第一个分支，而不是分组标题或 remote 目录。
+	// Walk 的返回 false 只跳过子节点，不会终止遍历，所以命中后不要再覆盖。
 	var first *tview.TreeNode
 	branchRoot.Walk(func(node, _ *tview.TreeNode) bool {
+		if first != nil {
+			return false
+		}
 		if _, ok := node.GetReference().(core.Branch); ok {
 			first = node
-			return false
 		}
 		return true
 	})
