@@ -143,8 +143,11 @@ func (t *TUI) Run() error {
 		return event
 	})
 
+	app.SetAfterDrawFunc(func(screen tcell.Screen) {
+		t.drawDiffBadges(screen)
+	})
+
 	t.app = app
-	app.SetAfterDrawFunc(t.drawDiffBadges)
 
 	t.setupLoaders()
 	defer t.closeLoaders()
