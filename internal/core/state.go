@@ -1,6 +1,12 @@
 package core
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+)
 
 // State 是 TUI 和后续 GUI 共用的数据与会话状态。
 type State struct {
@@ -109,4 +115,28 @@ func (s *State) Discard(ctx context.Context, change FileChange) error {
 // Checkout 切换分支并返回实际检出的本地分支名。
 func (s *State) Checkout(ctx context.Context, branch Branch) (string, error) {
 	return GitCheckout(ctx, s.Repo, branch)
+}
+
+// OpenFile 使用系统默认应用打开仓库内的文件（仅支持 macOS）。
+// 文件不存在或不是普通文件时直接返回错误，避免把目录交给 open。
+func (s *State) OpenFile(path string) error {
+	abs, err := filepath.Abs(filepath.Join(s.Repo, path))
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("not a regular file: %s", path)
+	}
+
+	cmd := exec.Command("open", abs)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// open 会立即交给 LaunchServices；单独回收进程，避免阻塞事件循环或留下僵尸进程。
+	go cmd.Wait()
+	return nil
 }

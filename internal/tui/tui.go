@@ -303,6 +303,19 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetFocusFunc(func() { setFocusBorder(fileList.Box, true) }).
 		SetBlurFunc(func() { setFocusBorder(fileList.Box, false) })
 
+	// o 用系统默认应用打开选中的文件。
+	fileList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() != tcell.KeyRune {
+			return event
+		}
+		switch event.Rune() {
+		case 'o':
+			t.openFile(fileList.GetCurrentNode())
+			return nil
+		}
+		return event
+	})
+
 	focusOnScrollTree(fileList)
 
 	// 文件预览由 changed 负责，这里只处理目录展开/收起。
@@ -375,7 +388,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetFocusFunc(func() { setFocusBorder(changeList.Box, true) }).
 		SetBlurFunc(func() { setFocusBorder(changeList.Box, false) })
 
-	// 空格切换暂存状态，D 丢弃改动；目录节点保留 TreeView 的展开/收起行为。
+	// 空格切换暂存状态，d 丢弃改动，o 打开文件；目录节点保留 TreeView 的展开/收起行为。
 	changeList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() != tcell.KeyRune {
 			return event
@@ -384,8 +397,11 @@ func (t *TUI) setupUI() tview.Primitive {
 		case ' ':
 			t.toggleLocalChange()
 			return nil
-		case 'd', 'D':
+		case 'd':
 			t.discardLocalChange()
+			return nil
+		case 'o':
+			t.openFile(changeList.GetCurrentNode())
 			return nil
 		}
 		return event
@@ -952,6 +968,23 @@ func (t *TUI) compareCommit(index int) {
 	}
 
 	t.applyCompare(&compare)
+}
+
+// openFile 用系统默认应用打开当前选中的文件；目录、分组和占位节点忽略。
+func (t *TUI) openFile(node *tview.TreeNode) {
+	if node == nil {
+		return
+	}
+	change, ok := node.GetReference().(core.FileChange)
+	if !ok {
+		return
+	}
+	if err := t.OpenFile(change.Path); err != nil {
+		message := strings.Join(strings.Fields(err.Error()), " ")
+		t.statusDone("open", "open failed: "+change.Path+": "+message)
+		return
+	}
+	t.statusDone("open", "open "+change.Path)
 }
 
 func (t *TUI) selectFile(node *tview.TreeNode) {
