@@ -259,7 +259,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
 		SetDrawFunc(func(_ tcell.Screen, _, _, _, _ int) (int, int, int, int) {
-			t.syncInfoWidth(commitInfo)
+			t.syncCommitInfoWidth(commitInfo)
 			return commitInfo.GetInnerRect()
 		})
 
@@ -335,7 +335,7 @@ func (t *TUI) setupUI() tview.Primitive {
 
 	// 在控件绘制前按当前内宽重渲染 side-by-side；此时 Flex 已设置本帧的 rect。
 	fileDiff.SetDrawFunc(func(_ tcell.Screen, _, _, _, _ int) (int, int, int, int) {
-		t.syncDiffWidth(fileDiff)
+		t.syncDiffViewWidth(fileDiff)
 		return fileDiff.GetInnerRect()
 	})
 
@@ -429,7 +429,7 @@ func (t *TUI) setupUI() tview.Primitive {
 
 	// 在控件绘制前按当前内宽重渲染 side-by-side；此时 Flex 已设置本帧的 rect。
 	changeDiff.SetDrawFunc(func(_ tcell.Screen, _, _, _, _ int) (int, int, int, int) {
-		t.syncDiffWidth(changeDiff)
+		t.syncDiffViewWidth(changeDiff)
 		return changeDiff.GetInnerRect()
 	})
 
@@ -461,13 +461,28 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetFocusFunc(func() { t.setFocusBorder(branchList.Box, true) }).
 		SetBlurFunc(func() { t.setFocusBorder(branchList.Box, false) })
 
-	// 空格 checkout 当前分支；TreeView 默认把空格当选中，必须在这里先截获。
+	// 空格 checkout 当前分支；remote 目录则切换展开状态。
+	// TreeView 默认把空格当选中，必须在这里先截获。
 	branchList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyRune && event.Rune() == ' ' {
-			t.checkoutBranch()
+			node := branchList.GetCurrentNode()
+			if node != nil {
+				if _, isFolder := node.GetReference().(string); isFolder {
+					setFolderExpanded(node, !node.IsExpanded())
+				} else {
+					t.checkoutBranch()
+				}
+			}
 			return nil
 		}
 		return event
+	})
+
+	// 回车或鼠标点击 remote 目录时切换展开状态。
+	branchList.SetSelectedFunc(func(node *tview.TreeNode) {
+		if _, isFolder := node.GetReference().(string); isFolder {
+			setFolderExpanded(node, !node.IsExpanded())
+		}
 	})
 
 	t.focusOnScrollTree(branchList)
@@ -934,6 +949,9 @@ func (t *TUI) refreshBranches(selected string) {
 		filter = strings.ToLower(strings.TrimSpace(t.filterText.GetText()))
 	}
 
+	// remote 名作为 Remote 下的目录节点，按分支原有顺序首次出现时创建。
+	remoteFolders := make(map[string]*tview.TreeNode)
+
 	for _, b := range t.Branches {
 		// 本地和远端分支都按完整分支名做大小写不敏感的 contains 过滤；
 		// 远端分支的完整名带 remote 前缀（如 origin/foo）。
@@ -944,11 +962,29 @@ func (t *TUI) refreshBranches(selected string) {
 		parent := localNode
 		if b.Remote {
 			parent = remoteNode
+			if b.RemoteName != "" {
+				folderNode, ok := remoteFolders[b.RemoteName]
+				if !ok {
+					folderNode = tview.NewTreeNode(folderLabel(b.RemoteName, true)).
+						SetReference(b.RemoteName).
+						SetExpanded(true).
+						SetSelectedTextStyle(t.selectedStyle)
+					remoteNode.AddChild(folderNode)
+					remoteFolders[b.RemoteName] = folderNode
+				}
+				parent = folderNode
+			}
+		}
+
+		// remote 目录已经体现了 remote 名，分支节点只显示后面的部分。
+		name := b.Name
+		if b.Remote && b.RemoteName != "" {
+			name = strings.TrimPrefix(name, b.RemoteName+"/")
 		}
 
 		// HEAD 指向的本地分支前面加绿色对勾；其余本地分支用分支符号占位对齐。
 		// Escape 防止分支名里的 [ 被当作颜色标签。
-		label := tview.Escape(b.Name)
+		label := tview.Escape(name)
 		isHead := !b.Remote && b.Name == t.HeadRef
 		switch {
 		case isHead:
@@ -982,11 +1018,17 @@ func (t *TUI) refreshBranches(selected string) {
 		t.branchList.SetCurrentNode(node)
 		return
 	}
-	// 默认选中第一个分支，而不是分组标题
-	if children := localNode.GetChildren(); len(children) > 0 {
-		t.branchList.SetCurrentNode(children[0])
-	} else if children := remoteNode.GetChildren(); len(children) > 0 {
-		t.branchList.SetCurrentNode(children[0])
+	// 默认选中第一个分支，而不是分组标题或 remote 目录
+	var first *tview.TreeNode
+	branchRoot.Walk(func(node, _ *tview.TreeNode) bool {
+		if _, ok := node.GetReference().(core.Branch); ok {
+			first = node
+			return false
+		}
+		return true
+	})
+	if first != nil {
+		t.branchList.SetCurrentNode(first)
 	}
 }
 
@@ -1534,8 +1576,8 @@ func (t *TUI) commitRow(hash string) int {
 	return -1
 }
 
-// syncInfoWidth 在 commit 信息面板宽度变化时重排文本。
-func (t *TUI) syncInfoWidth(view *tview.TextView) {
+// syncCommitInfoWidth 在 commit 信息面板宽度变化时重排文本。
+func (t *TUI) syncCommitInfoWidth(view *tview.TextView) {
 	_, _, width, _ := view.GetInnerRect()
 	if width <= 0 || width == t.infoWidth {
 		return
@@ -1920,9 +1962,9 @@ func (t *TUI) drawDiffBadges(screen tcell.Screen) {
 	}
 }
 
-// syncDiffWidth 在 side-by-side 模式下按当前面板内宽重新请求 diff。
+// syncDiffViewWidth 在 side-by-side 模式下按当前面板内宽重新请求 diff。
 // 由 diff 面板的 DrawFunc 调用，此时 Flex 已设置好本帧的 rect。
-func (t *TUI) syncDiffWidth(view *tview.TextView) {
+func (t *TUI) syncDiffViewWidth(view *tview.TextView) {
 	if !t.SideBySide {
 		return
 	}
