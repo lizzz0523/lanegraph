@@ -35,7 +35,7 @@ type TUI struct {
 	statusBar  *tview.TextView
 
 	commitPanel *tview.Flex
-	commitList  *laneView
+	commitList  *listView
 	commitInfo  *tview.TextView
 	fileList    *tview.TreeView
 	fileDiff    *tview.TextView
@@ -44,7 +44,7 @@ type TUI struct {
 	changeList  *tview.TreeView
 	changeDiff  *tview.TextView
 
-	historyList *tview.List
+	historyList *listView
 	historyDiff *tview.TextView
 
 	activeTab      string // 当前显示的主面板 tab
@@ -229,7 +229,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		Background(tcell.ColorNone).
 		Bold(true)
 
-	commitList := newLaneView(selectedStyle, compareStyle)
+	commitList := newListView(selectedStyle, compareStyle)
 
 	commitList.SetTitle(" all commits ").
 		SetTitleAlign(tview.AlignLeft).
@@ -1053,15 +1053,7 @@ func (t *TUI) openHistory(node *tview.TreeNode) {
 		return
 	}
 
-	historyList := tview.NewList().
-		SetSelectedStyle(t.selectedStyle).
-		SetHighlightFullLine(true)
-
-	// subject 和 commit info 保持一致：主文本色加粗。
-	historyList.SetSecondaryTextStyle(tcell.StyleDefault.
-		Foreground(tview.Styles.PrimaryTextColor).
-		Background(tview.Styles.PrimitiveBackgroundColor).
-		Bold(true))
+	historyList := newListView(t.selectedStyle, tcell.StyleDefault)
 
 	historyList.SetTitle(" history ").
 		SetTitleAlign(tview.AlignLeft).
@@ -1070,8 +1062,8 @@ func (t *TUI) openHistory(node *tview.TreeNode) {
 		SetFocusFunc(func() { setFocusBorder(historyList.Box, true) }).
 		SetBlurFunc(func() { setFocusBorder(historyList.Box, false) })
 
-	historyList.SetChangedFunc(func(index int, _, _ string, _ rune) {
-		t.selectHistory(index)
+	historyList.setSelectedFunc(func() {
+		t.selectHistory()
 	})
 
 	historyDiff := tview.NewTextView().
@@ -1126,6 +1118,15 @@ func (t *TUI) openHistory(node *tview.TreeNode) {
 		AddItem(contentV, 0, 1, true).
 		AddItem(nil, 15, 0, false)
 
+	// 弹窗铺满 mainPage，只有两个子面板需要接收鼠标；其余区域直接消费，
+	// 避免点击穿透到下面的主界面。
+	popup.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if historyList.InRect(event.Position()) || historyDiff.InRect(event.Position()) {
+			return action, event
+		}
+		return tview.MouseConsumed, nil
+	})
+
 	setFocusBorder(historyList.Box, true)
 	setFocusBorder(historyDiff.Box, false)
 
@@ -1162,8 +1163,12 @@ func (t *TUI) closeHistory() {
 }
 
 // selectHistory 在历史列表中切换选中项时请求对应 commit 的文件 diff。
-func (t *TUI) selectHistory(index int) {
-	if !t.historyVisible || index < 0 || index >= len(t.HistoryCommits) {
+func (t *TUI) selectHistory() {
+	if !t.historyVisible {
+		return
+	}
+	index := t.historyList.currentItem()
+	if index < 0 || index >= len(t.HistoryCommits) {
 		return
 	}
 	t.requestHistoryDiff(t.HistoryCommits[index])
@@ -1310,7 +1315,7 @@ func (t *TUI) refreshActiveDiff() {
 
 // refreshHistoryDiff 按当前选中的历史 commit 重新请求 diff。
 func (t *TUI) refreshHistoryDiff() {
-	index := t.historyList.GetCurrentItem()
+	index := t.historyList.currentItem()
 	if index >= 0 && index < len(t.HistoryCommits) {
 		t.requestHistoryDiff(t.HistoryCommits[index])
 	}
@@ -1718,29 +1723,31 @@ func (t *TUI) showHistory(_ historyRequest, commits []core.Commit, err error) {
 		return
 	}
 	t.HistoryCommits = commits
-	t.historyList.Clear()
 
 	switch {
 	case err != nil:
 		t.historyList.SetTitle(" history ")
+		t.historyList.setItems(nil)
 		t.fileHistoryDiff.Cancel()
 		t.historyDiff.SetText("[red]failed to load history:[-] " + tview.Escape(err.Error()))
 		return
 	case len(commits) == 0:
 		t.historyList.SetTitle(" history (0) ")
+		t.historyList.setItems(nil)
 		t.fileHistoryDiff.Cancel()
 		t.historyDiff.SetText("[gray](no history)[-]")
 		return
 	}
 
 	t.historyList.SetTitle(fmt.Sprintf(" history (%d) ", len(commits)))
+	items := make([][]string, 0, len(commits))
 	for _, commit := range commits {
-		main := fmt.Sprintf("[aqua]%s[-] [gray]%s[-]", tview.Escape(commit.Author), commit.Date.Format("2006-01-02 15:04:05"))
-		t.historyList.AddItem(main, tview.Escape(commit.Subject), 0, nil)
+		header := fmt.Sprintf("[aqua]%s[-] [gray]%s[-]", tview.Escape(commit.Author), commit.Date.Format("2006-01-02 15:04:05"))
+		subject := " [::b]" + tview.Escape(commit.Subject) + "[-::-]"
+		items = append(items, []string{header, subject})
 	}
-	// 列表清空后 current item 已经是 0，SetCurrentItem(0) 不会触发 changed。
-	t.historyList.SetCurrentItem(0)
-	t.requestHistoryDiff(commits[0])
+	t.historyList.setItems(items)
+	t.historyList.setCurrentItem(0)
 }
 
 /** HISTORY DIFF */

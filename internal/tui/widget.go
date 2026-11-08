@@ -1,16 +1,22 @@
 package tui
 
 import (
+	"sort"
+
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
-// laneView 把视口偏移和选中项分开，使滚轮只滚动内容。
+// listView 把视口偏移和选中项分开，使滚轮只滚动内容。
 // tview.List 的 Draw 会强制让选中项保持可见，无法做到这一点。
-type laneView struct {
+// 每个 item 可以包含多行，选中和高亮按 item 生效。
+type listView struct {
 	*tview.Box
 
-	lines   []string
+	items  [][]string
+	total  int   // 所有 item 的总行数
+	starts []int // 每个 item 第一行的绝对行号
+
 	offset  int
 	marked  int
 	current int
@@ -21,8 +27,8 @@ type laneView struct {
 	highlightStyle tcell.Style
 }
 
-func newLaneView(selectedStyle, highlightStyle tcell.Style) *laneView {
-	return &laneView{
+func newListView(selectedStyle, highlightStyle tcell.Style) *listView {
+	return &listView{
 		Box:            tview.NewBox(),
 		marked:         -1,
 		selectedStyle:  selectedStyle,
@@ -30,7 +36,7 @@ func newLaneView(selectedStyle, highlightStyle tcell.Style) *laneView {
 	}
 }
 
-func (v *laneView) Draw(screen tcell.Screen) {
+func (v *listView) Draw(screen tcell.Screen) {
 	v.Box.DrawForSubclass(screen, v)
 
 	x, y, width, height := v.GetInnerRect()
@@ -39,48 +45,55 @@ func (v *laneView) Draw(screen tcell.Screen) {
 	}
 	v.clampOffset()
 
-	for row := 0; row < height; row++ {
-		index := v.offset + row
-		if index >= len(v.lines) {
-			break
-		}
-		style := v.selectedStyle
-		if index == v.marked && index != v.current {
-			style = v.highlightStyle
-		}
-		if index == v.current || index == v.marked {
-			for bx := 0; bx < width; bx++ {
-				screen.SetContent(x+bx, y+row, ' ', nil, style)
+	first := sort.Search(len(v.items), func(i int) bool {
+		return v.starts[i]+len(v.items[i]) > v.offset
+	})
+	for i := first; i < len(v.items); i++ {
+		for j, line := range v.items[i] {
+			row := v.starts[i] + j - v.offset
+			if row < 0 {
+				continue
 			}
+			if row >= height {
+				return
+			}
+			style := v.selectedStyle
+			if i == v.marked && i != v.current {
+				style = v.highlightStyle
+			}
+			if i == v.current || i == v.marked {
+				for bx := 0; bx < width; bx++ {
+					screen.SetContent(x+bx, y+row, ' ', nil, style)
+				}
+			}
+			tview.Print(screen, line, x, y+row, width, tview.AlignLeft, tview.Styles.PrimaryTextColor)
 		}
-		tview.Print(screen, v.lines[index], x, y+row, width, tview.AlignLeft, tview.Styles.PrimaryTextColor)
 	}
 }
 
-func (v *laneView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+func (v *listView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
 	return v.Box.WrapInputHandler(func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
-		if len(v.lines) == 0 {
+		if len(v.items) == 0 {
 			return
 		}
-		_, _, _, height := v.GetInnerRect()
 		switch event.Key() {
 		case tcell.KeyUp:
 			v.move(-1)
 		case tcell.KeyDown:
 			v.move(1)
 		case tcell.KeyPgUp:
-			v.move(-height)
+			v.move(-v.pageItems())
 		case tcell.KeyPgDn:
-			v.move(height)
+			v.move(v.pageItems())
 		case tcell.KeyHome:
 			v.setCurrentItem(0)
 		case tcell.KeyEnd:
-			v.setCurrentItem(len(v.lines) - 1)
+			v.setCurrentItem(len(v.items) - 1)
 		}
 	})
 }
 
-func (v *laneView) MouseHandler() func(action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive)) (consumed bool, capture tview.Primitive) {
+func (v *listView) MouseHandler() func(action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive)) (consumed bool, capture tview.Primitive) {
 	return v.Box.WrapMouseHandler(func(action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive)) (consumed bool, capture tview.Primitive) {
 		if !v.InRect(event.Position()) {
 			return false, nil
@@ -91,7 +104,7 @@ func (v *laneView) MouseHandler() func(action tview.MouseAction, event *tcell.Ev
 			x, y, width, height := v.GetInnerRect()
 			mx, my := event.Position()
 			if mx >= x && mx < x+width && my >= y && my < y+height {
-				if index := v.offset + my - y; index < len(v.lines) {
+				if index := v.itemAtLine(v.offset + my - y); index >= 0 {
 					// Ctrl+点击只设置对比基准，不移动当前选中项。
 					if event.Modifiers()&tcell.ModCtrl != 0 {
 						if v.highlight != nil {
@@ -99,7 +112,9 @@ func (v *laneView) MouseHandler() func(action tview.MouseAction, event *tcell.Ev
 						}
 					} else {
 						v.current = index
-						v.selected()
+						if v.selected != nil {
+							v.selected()
+						}
 					}
 				}
 			}
@@ -119,68 +134,124 @@ func (v *laneView) MouseHandler() func(action tview.MouseAction, event *tcell.Ev
 	})
 }
 
-func (v *laneView) setLines(lines []string) {
-	v.lines = lines
-	v.current = min(v.current, max(0, len(lines)-1))
+// setItems 替换全部 item，并重新计算每个 item 的起始行号。
+func (v *listView) setItems(items [][]string) {
+	v.items = items
+	v.starts = make([]int, len(items))
+	v.total = 0
+	for i, item := range items {
+		v.starts[i] = v.total
+		v.total += len(item)
+	}
+
+	v.current = min(max(v.current, 0), max(0, len(items)-1))
+	if v.marked >= len(items) {
+		v.marked = -1
+	}
+	v.clampOffset()
 }
 
-// setMarkedItem 标记对比基准所在行；index 越界时清除标记。
-func (v *laneView) setMarkedItem(index int) {
-	if index < 0 || index >= len(v.lines) {
+// setLines 是单行 item 的快捷方式，供 commit 列表使用。
+func (v *listView) setLines(lines []string) {
+	items := make([][]string, len(lines))
+	for i, line := range lines {
+		items[i] = []string{line}
+	}
+	v.setItems(items)
+}
+
+// setMarkedItem 标记对比基准所在 item；index 越界时清除标记。
+func (v *listView) setMarkedItem(index int) {
+	if index < 0 || index >= len(v.items) {
 		v.marked = -1
 		return
 	}
 	v.marked = index
 }
 
-func (v *laneView) setCurrentItem(index int) {
-	if len(v.lines) == 0 {
+func (v *listView) setCurrentItem(index int) {
+	if len(v.items) == 0 {
 		return
 	}
-	v.current = min(max(index, 0), len(v.lines)-1)
+	v.current = min(max(index, 0), len(v.items)-1)
 	v.ensureVisible()
-	v.selected()
+	if v.selected != nil {
+		v.selected()
+	}
 }
 
-func (v *laneView) setSelectedFunc(handler func()) {
+func (v *listView) setSelectedFunc(handler func()) {
 	v.selected = handler
 }
 
-func (v *laneView) setHighlightFunc(handler func(index int)) {
+func (v *listView) setHighlightFunc(handler func(index int)) {
 	v.highlight = handler
 }
 
-func (v *laneView) currentItem() int {
+func (v *listView) currentItem() int {
 	return v.current
 }
 
-func (v *laneView) ensureVisible() {
+func (v *listView) ensureVisible() {
 	_, _, _, height := v.GetInnerRect()
-	if height <= 0 {
+	if height <= 0 || v.current < 0 || v.current >= len(v.items) {
 		return
 	}
-	if v.current < v.offset {
-		v.offset = v.current
-	} else if v.current >= v.offset+height {
-		v.offset = v.current - height + 1
+	start := v.starts[v.current]
+	end := start + len(v.items[v.current]) - 1
+	if start < v.offset {
+		v.offset = start
+	} else if end >= v.offset+height {
+		v.offset = end - height + 1
 	}
 	v.clampOffset()
 }
 
-func (v *laneView) clampOffset() {
+func (v *listView) clampOffset() {
 	_, _, _, height := v.GetInnerRect()
 	if height <= 0 {
 		return
 	}
-	v.offset = min(max(v.offset, 0), max(0, len(v.lines)-height))
+	v.offset = min(max(v.offset, 0), max(0, v.total-height))
 }
 
-func (v *laneView) move(delta int) {
+// pageItems 返回当前视口大致能容纳的 item 数量，用于 PgUp/PgDn。
+func (v *listView) pageItems() int {
+	_, _, _, height := v.GetInnerRect()
+	if height <= 0 {
+		return 1
+	}
+	lines, count := 0, 0
+	for i := v.current; i < len(v.items); i++ {
+		lines += len(v.items[i])
+		if lines > height {
+			break
+		}
+		count++
+	}
+	return max(1, count)
+}
+
+// itemAtLine 返回绝对行号 line 所属的 item；落在空白处时返回 -1。
+func (v *listView) itemAtLine(line int) int {
+	if line < 0 || line >= v.total {
+		return -1
+	}
+	index := sort.Search(len(v.starts), func(i int) bool {
+		return v.starts[i] > line
+	}) - 1
+	if index >= 0 && line < v.starts[index]+len(v.items[index]) {
+		return index
+	}
+	return -1
+}
+
+func (v *listView) move(delta int) {
 	index := v.current + delta
-	if delta == 1 && index >= len(v.lines) {
+	if delta == 1 && index >= len(v.items) {
 		index = 0
 	} else if delta == -1 && index < 0 {
-		index = len(v.lines) - 1
+		index = len(v.items) - 1
 	}
 	v.setCurrentItem(index)
 }
