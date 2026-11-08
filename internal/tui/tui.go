@@ -688,15 +688,15 @@ func (t *TUI) loaders() []async.LoaderLifecycle {
 	}
 }
 
-func (t *TUI) closeLoaders() {
-	for _, loader := range t.loaders() {
-		loader.Close()
-	}
-}
-
 func (t *TUI) waitLoaders() {
 	for _, loader := range t.loaders() {
 		loader.Wait()
+	}
+}
+
+func (t *TUI) closeLoaders() {
+	for _, loader := range t.loaders() {
+		loader.Close()
 	}
 }
 
