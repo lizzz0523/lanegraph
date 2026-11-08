@@ -1348,7 +1348,7 @@ func (t *TUI) clearDiff(view *tview.TextView, slot, message string) {
 
 // drawWhitespaceBadge 在当前 diff 面板标题右侧画加粗的 W 提示。
 func (t *TUI) drawWhitespaceBadge(screen tcell.Screen) {
-	if !t.IgnoreWhitespace {
+	if t.IgnoreWhitespace {
 		return
 	}
 
