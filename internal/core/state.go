@@ -21,6 +21,11 @@ type State struct {
 	CurrentCommit Commit
 	CompareCommit *Commit
 
+	// HistoryChange 是文件历史弹窗当前对应的文件。
+	HistoryChange FileChange
+	// HistoryCommits 是文件历史弹窗当前展示的提交。
+	HistoryCommits []Commit
+
 	// IgnoreWhitespace 表示 diff 是否忽略纯空白改动。
 	IgnoreWhitespace bool
 	// SideBySide 表示 diff 是否使用左右对照布局。
@@ -51,6 +56,11 @@ func NewState(ctx context.Context, repo string) (State, error) {
 // History 返回仓库的提交历史。
 func (s *State) History(ctx context.Context) ([]Commit, error) {
 	return GitCommits(ctx, s.Repo)
+}
+
+// FileHistory 返回某个文件的提交历史。
+func (s *State) FileHistory(ctx context.Context, path string) ([]Commit, error) {
+	return GitFileHistory(ctx, s.Repo, path)
 }
 
 // Refs 是仓库的分支与 HEAD 快照。

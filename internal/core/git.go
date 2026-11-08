@@ -187,6 +187,35 @@ func GitCommits(ctx context.Context, repo string) ([]Commit, error) {
 	return commits, nil
 }
 
+// GitFileHistory 返回 path 涉及的提交历史，按 git log 默认顺序（新到旧）。
+func GitFileHistory(ctx context.Context, repo, path string) ([]Commit, error) {
+	log, err := gitOutput(ctx, repo, "log", "-z", "--format=%H%x00%P%x00%an%x00%ct%x00%s", "--", path)
+	if err != nil {
+		return nil, fmt.Errorf("git file history error: %w", err)
+	}
+
+	// 字段和记录都以 NUL 分隔，每 5 段是一个 commit。
+	parts := strings.Split(log, "\x00")
+	var commits []Commit
+	for i := 0; i+5 <= len(parts); i += 5 {
+		if parts[i] == "" {
+			continue
+		}
+		date := time.Unix(0, 0)
+		if sec, err := strconv.ParseInt(parts[i+3], 10, 64); err == nil {
+			date = time.Unix(sec, 0)
+		}
+		commits = append(commits, Commit{
+			Hash:    parts[i],
+			Parents: strings.Fields(parts[i+1]),
+			Author:  parts[i+2],
+			Date:    date,
+			Subject: strings.TrimRight(parts[i+4], "\r\n"),
+		})
+	}
+	return commits, nil
+}
+
 // ChangeScope 标记变更的来源；同一文件可能同时出现在暂存区和未暂存区。
 type ChangeScope uint8
 
