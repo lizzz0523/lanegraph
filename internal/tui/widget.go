@@ -12,16 +12,21 @@ type laneView struct {
 
 	lines   []string
 	offset  int
+	marked  int
 	current int
 
-	selected      func()
-	selectedStyle tcell.Style
+	selected       func()
+	selectedStyle  tcell.Style
+	highlight      func(index int)
+	highlightStyle tcell.Style
 }
 
-func newLaneView(selectedStyle tcell.Style) *laneView {
+func newLaneView(selectedStyle, highlightStyle tcell.Style) *laneView {
 	return &laneView{
-		Box:           tview.NewBox(),
-		selectedStyle: selectedStyle,
+		Box:            tview.NewBox(),
+		marked:         -1,
+		selectedStyle:  selectedStyle,
+		highlightStyle: highlightStyle,
 	}
 }
 
@@ -39,9 +44,13 @@ func (v *laneView) Draw(screen tcell.Screen) {
 		if index >= len(v.lines) {
 			break
 		}
-		if index == v.current {
+		style := v.selectedStyle
+		if index == v.marked && index != v.current {
+			style = v.highlightStyle
+		}
+		if index == v.current || index == v.marked {
 			for bx := 0; bx < width; bx++ {
-				screen.SetContent(x+bx, y+row, ' ', nil, v.selectedStyle)
+				screen.SetContent(x+bx, y+row, ' ', nil, style)
 			}
 		}
 		tview.Print(screen, v.lines[index], x, y+row, width, tview.AlignLeft, tview.Styles.PrimaryTextColor)
@@ -83,8 +92,15 @@ func (v *laneView) MouseHandler() func(action tview.MouseAction, event *tcell.Ev
 			mx, my := event.Position()
 			if mx >= x && mx < x+width && my >= y && my < y+height {
 				if index := v.offset + my - y; index < len(v.lines) {
-					v.current = index
-					v.selected()
+					// Ctrl+点击只设置对比基准，不移动当前选中项。
+					if event.Modifiers()&tcell.ModCtrl != 0 {
+						if v.highlight != nil {
+							v.highlight(index)
+						}
+					} else {
+						v.current = index
+						v.selected()
+					}
 				}
 			}
 			consumed = true
@@ -108,6 +124,15 @@ func (v *laneView) setLines(lines []string) {
 	v.current = min(v.current, max(0, len(lines)-1))
 }
 
+// setMarkedItem 标记对比基准所在行；index 越界时清除标记。
+func (v *laneView) setMarkedItem(index int) {
+	if index < 0 || index >= len(v.lines) {
+		v.marked = -1
+		return
+	}
+	v.marked = index
+}
+
 func (v *laneView) setCurrentItem(index int) {
 	if len(v.lines) == 0 {
 		return
@@ -119,6 +144,10 @@ func (v *laneView) setCurrentItem(index int) {
 
 func (v *laneView) setSelectedFunc(handler func()) {
 	v.selected = handler
+}
+
+func (v *laneView) setHighlightFunc(handler func(index int)) {
+	v.highlight = handler
 }
 
 func (v *laneView) currentItem() int {

@@ -13,6 +13,8 @@ type State struct {
 	Branches []Branch
 
 	CurrentCommit Commit
+	CompareCommit *Commit
+
 	// IgnoreWhitespace 表示 diff 是否忽略纯空白改动。
 	IgnoreWhitespace bool
 	// SideBySide 表示 diff 是否使用左右对照布局。
@@ -66,15 +68,16 @@ func (s *State) Refs(ctx context.Context) (Refs, error) {
 	}, nil
 }
 
-// Files 返回某个 commit 的文件变更列表。
-func (s *State) Files(ctx context.Context, commit Commit) ([]FileChange, error) {
-	return GitCommitFiles(ctx, s.Repo, commit)
+// Files 返回某个 commit 相对 compare 的文件变更列表；compare 为 nil 时相对第一个 parent。
+func (s *State) Files(ctx context.Context, commit Commit, compare *Commit) ([]FileChange, error) {
+	return GitCommitFiles(ctx, s.Repo, commit, compare)
 }
 
 // Diff 返回单个文件的 diff，通常是 git-delta 的 ANSI 输出。
-// options 控制空白忽略和左右对照布局；git-delta 不可用时返回原始 diff 和错误，由调用方决定如何展示。
-func (s *State) Diff(ctx context.Context, commit Commit, change FileChange, options DiffOptions) (string, error) {
-	return GitFileDiff(ctx, s.Repo, commit, change, options)
+// compare 为 nil 时相对第一个 parent；options 控制空白忽略和左右对照布局。
+// git-delta 不可用时返回原始 diff 和错误，由调用方决定如何展示。
+func (s *State) Diff(ctx context.Context, commit Commit, compare *Commit, change FileChange, options DiffOptions) (string, error) {
+	return GitFileDiff(ctx, s.Repo, commit, compare, change, options)
 }
 
 // LocalFiles 返回暂存区、未暂存和未跟踪的全部本地变更。

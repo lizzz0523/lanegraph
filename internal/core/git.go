@@ -141,6 +141,18 @@ type Commit struct {
 	Body    string
 }
 
+// diffBase 返回 diff 的基准提交：优先使用显式 compare，其次第一个 parent。
+// 根提交没有 parent 且没有 compare 时返回空，由调用方退回 git show。
+func (c Commit) diffBase(compare *Commit) string {
+	if compare != nil {
+		return compare.Hash
+	}
+	if len(c.Parents) > 0 {
+		return c.Parents[0]
+	}
+	return ""
+}
+
 func GitCommits(ctx context.Context, repo string) ([]Commit, error) {
 	// 起点为 HEAD + 本地分支 + 远端分支 + 标签（不含 stash），未合并的分支也会被画出来
 	// topo-order 让同一分支的提交连续输出，减少 lane 交错；它和 date-order 一样保证父提交在子提交之后
@@ -200,11 +212,12 @@ func (c FileChange) paths() []string {
 	return []string{c.Path}
 }
 
-// GitCommitFiles 相对第一个 parent 计算文件变更；根提交没有 parent，只能把全部文件视为新增。
-func GitCommitFiles(ctx context.Context, repo string, commit Commit) ([]FileChange, error) {
+// GitCommitFiles 相对 compare 计算文件变更；compare 为 nil 时相对第一个 parent。
+// 根提交没有 parent 且没有 compare，只能把全部文件视为新增。
+func GitCommitFiles(ctx context.Context, repo string, commit Commit, compare *Commit) ([]FileChange, error) {
 	var args []string
-	if len(commit.Parents) > 0 {
-		args = []string{"diff", "--name-status", "-z", "-M", commit.Parents[0], commit.Hash}
+	if base := commit.diffBase(compare); base != "" {
+		args = []string{"diff", "--name-status", "-z", "-M", base, commit.Hash}
 	} else {
 		args = []string{"show", "--format=", "--name-status", "-z", "-M", commit.Hash}
 	}
@@ -397,17 +410,15 @@ func (o DiffOptions) String() string {
 	return fmt.Sprintf("%t\x00%t\x00%d", o.IgnoreWhitespace, o.SideBySide, o.Width)
 }
 
-// GitFileDiff 相对第一个 parent 计算单个文件的 diff，并交给 git-delta 着色。
-// options.IgnoreWhitespace 为 true 时用 -w 忽略纯空白改动；
+// GitFileDiff 相对 compare 计算单个文件的 diff，并交给 git-delta 着色。
+// compare 为 nil 时相对第一个 parent；options.IgnoreWhitespace 为 true 时用 -w 忽略纯空白改动；
 // git-delta 失败时返回原始 diff，由调用方决定如何展示。
-func GitFileDiff(ctx context.Context, repo string, commit Commit, change FileChange, options DiffOptions) (string, error) {
+func GitFileDiff(ctx context.Context, repo string, commit Commit, compare *Commit, change FileChange, options DiffOptions) (string, error) {
 	var args []string
-	if len(commit.Parents) > 0 {
-		args = diffArgs([]string{"diff", "-M", "--no-color", "--no-ext-diff"}, options.IgnoreWhitespace,
-			commit.Parents[0], commit.Hash, "--")
+	if base := commit.diffBase(compare); base != "" {
+		args = diffArgs([]string{"diff", "-M", "--no-color", "--no-ext-diff"}, options.IgnoreWhitespace, base, commit.Hash, "--")
 	} else {
-		args = diffArgs([]string{"show", "--format=", "-M", "--no-color", "--no-ext-diff"}, options.IgnoreWhitespace,
-			commit.Hash, "--")
+		args = diffArgs([]string{"show", "--format=", "-M", "--no-color", "--no-ext-diff"}, options.IgnoreWhitespace, commit.Hash, "--")
 	}
 	// 重命名/复制需要同时限制新旧路径，否则 git 会把新路径识别成新增文件
 	if change.OldPath != "" {

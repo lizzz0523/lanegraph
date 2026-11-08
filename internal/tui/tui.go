@@ -77,12 +77,14 @@ type refsRequest struct{}
 type commitsRequest struct{}
 
 type filesRequest struct {
-	commit core.Commit
+	commit  core.Commit
+	compare *core.Commit
 }
 
 type diffRequest struct {
 	commit  core.Commit
 	change  core.FileChange
+	compare *core.Commit
 	options core.DiffOptions
 }
 
@@ -183,6 +185,11 @@ func (t *TUI) setupUI() tview.Primitive {
 		Foreground(tview.Styles.PrimaryTextColor).
 		Background(tcell.NewHexColor(0x4a4a4a))
 
+	// 对比基准行用深青色背景，和当前选中行的灰色区分。
+	compareStyle := tcell.StyleDefault.
+		Foreground(tview.Styles.PrimaryTextColor).
+		Background(tcell.NewHexColor(0x2f4f4f))
+
 	// 激活 tab 用和边框高亮一致的 aqua 背景，配黑字保证对比度。
 	activeTabStyle := tcell.StyleDefault.
 		Foreground(tcell.ColorBlack).
@@ -253,7 +260,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		})
 	}
 
-	commitList := newLaneView(selectedStyle)
+	commitList := newLaneView(selectedStyle, compareStyle)
 
 	commitList.SetTitle(" all commits ").
 		SetTitleAlign(tview.AlignLeft).
@@ -266,6 +273,9 @@ func (t *TUI) setupUI() tview.Primitive {
 
 	commitList.setSelectedFunc(func() {
 		t.refreshCommit(false)
+	})
+	commitList.setHighlightFunc(func(index int) {
+		t.compareCommit(index)
 	})
 
 	commitInfo := tview.NewTextView().
@@ -593,6 +603,14 @@ func (t *TUI) setupUI() tview.Primitive {
 func (t *TUI) setupLoaders() {
 	post := func(f func()) { t.app.QueueUpdateDraw(f) }
 
+	// compareKey 返回 compare 在 Loader 缓存 key 中的标识。
+	compareKey := func(compare *core.Commit) string {
+		if compare == nil {
+			return ""
+		}
+		return compare.Hash
+	}
+
 	t.refs = async.New(async.Config[core.Refs, refsRequest]{
 		Key: func(refsRequest) string { return "refs" },
 		Load: func(ctx context.Context, _ refsRequest) (core.Refs, error) {
@@ -614,9 +632,11 @@ func (t *TUI) setupLoaders() {
 	})
 
 	t.files = async.New(async.Config[[]core.FileChange, filesRequest]{
-		Key: func(req filesRequest) string { return req.commit.Hash },
+		Key: func(req filesRequest) string {
+			return fmt.Sprintf("%s\x00%s", req.commit.Hash, compareKey(req.compare))
+		},
 		Load: func(ctx context.Context, req filesRequest) ([]core.FileChange, error) {
-			return t.Files(ctx, req.commit)
+			return t.Files(ctx, req.commit, req.compare)
 		},
 		Post:      post,
 		OnLoading: t.showFilesLoading,
@@ -625,10 +645,10 @@ func (t *TUI) setupLoaders() {
 
 	t.diff = async.New(async.Config[string, diffRequest]{
 		Key: func(req diffRequest) string {
-			return fmt.Sprintf("%s\x00%s\x00%s", req.commit.Hash, req.change.Path, req.options)
+			return fmt.Sprintf("%s\x00%s\x00%s\x00%s", req.commit.Hash, compareKey(req.compare), req.change.Path, req.options)
 		},
 		Load: func(ctx context.Context, req diffRequest) (string, error) {
-			return renderDiff(t.Diff(ctx, req.commit, req.change, req.options))
+			return renderDiff(t.Diff(ctx, req.commit, req.compare, req.change, req.options))
 		},
 		Post:      post,
 		OnLoading: t.showFileDiffLoading,
@@ -904,10 +924,34 @@ func (t *TUI) refreshCommit(force bool) {
 	changed := commit.Hash != t.CurrentCommit.Hash
 	t.CurrentCommit = commit
 
+	// 当前 commit 变化后回到默认的 first-parent 对比；compare 只对触发时的当前 commit 生效。
+	if changed && t.CompareCommit != nil {
+		t.setCompare(nil)
+	}
+
 	if force || changed {
 		t.commitInfo.SetText(renderCommit(commit, t.infoWidth))
 	}
-	t.requestFiles(commit)
+	t.requestFiles(commit, t.CompareCommit)
+}
+
+// compareCommit 由 Ctrl+点击触发：把 index 对应的 commit 设为对比基准。
+func (t *TUI) compareCommit(index int) {
+	if t.commitList == nil || index < 0 || index >= len(t.Commits) {
+		return
+	}
+	compare := t.Commits[index]
+
+	// 当前 commit 不能和自己比较；再次点击已标记的 commit 视为取消对比。
+	if compare.Hash == t.CurrentCommit.Hash ||
+		(t.CompareCommit != nil && compare.Hash == t.CompareCommit.Hash) {
+		if t.CompareCommit != nil {
+			t.applyCompare(nil)
+		}
+		return
+	}
+
+	t.applyCompare(&compare)
 }
 
 func (t *TUI) selectFile(node *tview.TreeNode) {
@@ -915,7 +959,7 @@ func (t *TUI) selectFile(node *tview.TreeNode) {
 	if t.files.Loading() {
 		return
 	}
-	t.requestFileDiff(t.CurrentCommit, node)
+	t.requestFileDiff(t.CurrentCommit, t.CompareCommit, node)
 }
 
 func (t *TUI) selectLocalFile(node *tview.TreeNode) {
@@ -1035,7 +1079,7 @@ func (t *TUI) refreshActiveDiff() {
 	}
 	if node := t.fileList.GetCurrentNode(); node != nil {
 		if _, ok := node.GetReference().(core.FileChange); ok {
-			t.requestFileDiff(t.CurrentCommit, node)
+			t.requestFileDiff(t.CurrentCommit, t.CompareCommit, node)
 		}
 	}
 }
@@ -1144,6 +1188,8 @@ func (t *TUI) showCommits(_ commitsRequest, commits []core.Commit, err error) {
 
 	t.Commits = commits
 	t.commitList.setLines(renderGraph(commits, core.ComputeGraph(commits)))
+	// 刷新后 compare 可能已不存在（rebase/切分支），按 hash 重新确认。
+	t.syncCompare()
 
 	if len(commits) == 0 {
 		t.CurrentCommit = core.Commit{}
@@ -1161,6 +1207,39 @@ func (t *TUI) showCommits(_ commitsRequest, commits []core.Commit, err error) {
 	}
 	// setCurrentItem 会像用户选中一样触发 refreshCommit，这里不再额外请求。
 	t.commitList.setCurrentItem(row)
+}
+
+// applyCompare 设置对比基准并重新加载当前 commit 的文件列表。
+func (t *TUI) applyCompare(commit *core.Commit) {
+	t.setCompare(commit)
+	if t.CurrentCommit.Hash != "" {
+		t.requestFiles(t.CurrentCommit, t.CompareCommit)
+	}
+}
+
+// syncCompare 在提交列表重建后按 hash 重新定位 compare；commit 已不存在时清除。
+func (t *TUI) syncCompare() {
+	if t.CompareCommit == nil {
+		return
+	}
+	if t.commitRow(t.CompareCommit.Hash) < 0 {
+		t.setCompare(nil)
+		return
+	}
+	t.setCompare(t.CompareCommit)
+}
+
+// setCompare 更新对比基准和列表标记，不发起文件/diff 请求。
+func (t *TUI) setCompare(commit *core.Commit) {
+	t.CompareCommit = commit
+
+	row := -1
+	if commit != nil {
+		row = t.commitRow(commit.Hash)
+	}
+	if t.commitList != nil {
+		t.commitList.setMarkedItem(row)
+	}
 }
 
 // commitRow 返回 hash 在提交列表中的行号；hash 为空或不存在时返回 -1。
@@ -1190,9 +1269,9 @@ func (t *TUI) syncInfoWidth(view *tview.TextView) {
 
 /** FILES */
 
-// requestFiles 请求 commit 的文件列表；同一 commit 的重复请求由 Loader 去重。
-func (t *TUI) requestFiles(commit core.Commit) {
-	t.files.Request(filesRequest{commit: commit})
+// requestFiles 请求 commit 相对 compare 的文件列表；相同 commit+compare 的重复请求由 Loader 去重。
+func (t *TUI) requestFiles(commit core.Commit, compare *core.Commit) {
+	t.files.Request(filesRequest{commit: commit, compare: compare})
 }
 
 // showFilesLoading 保留旧文件树，只通过 statusBar 提示加载。
@@ -1242,7 +1321,7 @@ func (t *TUI) showFiles(_ filesRequest, changes []core.FileChange, err error) {
 
 /** FILE DIFF */
 
-func (t *TUI) requestFileDiff(commit core.Commit, node *tview.TreeNode) {
+func (t *TUI) requestFileDiff(commit core.Commit, compare *core.Commit, node *tview.TreeNode) {
 	change, ok := node.GetReference().(core.FileChange)
 	if !ok {
 		// 目录节点提示选择文件；错误/无变更占位节点保留当前内容
@@ -1254,6 +1333,7 @@ func (t *TUI) requestFileDiff(commit core.Commit, node *tview.TreeNode) {
 	t.diff.Request(diffRequest{
 		commit:  commit,
 		change:  change,
+		compare: compare,
 		options: t.diffOptions(t.fileDiff),
 	})
 }
