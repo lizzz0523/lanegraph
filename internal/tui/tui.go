@@ -180,6 +180,11 @@ func (t *TUI) setupUI() tview.Primitive {
 		Foreground(tview.Styles.PrimaryTextColor).
 		Background(tcell.NewHexColor(0x4a4a4a))
 
+	// 激活 tab 用和边框高亮一致的 aqua 背景，配黑字保证对比度。
+	activeTabStyle := tcell.StyleDefault.
+		Foreground(tcell.ColorBlack).
+		Background(tcell.ColorAqua)
+
 	headerStyle := tcell.StyleDefault.
 		Foreground(tcell.ColorGray).
 		Background(tcell.ColorNone).
@@ -574,7 +579,7 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.statusBusy = make(map[string]string)
 
 	t.tabStyle = defaultStyle
-	t.tabActiveStyle = selectedStyle
+	t.tabActiveStyle = activeTabStyle
 	t.selectedStyle = selectedStyle
 	t.headerStyle = headerStyle
 	t.headerSelectedStyle = headerSelectedStyle
