@@ -77,8 +77,8 @@ func (s *State) Diff(ctx context.Context, commit Commit, change FileChange, opti
 	return GitFileDiff(ctx, s.Repo, commit, change, options)
 }
 
-// LocalChanges 返回暂存区、未暂存和未跟踪的全部本地变更。
-func (s *State) LocalChanges(ctx context.Context) ([]FileChange, error) {
+// LocalFiles 返回暂存区、未暂存和未跟踪的全部本地变更。
+func (s *State) LocalFiles(ctx context.Context) ([]FileChange, error) {
 	return GitLocalChanges(ctx, s.Repo)
 }
 

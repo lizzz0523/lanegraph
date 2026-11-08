@@ -219,7 +219,7 @@ func (t *TUI) initLoaders() {
 	t.localFiles = async.New(async.Config[[]core.FileChange, localFilesRequest]{
 		Key: func(localFilesRequest) string { return "local" },
 		Load: func(ctx context.Context, _ localFilesRequest) ([]core.FileChange, error) {
-			return t.LocalChanges(ctx)
+			return t.LocalFiles(ctx)
 		},
 		Post:      post,
 		OnLoading: t.showLocalLoading,
