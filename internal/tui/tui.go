@@ -229,53 +229,6 @@ func (t *TUI) setupUI() tview.Primitive {
 		Background(tcell.ColorNone).
 		Bold(true)
 
-	// scrollFocusable 是内嵌 *tview.Box 的控件（TextView / TreeView 都满足）。
-	type scrollFocusable interface {
-		tview.Primitive
-		InRect(x, y int) bool
-		SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse)) *tview.Box
-	}
-
-	// focusIfScrolled 在滚轮事件上同步聚焦，边框状态和焦点保持一致。
-	focusIfScrolled := func(p tview.Primitive, action tview.MouseAction) {
-		switch action {
-		case tview.MouseScrollUp, tview.MouseScrollDown:
-			if !p.HasFocus() {
-				t.app.SetFocus(p)
-			}
-		}
-	}
-
-	// focusOnScroll 让滚轮滚动时同步聚焦。
-	focusOnScroll := func(p scrollFocusable) {
-		p.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
-			if !p.InRect(event.Position()) {
-				return action, event
-			}
-			focusIfScrolled(p, action)
-			return action, event
-		})
-	}
-
-	// focusOnScrollTree 同上，并跳过 MouseLeftDown 的默认处理：
-	// TreeView 按下鼠标后会重绘，并把视口外的选中项拉回可见范围，
-	// 导致随后的点击按新的 offsetY 命中错误的行。焦点只能在这里自己补。
-	focusOnScrollTree := func(p scrollFocusable) {
-		p.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
-			if !p.InRect(event.Position()) {
-				return action, event
-			}
-			if action == tview.MouseLeftDown {
-				if !p.HasFocus() {
-					t.app.SetFocus(p)
-				}
-				return tview.MouseMove, event
-			}
-			focusIfScrolled(p, action)
-			return action, event
-		})
-	}
-
 	commitList := newLaneView(selectedStyle, compareStyle)
 
 	commitList.SetTitle(" all commits ").
@@ -335,7 +288,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		return event
 	})
 
-	focusOnScrollTree(fileList)
+	t.focusOnScrollTree(fileList)
 
 	// 文件预览由 changed 负责，这里只处理目录展开/收起。
 	fileList.SetSelectedFunc(func(node *tview.TreeNode) {
@@ -383,7 +336,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		return fileDiff.GetInnerRect()
 	})
 
-	focusOnScroll(fileDiff)
+	t.focusOnScroll(fileDiff)
 
 	commitDetail := tview.NewFlex().
 		AddItem(fileList, 40, 1, false).
@@ -429,7 +382,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		return event
 	})
 
-	focusOnScrollTree(changeList)
+	t.focusOnScrollTree(changeList)
 
 	// 文件预览由 changed 负责，这里只处理目录展开/收起。
 	changeList.SetSelectedFunc(func(node *tview.TreeNode) {
@@ -477,7 +430,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		return changeDiff.GetInnerRect()
 	})
 
-	focusOnScroll(changeDiff)
+	t.focusOnScroll(changeDiff)
 
 	changePanel := tview.NewFlex().
 		AddItem(changeList, 40, 1, true).
@@ -514,7 +467,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		return event
 	})
 
-	focusOnScrollTree(branchList)
+	t.focusOnScrollTree(branchList)
 
 	repoHead := tview.NewTextView().
 		SetText(t.HeadRef).
@@ -790,6 +743,53 @@ func (t *TUI) closeLoaders() {
 	for _, loader := range t.loaders() {
 		loader.Close()
 	}
+}
+
+// scrollFocusable 是内嵌 *tview.Box 的控件（TextView / TreeView / List 都满足）。
+type scrollFocusable interface {
+	tview.Primitive
+	InRect(x, y int) bool
+	SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse)) *tview.Box
+}
+
+// focusOnScroll 让滚轮滚动时同步聚焦。
+func (t *TUI) focusOnScroll(p scrollFocusable) {
+	p.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if !p.InRect(event.Position()) {
+			return action, event
+		}
+		switch action {
+		case tview.MouseScrollUp, tview.MouseScrollDown:
+			if !p.HasFocus() {
+				t.app.SetFocus(p)
+			}
+		}
+		return action, event
+	})
+}
+
+// focusOnScrollTree 同上，并跳过 MouseLeftDown 的默认处理：
+// TreeView 按下鼠标后会重绘，并把视口外的选中项拉回可见范围，
+// 导致随后的点击按新的 offsetY 命中错误的行。焦点只能在这里自己补。
+func (t *TUI) focusOnScrollTree(p scrollFocusable) {
+	p.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if !p.InRect(event.Position()) {
+			return action, event
+		}
+		if action == tview.MouseLeftDown {
+			if !p.HasFocus() {
+				t.app.SetFocus(p)
+			}
+			return tview.MouseMove, event
+		}
+		switch action {
+		case tview.MouseScrollUp, tview.MouseScrollDown:
+			if !p.HasFocus() {
+				t.app.SetFocus(p)
+			}
+		}
+		return action, event
+	})
 }
 
 /** EVENT */
@@ -1106,6 +1106,9 @@ func (t *TUI) openHistory(node *tview.TreeNode) {
 		}
 		return event
 	})
+
+	t.focusOnScroll(historyList)
+	t.focusOnScroll(historyDiff)
 
 	contentH := tview.NewFlex().
 		AddItem(historyList, 40, 0, true).
