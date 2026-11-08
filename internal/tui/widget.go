@@ -25,6 +25,7 @@ type listView struct {
 	selectedStyle  tcell.Style
 	highlight      func(index int)
 	highlightStyle tcell.Style
+	activated      func()
 }
 
 func newListView(selectedStyle, highlightStyle tcell.Style) *listView {
@@ -89,6 +90,10 @@ func (v *listView) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 			v.setCurrentItem(0)
 		case tcell.KeyEnd:
 			v.setCurrentItem(len(v.items) - 1)
+		case tcell.KeyEnter:
+			if v.activated != nil {
+				v.activated()
+			}
 		}
 	})
 }
@@ -186,6 +191,10 @@ func (v *listView) setSelectedFunc(handler func()) {
 
 func (v *listView) setHighlightFunc(handler func(index int)) {
 	v.highlight = handler
+}
+
+func (v *listView) setActivatedFunc(handler func()) {
+	v.activated = handler
 }
 
 func (v *listView) currentItem() int {

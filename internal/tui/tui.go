@@ -54,6 +54,7 @@ type TUI struct {
 	statusMsg      string            // 最近一次操作结果，loading 结束后保留
 	statusBusy     map[string]string // statusBar 当前展示的 loading 项，key 为槽位
 	pendingBranch  string            // checkout 后等待 refs 刷新完成再选中的分支
+	pendingCommit  string            // history 跳转后等待 commits 刷新完成再选中的提交
 	promptVisible  bool              // discard 确认弹窗是否正在显示
 	historyVisible bool              // 文件历史弹窗是否正在显示
 	quitting       bool              // 退出流程已启动，忽略重复退出
@@ -1065,6 +1066,9 @@ func (t *TUI) openHistory(node *tview.TreeNode) {
 	historyList.setSelectedFunc(func() {
 		t.selectHistory()
 	})
+	historyList.setActivatedFunc(func() {
+		t.locateHistory()
+	})
 
 	historyDiff := tview.NewTextView().
 		SetDynamicColors(true).
@@ -1172,6 +1176,30 @@ func (t *TUI) selectHistory() {
 		return
 	}
 	t.requestHistoryDiff(t.HistoryCommits[index])
+}
+
+// locateHistory 关闭历史弹窗，切到 commit tab 并定位到选中的 commit。
+func (t *TUI) locateHistory() {
+	if !t.historyVisible {
+		return
+	}
+	index := t.historyList.currentItem()
+	if index < 0 || index >= len(t.HistoryCommits) {
+		return
+	}
+	hash := t.HistoryCommits[index].Hash
+
+	t.closeHistory()
+	t.pendingCommit = hash
+	if t.activeTab != tabCommit {
+		t.switchTab(tabCommit)
+	} else if row := t.commitRow(hash); row >= 0 {
+		t.pendingCommit = ""
+		t.commitList.setCurrentItem(row)
+	} else {
+		t.reloadCommits()
+	}
+	t.app.SetFocus(t.commitList)
 }
 
 func (t *TUI) selectFile(node *tview.TreeNode) {
@@ -1423,6 +1451,12 @@ func (t *TUI) showCommits(_ commitsRequest, commits []core.Commit, err error) {
 		previous = t.Commits[row].Hash
 	}
 
+	target := previous
+	if t.pendingCommit != "" {
+		target = t.pendingCommit
+		t.pendingCommit = ""
+	}
+
 	t.Commits = commits
 	t.commitList.setLines(renderGraph(commits, core.ComputeGraph(commits)))
 	// 刷新后 compare 可能已不存在（rebase/切分支），按 hash 重新确认。
@@ -1439,7 +1473,9 @@ func (t *TUI) showCommits(_ commitsRequest, commits []core.Commit, err error) {
 		return
 	}
 
-	if found := t.commitRow(previous); found >= 0 {
+	if found := t.commitRow(target); found >= 0 {
+		row = found
+	} else if found := t.commitRow(previous); found >= 0 {
 		row = found
 	}
 	// setCurrentItem 会像用户选中一样触发 refreshCommit，这里不再额外请求。
