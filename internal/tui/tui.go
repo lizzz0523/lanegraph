@@ -64,6 +64,8 @@ type TUI struct {
 	selectedStyle       tcell.Style
 	headerStyle         tcell.Style
 	headerSelectedStyle tcell.Style
+	borderColor         tcell.Color
+	borderFocusColor    tcell.Color
 
 	refs    *async.Loader[core.Refs, refsRequest]
 	commits *async.Loader[[]core.Commit, commitsRequest]
@@ -211,12 +213,12 @@ func (t *TUI) setupUI() tview.Primitive {
 		Background(tcell.NewHexColor(0x4a4a4a))
 
 	// 对比基准行用深青色背景，和当前选中行的灰色区分。
-	compareStyle := tcell.StyleDefault.
+	highlightStyle := tcell.StyleDefault.
 		Foreground(tview.Styles.PrimaryTextColor).
 		Background(tcell.NewHexColor(0x2f4f4f))
 
 	// 激活 tab 用和边框高亮一致的 aqua 背景，配黑字保证对比度。
-	activeTabStyle := tcell.StyleDefault.
+	tabActiveStyle := tcell.StyleDefault.
 		Foreground(tcell.ColorBlack).
 		Background(tcell.ColorAqua)
 
@@ -230,14 +232,14 @@ func (t *TUI) setupUI() tview.Primitive {
 		Background(tcell.ColorNone).
 		Bold(true)
 
-	commitList := newListView(selectedStyle, compareStyle)
+	commitList := newListView(selectedStyle, highlightStyle)
 
 	commitList.SetTitle(" all commits ").
 		SetTitleAlign(tview.AlignLeft).
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
-		SetFocusFunc(func() { setFocusBorder(commitList.Box, true) }).
-		SetBlurFunc(func() { setFocusBorder(commitList.Box, false) })
+		SetFocusFunc(func() { t.setFocusBorder(commitList.Box, true) }).
+		SetBlurFunc(func() { t.setFocusBorder(commitList.Box, false) })
 
 	commitList.setLines(renderGraph(t.Commits, core.ComputeGraph(t.Commits)))
 
@@ -270,8 +272,8 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetTitleAlign(tview.AlignLeft).
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
-		SetFocusFunc(func() { setFocusBorder(fileList.Box, true) }).
-		SetBlurFunc(func() { setFocusBorder(fileList.Box, false) })
+		SetFocusFunc(func() { t.setFocusBorder(fileList.Box, true) }).
+		SetBlurFunc(func() { t.setFocusBorder(fileList.Box, false) })
 
 	// o 用系统默认应用打开选中的文件，h 查看文件历史。
 	fileList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -313,8 +315,8 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetTitleAlign(tview.AlignLeft).
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
-		SetFocusFunc(func() { setFocusBorder(fileDiff.Box, true) }).
-		SetBlurFunc(func() { setFocusBorder(fileDiff.Box, false) })
+		SetFocusFunc(func() { t.setFocusBorder(fileDiff.Box, true) }).
+		SetBlurFunc(func() { t.setFocusBorder(fileDiff.Box, false) })
 
 	fileDiff.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() != tcell.KeyRune {
@@ -358,8 +360,8 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetTitleAlign(tview.AlignLeft).
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
-		SetFocusFunc(func() { setFocusBorder(changeList.Box, true) }).
-		SetBlurFunc(func() { setFocusBorder(changeList.Box, false) })
+		SetFocusFunc(func() { t.setFocusBorder(changeList.Box, true) }).
+		SetBlurFunc(func() { t.setFocusBorder(changeList.Box, false) })
 
 	// 空格切换暂存状态，d 丢弃改动，o 打开文件，h 查看文件历史；目录节点保留 TreeView 的展开/收起行为。
 	changeList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -407,8 +409,8 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetTitleAlign(tview.AlignLeft).
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
-		SetFocusFunc(func() { setFocusBorder(changeDiff.Box, true) }).
-		SetBlurFunc(func() { setFocusBorder(changeDiff.Box, false) })
+		SetFocusFunc(func() { t.setFocusBorder(changeDiff.Box, true) }).
+		SetBlurFunc(func() { t.setFocusBorder(changeDiff.Box, false) })
 
 	changeDiff.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() != tcell.KeyRune {
@@ -442,8 +444,8 @@ func (t *TUI) setupUI() tview.Primitive {
 	filterText.SetTitle(" filter ").
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
-		SetFocusFunc(func() { setFocusBorder(filterText.Box, true) }).
-		SetBlurFunc(func() { setFocusBorder(filterText.Box, false) })
+		SetFocusFunc(func() { t.setFocusBorder(filterText.Box, true) }).
+		SetBlurFunc(func() { t.setFocusBorder(filterText.Box, false) })
 
 	filterText.SetChangedFunc(func() {
 		t.refreshBranches(t.branchName())
@@ -456,8 +458,8 @@ func (t *TUI) setupUI() tview.Primitive {
 	branchList.SetTitle(" branches ").
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
-		SetFocusFunc(func() { setFocusBorder(branchList.Box, true) }).
-		SetBlurFunc(func() { setFocusBorder(branchList.Box, false) })
+		SetFocusFunc(func() { t.setFocusBorder(branchList.Box, true) }).
+		SetBlurFunc(func() { t.setFocusBorder(branchList.Box, false) })
 
 	// 空格 checkout 当前分支；TreeView 默认把空格当选中，必须在这里先截获。
 	branchList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -552,15 +554,6 @@ func (t *TUI) setupUI() tview.Primitive {
 	root := tview.NewPages().
 		AddPage("main", mainPage, true, true)
 
-	// SetRoot 只会对 commitList 触发 focus 回调，其余需手动初始化为未聚焦
-	setFocusBorder(filterText.Box, false)
-	setFocusBorder(branchList.Box, false)
-	setFocusBorder(commitList.Box, true)
-	setFocusBorder(fileList.Box, false)
-	setFocusBorder(fileDiff.Box, false)
-	setFocusBorder(changeList.Box, false)
-	setFocusBorder(changeDiff.Box, false)
-
 	t.root = root
 	t.repoHead = repoHead
 	t.changeTab = changeTab
@@ -584,10 +577,22 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.statusBusy = make(map[string]string)
 
 	t.tabStyle = defaultStyle
-	t.tabActiveStyle = activeTabStyle
+	t.tabActiveStyle = tabActiveStyle
 	t.selectedStyle = selectedStyle
 	t.headerStyle = headerStyle
 	t.headerSelectedStyle = headerSelectedStyle
+	// 边框和标题在未聚焦/聚焦时分别使用这两种颜色。
+	t.borderColor = tcell.ColorDarkGray
+	t.borderFocusColor = tcell.ColorAqua
+
+	// SetRoot 只会对 commitList 触发 focus 回调，其余需手动初始化为未聚焦
+	t.setFocusBorder(filterText.Box, false)
+	t.setFocusBorder(branchList.Box, false)
+	t.setFocusBorder(commitList.Box, true)
+	t.setFocusBorder(fileList.Box, false)
+	t.setFocusBorder(fileDiff.Box, false)
+	t.setFocusBorder(changeList.Box, false)
+	t.setFocusBorder(changeDiff.Box, false)
 
 	return root
 }
@@ -839,10 +844,10 @@ func (t *TUI) focusChain() []tview.Primitive {
 }
 
 // setFocusBorder 按焦点状态切换边框和标题颜色。
-func setFocusBorder(box *tview.Box, focused bool) {
-	color := tcell.ColorDarkGray
+func (t *TUI) setFocusBorder(box *tview.Box, focused bool) {
+	color := t.borderColor
 	if focused {
-		color = tcell.ColorAqua
+		color = t.borderFocusColor
 	}
 	box.SetBorderColor(color).SetTitleColor(color)
 }
@@ -1060,8 +1065,8 @@ func (t *TUI) openHistory(node *tview.TreeNode) {
 		SetTitleAlign(tview.AlignLeft).
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
-		SetFocusFunc(func() { setFocusBorder(historyList.Box, true) }).
-		SetBlurFunc(func() { setFocusBorder(historyList.Box, false) })
+		SetFocusFunc(func() { t.setFocusBorder(historyList.Box, true) }).
+		SetBlurFunc(func() { t.setFocusBorder(historyList.Box, false) })
 
 	historyList.setSelectedFunc(func() {
 		t.selectHistory()
@@ -1080,8 +1085,8 @@ func (t *TUI) openHistory(node *tview.TreeNode) {
 		SetTitleAlign(tview.AlignLeft).
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
-		SetFocusFunc(func() { setFocusBorder(historyDiff.Box, true) }).
-		SetBlurFunc(func() { setFocusBorder(historyDiff.Box, false) })
+		SetFocusFunc(func() { t.setFocusBorder(historyDiff.Box, true) }).
+		SetBlurFunc(func() { t.setFocusBorder(historyDiff.Box, false) })
 
 	historyDiff.SetDrawFunc(func(_ tcell.Screen, _, _, _, _ int) (int, int, int, int) {
 		t.syncHistoryDiffWidth(historyDiff)
@@ -1131,8 +1136,8 @@ func (t *TUI) openHistory(node *tview.TreeNode) {
 		return tview.MouseConsumed, nil
 	})
 
-	setFocusBorder(historyList.Box, true)
-	setFocusBorder(historyDiff.Box, false)
+	t.setFocusBorder(historyList.Box, true)
+	t.setFocusBorder(historyDiff.Box, false)
 
 	t.HistoryChange = change
 	t.HistoryCommits = nil
