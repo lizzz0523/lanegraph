@@ -85,6 +85,7 @@ func buildFileTree(changes []core.FileChange, selectedStyle tcell.Style) *tview.
 		parent.AddChild(fileNode)
 	}
 
+	compactFolders(rootNode)
 	sortFoldersFirst(rootNode)
 	return rootNode
 }
@@ -125,6 +126,34 @@ func buildLocalTree(changes []core.FileChange, selectedStyle, headerStyle tcell.
 	}
 
 	return rootNode
+}
+
+// compactFolders 把只有一个子目录的连续目录链合并成一个节点，
+// 例如 a > b > c 显示为 a/b/c，类似 IDE 的紧凑中间目录。
+func compactFolders(node *tview.TreeNode) {
+	for _, child := range node.GetChildren() {
+		if _, ok := child.GetReference().(string); !ok {
+			continue
+		}
+
+		for {
+			children := child.GetChildren()
+			if len(children) != 1 {
+				break
+			}
+			sub, ok := children[0].GetReference().(string)
+			if !ok {
+				break
+			}
+
+			name := child.GetReference().(string) + "/" + sub
+			child.SetReference(name).
+				SetText(folderLabel(name, child.IsExpanded())).
+				SetChildren(children[0].GetChildren())
+		}
+
+		compactFolders(child)
+	}
 }
 
 // sortFoldersFirst 使用稳定排序，保证同一层内的原有顺序不变。
