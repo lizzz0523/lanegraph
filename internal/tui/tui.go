@@ -115,6 +115,8 @@ func New(st *core.State) *TUI {
 	return &TUI{State: st}
 }
 
+/** RUN */
+
 func (t *TUI) Run() error {
 	app := tview.NewApplication().
 		SetRoot(t.setupUI(), true).
@@ -144,7 +146,7 @@ func (t *TUI) Run() error {
 	t.app = app
 	app.SetAfterDrawFunc(t.drawDiffBadges)
 
-	t.initLoaders()
+	t.setupLoaders()
 	defer t.closeLoaders()
 
 	t.refreshTabStyles()
@@ -153,6 +155,8 @@ func (t *TUI) Run() error {
 
 	return app.Run()
 }
+
+/** SETUP */
 
 func (t *TUI) setupUI() tview.Primitive {
 	tview.Borders.TopLeft, tview.Borders.TopRight = '╭', '╮'
@@ -578,7 +582,7 @@ func (t *TUI) setupUI() tview.Primitive {
 	return root
 }
 
-func (t *TUI) initLoaders() {
+func (t *TUI) setupLoaders() {
 	post := func(f func()) { t.app.QueueUpdateDraw(f) }
 
 	t.refs = async.New(async.Config[core.Refs, refsRequest]{
@@ -699,6 +703,8 @@ func (t *TUI) closeLoaders() {
 		loader.Close()
 	}
 }
+
+/** EVENT */
 
 // quit 先停止 Loader，再等后台 goroutine 退出，最后停止事件循环。
 // 不能在事件循环里同步等待，否则 Post 无法被消费。
