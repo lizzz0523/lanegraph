@@ -528,7 +528,13 @@ func (t *TUI) setupUI() tview.Primitive {
 		AddItem(changeTab, 1, 0, false).
 		AddItem(commitTab, 1, 0, false)
 
-	branchPanel := tview.NewFlex().
+	// Pages 会先把整块区域刷成背景色再画当前页，
+	// 所以切换时不会残留上一个面板的像素。
+	mainPanels := tview.NewPages().
+		AddPage(tabChange, changePanel, true, false).
+		AddPage(tabCommit, commitPanel, true, true)
+
+	sidebar := tview.NewFlex().
 		SetDirection(tview.FlexRow).
 		AddItem(repoHead, 3, 0, false).
 		AddItem(mainTabs, 2, 0, false).
@@ -536,14 +542,8 @@ func (t *TUI) setupUI() tview.Primitive {
 		AddItem(filterText, 3, 0, false).
 		AddItem(branchList, 0, 1, false)
 
-	// Pages 会先把整块区域刷成背景色再画当前页，
-	// 所以切换时不会残留上一个面板的像素。
-	mainPanels := tview.NewPages().
-		AddPage(tabChange, changePanel, true, false).
-		AddPage(tabCommit, commitPanel, true, true)
-
-	mainContent := tview.NewFlex().
-		AddItem(branchPanel, 30, 0, false).
+	content := tview.NewFlex().
+		AddItem(sidebar, 30, 0, false).
 		AddItem(mainPanels, 0, 1, true)
 
 	statusBar := tview.NewTextView().
@@ -554,7 +554,7 @@ func (t *TUI) setupUI() tview.Primitive {
 
 	mainPage := tview.NewFlex().
 		SetDirection(tview.FlexRow).
-		AddItem(mainContent, 0, 1, true).
+		AddItem(content, 0, 1, true).
 		AddItem(statusBar, 1, 0, false)
 
 	root := tview.NewPages().
