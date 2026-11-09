@@ -52,9 +52,9 @@ type Branch struct {
 	RemoteName string
 }
 
-// localName 返回分支对应的本地分支名：本地分支返回自身，
+// LocalName 返回分支对应的本地分支名：本地分支返回自身，
 // 远端分支去掉 remote 前缀（如 origin/foo → foo）。
-func (b Branch) localName() string {
+func (b Branch) LocalName() string {
 	if !b.Remote {
 		return b.Name
 	}
@@ -110,7 +110,7 @@ func GitBranches(ctx context.Context, repo string) ([]Branch, error) {
 // 本地分支直接 checkout；远端分支切换到同名本地分支，
 // 本地分支不存在时从该远端分支创建跟踪分支。返回实际检出的本地分支名。
 func GitCheckout(ctx context.Context, repo string, branch Branch) (string, error) {
-	local := branch.localName()
+	local := branch.LocalName()
 
 	// 远端分支对应的本地分支已存在时直接切换，不重置、不改 upstream。
 	if branch.Remote && !gitRefExists(ctx, repo, "refs/heads/"+local) {

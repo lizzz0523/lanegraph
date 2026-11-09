@@ -87,6 +87,7 @@ func buildFileTree(changes []core.FileChange, selectedStyle tcell.Style) *tview.
 
 	compactFolders(rootNode)
 	sortFoldersFirst(rootNode)
+
 	return rootNode
 }
 
@@ -171,28 +172,31 @@ func sortFoldersFirst(node *tview.TreeNode) {
 	}
 }
 
-func firstFileNode(node *tview.TreeNode) *tview.TreeNode {
-	for _, child := range node.GetChildren() {
-		if _, ok := child.GetReference().(core.FileChange); ok {
-			return child
+func firstFileNode(root *tview.TreeNode) *tview.TreeNode {
+	var first *tview.TreeNode
+	root.Walk(func(node, _ *tview.TreeNode) bool {
+		// Walk 的返回 false 只跳过子节点，不会终止遍历，所以命中后不要再覆盖。
+		if first != nil {
+			return false
 		}
-		if found := firstFileNode(child); found != nil {
-			return found
+		if _, ok := node.GetReference().(core.FileChange); ok {
+			first = node
 		}
-	}
-	return nil
+		return true
+	})
+	return first
 }
 
 // findLocalNode 在重建后的树里按来源和路径找回之前选中的文件。
 // 文件在暂存区和未暂存区之间移动后来源会变化，因此再退一步只按路径匹配。
-func findLocalNode(node *tview.TreeNode, target core.FileChange) *tview.TreeNode {
+func findLocalNode(root *tview.TreeNode, target core.FileChange) *tview.TreeNode {
 	if target.Path == "" {
 		return nil
 	}
-	if found := findLocalNodeBy(node, target, true); found != nil {
+	if found := findLocalNodeBy(root, target, true); found != nil {
 		return found
 	}
-	return findLocalNodeBy(node, target, false)
+	return findLocalNodeBy(root, target, false)
 }
 
 func findLocalNodeBy(node *tview.TreeNode, target core.FileChange, matchScope bool) *tview.TreeNode {

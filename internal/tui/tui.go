@@ -478,10 +478,17 @@ func (t *TUI) setupUI() tview.Primitive {
 		return event
 	})
 
-	// 回车或鼠标点击 remote 目录时切换展开状态。
+	// 回车或鼠标点击 remote 目录时切换展开状态，点击分支时跳转到对应 commit。
 	branchList.SetSelectedFunc(func(node *tview.TreeNode) {
 		if _, isFolder := node.GetReference().(string); isFolder {
 			setFolderExpanded(node, !node.IsExpanded())
+			return
+		}
+		if branch, ok := node.GetReference().(core.Branch); ok {
+			// commits 刷新后行号会变化，每次跳转都按当前列表查询。
+			if row := t.commitRow(branch.Hash); row >= 0 {
+				t.commitList.setCurrentItem(row)
+			}
 		}
 	})
 
@@ -933,85 +940,12 @@ func (t *TUI) refreshBranches(selected string) {
 		return
 	}
 
-	// 隐藏 root，用 Local / Remote 作为分组标题。
-	localNode := tview.NewTreeNode("Local").
-		SetTextStyle(t.headerStyle).
-		SetSelectedTextStyle(t.headerSelectedStyle)
-	remoteNode := tview.NewTreeNode("Remote").
-		SetTextStyle(t.headerStyle).
-		SetSelectedTextStyle(t.headerSelectedStyle)
-	branchRoot := tview.NewTreeNode("").
-		AddChild(localNode).
-		AddChild(remoteNode)
-
 	filter := ""
 	if t.filterText != nil {
 		filter = strings.ToLower(strings.TrimSpace(t.filterText.GetText()))
 	}
 
-	// remote 名作为 Remote 下的目录节点，按分支原有顺序首次出现时创建。
-	remoteFolders := make(map[string]*tview.TreeNode)
-
-	for _, b := range t.Branches {
-		// 本地和远端分支都按完整分支名做大小写不敏感的 contains 过滤；
-		// 远端分支的完整名带 remote 前缀（如 origin/foo）。
-		if filter != "" && !strings.Contains(strings.ToLower(b.Name), filter) {
-			continue
-		}
-
-		parent := localNode
-		if b.Remote {
-			parent = remoteNode
-			if b.RemoteName != "" {
-				folderNode, ok := remoteFolders[b.RemoteName]
-				if !ok {
-					folderNode = tview.NewTreeNode(folderLabel(b.RemoteName, true)).
-						SetReference(b.RemoteName).
-						SetExpanded(true).
-						SetSelectedTextStyle(t.selectedStyle)
-					remoteNode.AddChild(folderNode)
-					remoteFolders[b.RemoteName] = folderNode
-				}
-				parent = folderNode
-			}
-		}
-
-		// remote 目录已经体现了 remote 名，分支节点只显示后面的部分。
-		name := b.Name
-		if b.Remote && b.RemoteName != "" {
-			name = strings.TrimPrefix(name, b.RemoteName+"/")
-		}
-
-		// HEAD 指向的本地分支前面加绿色对勾；其余本地分支用分支符号占位对齐。
-		// Escape 防止分支名里的 [ 被当作颜色标签。
-		label := tview.Escape(name)
-		isHead := !b.Remote && b.Name == t.HeadRef
-		switch {
-		case isHead:
-			label = "[green]✓[-] " + label
-		case !b.Remote:
-			label = "[gray]↘[-] " + label
-		}
-
-		child := tview.NewTreeNode(label).
-			SetReference(b).
-			SetSelectedTextStyle(t.selectedStyle).
-			SetSelectedFunc(func() {
-				// commits 刷新后行号会变化，每次跳转都按当前列表查询。
-				if row := t.commitRow(b.Hash); row >= 0 {
-					t.commitList.setCurrentItem(row)
-				}
-			})
-		parent.AddChild(child)
-	}
-
-	if len(localNode.GetChildren()) == 0 {
-		branchRoot.RemoveChild(localNode)
-	}
-	if len(remoteNode.GetChildren()) == 0 {
-		branchRoot.RemoveChild(remoteNode)
-	}
-
+	branchRoot := buildBranchTree(t.Branches, filter, t.HeadRef, t.headerStyle, t.headerSelectedStyle, t.selectedStyle)
 	t.branchList.SetRoot(branchRoot)
 
 	if node := t.branchNode(selected); node != nil {
@@ -1019,19 +953,8 @@ func (t *TUI) refreshBranches(selected string) {
 		return
 	}
 	// 默认选中第一个分支，而不是分组标题或 remote 目录。
-	// Walk 的返回 false 只跳过子节点，不会终止遍历，所以命中后不要再覆盖。
-	var first *tview.TreeNode
-	branchRoot.Walk(func(node, _ *tview.TreeNode) bool {
-		if first != nil {
-			return false
-		}
-		if _, ok := node.GetReference().(core.Branch); ok {
-			first = node
-		}
-		return true
-	})
-	if first != nil {
-		t.branchList.SetCurrentNode(first)
+	if node := firstBranchNode(branchRoot); node != nil {
+		t.branchList.SetCurrentNode(node)
 	}
 }
 
@@ -1447,19 +1370,10 @@ func (t *TUI) showRefs(_ refsRequest, refs core.Refs, err error) {
 
 // branchNode 返回分支 name 对应的节点，本地和远端都会匹配；name 为空或不存在时返回 nil。
 func (t *TUI) branchNode(name string) *tview.TreeNode {
-	if name == "" || t.branchList == nil || t.branchList.GetRoot() == nil {
+	if t.branchList == nil {
 		return nil
 	}
-	var found *tview.TreeNode
-	t.branchList.GetRoot().Walk(func(node, _ *tview.TreeNode) bool {
-		branch, ok := node.GetReference().(core.Branch)
-		if ok && branch.Name == name {
-			found = node
-			return false
-		}
-		return true
-	})
-	return found
+	return findBranchNode(t.branchList.GetRoot(), name)
 }
 
 // branchName 返回分支列表当前选中的分支名；分组标题返回空。
