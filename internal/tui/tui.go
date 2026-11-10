@@ -468,7 +468,7 @@ func (t *TUI) setupUI() tview.Primitive {
 			node := branchList.GetCurrentNode()
 			if node != nil {
 				if _, isFolder := node.GetReference().(string); isFolder {
-					setFolderExpanded(node, !node.IsExpanded())
+					setRemoteExpanded(node, !node.IsExpanded())
 				} else {
 					t.checkoutBranch()
 				}
@@ -481,7 +481,7 @@ func (t *TUI) setupUI() tview.Primitive {
 	// 回车或鼠标点击 remote 目录时切换展开状态，点击分支时跳转到对应 commit。
 	branchList.SetSelectedFunc(func(node *tview.TreeNode) {
 		if _, isFolder := node.GetReference().(string); isFolder {
-			setFolderExpanded(node, !node.IsExpanded())
+			setRemoteExpanded(node, !node.IsExpanded())
 			return
 		}
 		if branch, ok := node.GetReference().(core.Branch); ok {

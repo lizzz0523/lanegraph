@@ -24,6 +24,14 @@ func branchLabel(b core.Branch, headRef string) string {
 	return label
 }
 
+// remoteLabel 返回 Remote 分组节点的显示文本。
+func remoteLabel(name string, expanded bool) string {
+	if expanded {
+		return "▼ " + tview.Escape(name)
+	}
+	return "▶ " + tview.Escape(name)
+}
+
 // buildBranchTree 根据分支列表和过滤条件构建分支树。
 func buildBranchTree(branches []core.Branch, filter, headRef string, headerStyle, headerSelectedStyle, selectedStyle tcell.Style) *tview.TreeNode {
 	// 隐藏 root，用 Local / Remote 作为分组标题。
@@ -53,7 +61,7 @@ func buildBranchTree(branches []core.Branch, filter, headRef string, headerStyle
 			if branch.RemoteName != "" {
 				folderNode, ok := remoteFolders[branch.RemoteName]
 				if !ok {
-					folderNode = tview.NewTreeNode(folderLabel(branch.RemoteName, true)).
+					folderNode = tview.NewTreeNode(remoteLabel(branch.RemoteName, true)).
 						SetReference(branch.RemoteName).
 						SetExpanded(true).
 						SetSelectedTextStyle(selectedStyle)
@@ -111,4 +119,12 @@ func findBranchNode(root *tview.TreeNode, name string) *tview.TreeNode {
 		return true
 	})
 	return found
+}
+
+// setRemoteExpanded 同步 remote 分组节点的展开状态和箭头图标。
+func setRemoteExpanded(node *tview.TreeNode, expanded bool) {
+	node.SetExpanded(expanded)
+	if name, ok := node.GetReference().(string); ok {
+		node.SetText(remoteLabel(name, expanded))
+	}
 }
