@@ -1742,7 +1742,7 @@ func (t *TUI) showHistory(_ historyRequest, commits []core.Commit, err error) {
 	t.historyList.SetTitle(fmt.Sprintf(" history (%d) ", len(commits)))
 	items := make([][]string, 0, len(commits))
 	for _, commit := range commits {
-		header := fmt.Sprintf("[aqua]%s[-] [gray]%s[-]", tview.Escape(commit.Author), commit.Date.Format("2006-01-02 15:04:05"))
+		header := fmt.Sprintf("[aqua]%s[-] [gray]%s[-]", tview.Escape(commit.Author), commit.Date.Format("Jan _2, 2006 15:04:05"))
 		subject := " [::b]" + tview.Escape(commit.Subject) + "[-::-]"
 		items = append(items, []string{header, subject})
 	}

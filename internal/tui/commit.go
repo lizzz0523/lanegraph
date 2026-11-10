@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 	"unicode"
 
 	"lanegraph/internal/core"
@@ -14,6 +15,7 @@ import (
 const (
 	colorReset = "[-::-]" // 重置前景色、背景色和属性，否则 refs 的粗体会延续到 subject
 	colorHash  = "[yellow]"
+	colorDate  = "[gray]"
 	colorRefs  = "[aqua::b]"
 )
 
@@ -63,6 +65,14 @@ func authorInitial(name string) string {
 	return string(unicode.ToUpper([]rune(name)[0]))
 }
 
+// commitDate 按 ls 的规则显示提交时间：半年内显示时分，否则显示年份。
+func commitDate(date, now time.Time) string {
+	if date.Before(now) && now.Sub(date) < 31556952*time.Second/2 {
+		return date.Format("Jan _2 15:04")
+	}
+	return date.Format("Jan _2  2006")
+}
+
 type cell struct {
 	up, down, left, right bool
 	vColor, hColor        string
@@ -109,6 +119,7 @@ func (c cell) glyphs() (line, conn string) {
 
 func renderGraph(commits []core.Commit, graph core.Graph) []string {
 	colorOf := authorColorMap(commits)
+	now := time.Now()
 
 	lines := make([]string, 0, len(graph.Rows))
 	for r, row := range graph.Rows {
@@ -185,6 +196,7 @@ func renderGraph(commits []core.Commit, graph core.Graph) []string {
 		}
 		fmt.Fprintf(&out, " %s%s%s", colorHash, hash, colorReset)
 		fmt.Fprintf(&out, " %s%s%s", colorOf[commit.Author], tview.Escape(authorInitial(commit.Author)), colorReset)
+		fmt.Fprintf(&out, " %s%s%s", colorDate, tview.Escape(commitDate(commit.Date, now)), colorReset)
 		if commit.Refs != "" {
 			fmt.Fprintf(&out, " %s(%s)%s", colorRefs, tview.Escape(commit.Refs), colorReset)
 		}
@@ -202,7 +214,7 @@ func renderCommit(commit core.Commit, width int) string {
 		return ""
 	}
 
-	text := fmt.Sprintf("[aqua]%v[-] [gray]%v[-]  [::b]%v[-::-]", tview.Escape(commit.Author), commit.Date.Format("2006-01-02 15:04:05"), tview.Escape(commit.Subject))
+	text := fmt.Sprintf("[aqua]%v[-] [gray]%v[-]  [::b]%v[-::-]", tview.Escape(commit.Author), commit.Date.Format("Jan _2, 2006 15:04:05 -0700"), tview.Escape(commit.Subject))
 	if body := strings.TrimLeft(commit.Body, "\r\n"); body != "" {
 		first, _, more := strings.Cut(body, "\n")
 		if width > 4 {

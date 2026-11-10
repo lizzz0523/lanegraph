@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -158,7 +157,7 @@ func GitCommits(ctx context.Context, repo string) ([]Commit, error) {
 	// topo-order 让同一分支的提交连续输出，减少 lane 交错；它和 date-order 一样保证父提交在子提交之后
 	// -z 用 NUL 分隔记录，body 里的换行才不会把一条记录拆成多行
 	log, err := gitOutput(ctx, repo, "log", "-z", "--topo-order", "--branches",
-		"--remotes", "--tags", "HEAD", "--format=%H%x00%P%x00%D%x00%an%x00%ct%x00%s%x00%b")
+		"--remotes", "--tags", "HEAD", "--format=%H%x00%P%x00%D%x00%an%x00%cI%x00%s%x00%b")
 	if err != nil {
 		return nil, fmt.Errorf("git log error: %w", err)
 	}
@@ -171,8 +170,8 @@ func GitCommits(ctx context.Context, repo string) ([]Commit, error) {
 			continue
 		}
 		date := time.Unix(0, 0)
-		if sec, err := strconv.ParseInt(parts[i+4], 10, 64); err == nil {
-			date = time.Unix(sec, 0)
+		if parsed, err := time.Parse(time.RFC3339, parts[i+4]); err == nil {
+			date = parsed
 		}
 		commits = append(commits, Commit{
 			Hash:    parts[i],
@@ -189,7 +188,7 @@ func GitCommits(ctx context.Context, repo string) ([]Commit, error) {
 
 // GitFileHistory 返回 path 涉及的提交历史，按 git log 默认顺序（新到旧）。
 func GitFileHistory(ctx context.Context, repo, path string) ([]Commit, error) {
-	log, err := gitOutput(ctx, repo, "log", "-z", "--format=%H%x00%P%x00%an%x00%ct%x00%s", "--", path)
+	log, err := gitOutput(ctx, repo, "log", "-z", "--format=%H%x00%P%x00%an%x00%cI%x00%s", "--", path)
 	if err != nil {
 		return nil, fmt.Errorf("git file history error: %w", err)
 	}
@@ -202,8 +201,8 @@ func GitFileHistory(ctx context.Context, repo, path string) ([]Commit, error) {
 			continue
 		}
 		date := time.Unix(0, 0)
-		if sec, err := strconv.ParseInt(parts[i+3], 10, 64); err == nil {
-			date = time.Unix(sec, 0)
+		if parsed, err := time.Parse(time.RFC3339, parts[i+3]); err == nil {
+			date = parsed
 		}
 		commits = append(commits, Commit{
 			Hash:    parts[i],
