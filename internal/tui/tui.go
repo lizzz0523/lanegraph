@@ -3,9 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
-	"time"
 
 	"lanegraph/internal/async"
 	"lanegraph/internal/core"
@@ -1960,28 +1958,11 @@ func (t *TUI) executeChangeOp(op changeOp, change core.FileChange) {
 }
 
 func (t *TUI) showChangeOpLoading(req changeOpRequest) {
-	var message string
-	switch req.op {
-	case opStage:
-		message = "staging " + req.change.Path
-	case opUnstage:
-		message = "unstaging " + req.change.Path
-	case opDiscard:
-		message = "discarding " + req.change.Path
-	}
-	t.statusStart("change", message)
+	t.statusStart("change", t.changeOpLabel(req, false))
 }
 
 func (t *TUI) showChangeOp(req changeOpRequest, _ string, err error) {
-	var message string
-	switch req.op {
-	case opStage:
-		message = "staged " + req.change.Path
-	case opUnstage:
-		message = "unstaged " + req.change.Path
-	default:
-		message = "discarded " + req.change.Path
-	}
+	message := t.changeOpLabel(req, true)
 	if err != nil {
 		// git 的错误可能是多行，压成一行避免撑坏单行 statusBar。
 		message += " failed: " + strings.Join(strings.Fields(err.Error()), " ")
@@ -1990,6 +1971,27 @@ func (t *TUI) showChangeOp(req changeOpRequest, _ string, err error) {
 	}
 	t.statusDone("change", message)
 	t.reloadLocal()
+}
+
+// changeOpLabel 返回本地变更操作的 loading/完成文案。
+func (t *TUI) changeOpLabel(req changeOpRequest, done bool) string {
+	switch req.op {
+	case opStage:
+		if done {
+			return "staged " + req.change.Path
+		}
+		return "staging " + req.change.Path
+	case opUnstage:
+		if done {
+			return "unstaged " + req.change.Path
+		}
+		return "unstaging " + req.change.Path
+	default:
+		if done {
+			return "discarded " + req.change.Path
+		}
+		return "discarding " + req.change.Path
+	}
 }
 
 /** CHECKOUT */
@@ -2030,14 +2032,14 @@ func (t *TUI) executeSync(op syncOp) {
 }
 
 func (t *TUI) showSyncLoading(req syncOpRequest) {
-	t.statusStart("sync", t.syncLabel(req.op, false))
+	t.statusStart("sync", t.syncOpLabel(req.op, false))
 	t.startSyncSpinner()
 }
 
 func (t *TUI) showSync(req syncOpRequest, _ string, err error) {
 	t.stopSyncSpinner()
 
-	message := t.syncLabel(req.op, true)
+	message := t.syncOpLabel(req.op, true)
 	if err != nil {
 		// git 的错误可能是多行，压成一行避免撑坏单行 statusBar。
 		message = strings.Join(strings.Fields(err.Error()), " ")
@@ -2056,8 +2058,8 @@ func (t *TUI) showSync(req syncOpRequest, _ string, err error) {
 	t.refreshTab(t.activeTab)
 }
 
-// syncLabel 返回同步操作的 loading/完成文案。
-func (t *TUI) syncLabel(op syncOp, done bool) string {
+// syncOpLabel 返回同步操作的 loading/完成文案。
+func (t *TUI) syncOpLabel(op syncOp, done bool) string {
 	switch op {
 	case opPull:
 		if done {
@@ -2075,104 +2077,4 @@ func (t *TUI) syncLabel(op syncOp, done bool) string {
 		}
 		return "fetch"
 	}
-}
-
-// startSyncSpinner 启动当前分支前的点阵动画；已有动画时不重复启动。
-func (t *TUI) startSyncSpinner() {
-	if t.syncStop != nil || t.app == nil {
-		return
-	}
-	stop := make(chan struct{})
-	t.syncStop = stop
-	t.syncFrame = 0
-	t.updateSyncIndicator()
-
-	go func() {
-		ticker := time.NewTicker(100 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stop:
-				return
-			case <-ticker.C:
-				t.app.QueueUpdateDraw(func() {
-					// 排队期间同步操作可能已经结束，停止后不再改动分支文本。
-					select {
-					case <-stop:
-						return
-					default:
-					}
-					t.syncFrame = (t.syncFrame + 1) % len(syncFrames)
-					t.updateSyncIndicator()
-				})
-			}
-		}
-	}()
-}
-
-// stopSyncSpinner 停止动画并把当前分支前的标记恢复成对勾。
-func (t *TUI) stopSyncSpinner() {
-	if t.syncStop != nil {
-		close(t.syncStop)
-		t.syncStop = nil
-	}
-	t.syncFrame = -1
-	t.updateSyncIndicator()
-}
-
-// updateSyncIndicator 按当前动画帧更新 HEAD 指向的本地分支节点。
-func (t *TUI) updateSyncIndicator() {
-	node := t.branchNode(t.HeadRef)
-	if node == nil {
-		return
-	}
-	branch, ok := node.GetReference().(core.Branch)
-	if !ok {
-		return
-	}
-	node.SetText(branchLabel(branch, t.HeadRef, t.syncFrame))
-}
-
-/** STATUS */
-
-// statusStart 标记一个槽位正在加载；同一槽位重复调用只更新文案。
-func (t *TUI) statusStart(slot, message string) {
-	if t.statusBar == nil {
-		return
-	}
-	if t.statusBusy == nil {
-		t.statusBusy = make(map[string]string)
-	}
-	t.statusBusy[slot] = message
-	t.renderStatus()
-}
-
-// statusDone 结束槽位的 loading；message 非空时同时更新最近完成信息。
-func (t *TUI) statusDone(slot, message string) {
-	if t.statusBar == nil {
-		return
-	}
-	delete(t.statusBusy, slot)
-	if message != "" {
-		t.statusMsg = message
-	}
-	t.renderStatus()
-}
-
-func (t *TUI) renderStatus() {
-	if len(t.statusBusy) == 0 {
-		if t.statusMsg == "" {
-			t.statusBar.SetText("")
-			return
-		}
-		t.statusBar.SetText("[gray]" + tview.Escape(t.statusMsg) + "[-]")
-		return
-	}
-
-	messages := make([]string, 0, len(t.statusBusy))
-	for _, message := range t.statusBusy {
-		messages = append(messages, tview.Escape(message))
-	}
-	sort.Strings(messages)
-	t.statusBar.SetText("[gray]loading " + strings.Join(messages, ", ") + "…[-]")
 }

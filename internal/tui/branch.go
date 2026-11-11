@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"time"
 
 	"lanegraph/internal/core"
 
@@ -134,4 +135,60 @@ func setRemoteExpanded(node *tview.TreeNode, expanded bool) {
 	if name, ok := node.GetReference().(string); ok {
 		node.SetText(remoteLabel(name, expanded))
 	}
+}
+
+// startSyncSpinner 启动当前分支前的点阵动画；已有动画时不重复启动。
+func (t *TUI) startSyncSpinner() {
+	if t.syncStop != nil || t.app == nil {
+		return
+	}
+	stop := make(chan struct{})
+	t.syncStop = stop
+	t.syncFrame = 0
+	t.renderSyncIndicator()
+
+	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				t.app.QueueUpdateDraw(func() {
+					// 排队期间同步操作可能已经结束，停止后不再改动分支文本。
+					select {
+					case <-stop:
+						return
+					default:
+					}
+					t.syncFrame = (t.syncFrame + 1) % len(syncFrames)
+					t.renderSyncIndicator()
+				})
+			}
+		}
+	}()
+}
+
+// stopSyncSpinner 停止动画并把当前分支前的标记恢复成对勾。
+func (t *TUI) stopSyncSpinner() {
+	if t.syncStop != nil {
+		close(t.syncStop)
+		t.syncStop = nil
+	}
+	t.syncFrame = -1
+	t.renderSyncIndicator()
+}
+
+// renderSyncIndicator 按当前动画帧更新 HEAD 指向的本地分支节点。
+func (t *TUI) renderSyncIndicator() {
+	node := t.branchNode(t.HeadRef)
+	if node == nil {
+		return
+	}
+	branch, ok := node.GetReference().(core.Branch)
+	if !ok {
+		return
+	}
+	node.SetText(branchLabel(branch, t.HeadRef, t.syncFrame))
 }
