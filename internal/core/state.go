@@ -127,6 +127,21 @@ func (s *State) Checkout(ctx context.Context, branch Branch) (string, error) {
 	return GitCheckout(ctx, s.Repo, branch)
 }
 
+// Pull 拉取当前分支的上游变更。
+func (s *State) Pull(ctx context.Context) (string, error) {
+	return GitPull(ctx, s.Repo)
+}
+
+// Push 推送当前分支到它的上游远端。
+func (s *State) Push(ctx context.Context) (string, error) {
+	return GitPush(ctx, s.Repo)
+}
+
+// Fetch 拉取远端引用。
+func (s *State) Fetch(ctx context.Context) (string, error) {
+	return GitFetch(ctx, s.Repo)
+}
+
 // OpenFile 使用系统默认应用打开仓库内的文件（仅支持 macOS）。
 // 文件不存在或不是普通文件时直接返回错误，避免把目录交给 open。
 func (s *State) OpenFile(path string) error {

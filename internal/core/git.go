@@ -130,6 +130,33 @@ func gitRefExists(ctx context.Context, repo, ref string) bool {
 	return err == nil
 }
 
+// GitPull 拉取当前分支的上游变更，返回 git 的输出。
+func GitPull(ctx context.Context, repo string) (string, error) {
+	output, err := gitRemote(ctx, repo, "pull")
+	if err != nil {
+		return "", fmt.Errorf("git pull error: %w", gitStderr(err))
+	}
+	return output, nil
+}
+
+// GitPush 推送当前分支到它的上游远端，返回 git 的输出。
+func GitPush(ctx context.Context, repo string) (string, error) {
+	output, err := gitRemote(ctx, repo, "push")
+	if err != nil {
+		return "", fmt.Errorf("git push error: %w", gitStderr(err))
+	}
+	return output, nil
+}
+
+// GitFetch 拉取远端引用，返回 git 的输出。
+func GitFetch(ctx context.Context, repo string) (string, error) {
+	output, err := gitRemote(ctx, repo, "fetch")
+	if err != nil {
+		return "", fmt.Errorf("git fetch error: %w", gitStderr(err))
+	}
+	return output, nil
+}
+
 type Commit struct {
 	Hash    string
 	Parents []string
@@ -539,6 +566,23 @@ func gitStderr(err error) error {
 		}
 	}
 	return err
+}
+
+// gitRemote 执行访问远端的 git 命令。
+// TUI 独占终端，禁用凭据和编辑器交互，避免 pull 需要合并信息、
+// push/fetch 需要认证时卡在后台，失败原因交给状态栏展示。
+func gitRemote(ctx context.Context, repo string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = repo
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_EDITOR=true")
+	output, err := cmd.Output()
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", err
+	}
+	return string(output), nil
 }
 
 func gitOutput(ctx context.Context, repo string, args ...string) (string, error) {

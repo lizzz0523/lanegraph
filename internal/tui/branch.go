@@ -9,14 +9,21 @@ import (
 	"github.com/rivo/tview"
 )
 
-// branchLabel 返回分支在列表中的显示文本。
-func branchLabel(b core.Branch, headRef string) string {
+// syncFrames 是 pull/push/fetch 期间代替 HEAD 对勾显示的点阵动画帧。
+var syncFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// branchLabel 返回分支在列表中的显示文本；syncFrame >= 0 时用动画帧代替 HEAD 对勾。
+func branchLabel(b core.Branch, headRef string, syncFrame int) string {
 	// remote 目录已经体现了 remote 名，分支节点只显示后面的部分。
 	label := tview.Escape(b.LocalName())
 	switch {
 	case !b.Remote && b.Name == headRef:
-		// HEAD 指向的本地分支前面加绿色对勾。
-		return "[green]✓[-] " + label
+		// HEAD 指向的本地分支前面加绿色对勾；同步操作期间换成点阵动画。
+		mark := "✓"
+		if syncFrame >= 0 {
+			mark = syncFrames[syncFrame%len(syncFrames)]
+		}
+		return "[green]" + mark + "[-] " + label
 	case !b.Remote:
 		// 其余本地分支用分支符号占位对齐。
 		return "[gray]↘[-] " + label
@@ -33,7 +40,7 @@ func remoteLabel(name string, expanded bool) string {
 }
 
 // buildBranchTree 根据分支列表和过滤条件构建分支树。
-func buildBranchTree(branches []core.Branch, filter, headRef string, headerStyle, headerSelectedStyle, selectedStyle tcell.Style) *tview.TreeNode {
+func buildBranchTree(branches []core.Branch, filter, headRef string, syncFrame int, headerStyle, headerSelectedStyle, selectedStyle tcell.Style) *tview.TreeNode {
 	// 隐藏 root，用 Local / Remote 作为分组标题。
 	localNode := tview.NewTreeNode("Local").
 		SetTextStyle(headerStyle).
@@ -72,7 +79,7 @@ func buildBranchTree(branches []core.Branch, filter, headRef string, headerStyle
 			}
 		}
 
-		child := tview.NewTreeNode(branchLabel(branch, headRef)).
+		child := tview.NewTreeNode(branchLabel(branch, headRef, syncFrame)).
 			SetReference(branch).
 			SetSelectedTextStyle(selectedStyle)
 		parent.AddChild(child)

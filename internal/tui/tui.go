@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"lanegraph/internal/async"
 	"lanegraph/internal/core"
@@ -57,6 +58,8 @@ type TUI struct {
 	pendingCommit  string            // history 跳转后等待 commits 刷新完成再选中的提交
 	promptVisible  bool              // discard 确认弹窗是否正在显示
 	historyVisible bool              // 文件历史弹窗是否正在显示
+	syncFrame      int               // 分支同步动画当前帧；-1 表示没有在执行同步操作
+	syncStop       chan struct{}     // 关闭后停止分支同步动画
 	quitting       bool              // 退出流程已启动，忽略重复退出
 
 	tabStyle            tcell.Style
@@ -81,6 +84,7 @@ type TUI struct {
 
 	changeOp *async.Loader[string, changeOpRequest]
 	checkout *async.Loader[string, checkoutRequest]
+	syncOp   *async.Loader[string, syncOpRequest]
 }
 
 type refsRequest struct{}
@@ -134,6 +138,19 @@ type checkoutRequest struct {
 	branch core.Branch
 }
 
+// syncOp 是当前分支的远程同步操作类型。
+type syncOp uint8
+
+const (
+	opPull syncOp = iota
+	opPush
+	opFetch
+)
+
+type syncOpRequest struct {
+	op syncOp
+}
+
 func New(st *core.State) *TUI {
 	return &TUI{State: st}
 }
@@ -168,6 +185,19 @@ func (t *TUI) Run() error {
 		case event.Key() == tcell.KeyBacktab && !t.promptVisible:
 			app.SetFocus(t.nextFocus(-1))
 			return nil
+		// p / P / f 全局触发当前分支的 pull / push / fetch；filter 输入时不拦截。
+		case event.Key() == tcell.KeyRune && !filtering && !t.promptVisible:
+			switch event.Rune() {
+			case 'p':
+				t.syncBranch(opPull)
+				return nil
+			case 'P':
+				t.syncBranch(opPush)
+				return nil
+			case 'f':
+				t.syncBranch(opFetch)
+				return nil
+			}
 		}
 		return event
 	})
@@ -597,6 +627,7 @@ func (t *TUI) setupUI() tview.Primitive {
 
 	t.activeTab = tabCommit
 	t.statusBusy = make(map[string]string)
+	t.syncFrame = -1
 
 	t.tabStyle = defaultStyle
 	t.tabActiveStyle = tabActiveStyle
@@ -744,6 +775,23 @@ func (t *TUI) setupLoaders() {
 		OnLoading: t.showCheckoutLoading,
 		OnResult:  t.showCheckout,
 	})
+
+	t.syncOp = async.New(async.Config[string, syncOpRequest]{
+		Key: func(req syncOpRequest) string { return fmt.Sprintf("%d", req.op) },
+		Load: func(ctx context.Context, req syncOpRequest) (string, error) {
+			switch req.op {
+			case opPull:
+				return t.Pull(ctx)
+			case opPush:
+				return t.Push(ctx)
+			default:
+				return t.Fetch(ctx)
+			}
+		},
+		Post:      post,
+		OnLoading: t.showSyncLoading,
+		OnResult:  t.showSync,
+	})
 }
 
 func (t *TUI) loaders() []async.LoaderLifecycle {
@@ -758,6 +806,7 @@ func (t *TUI) loaders() []async.LoaderLifecycle {
 		t.fileHistoryDiff,
 		t.changeOp,
 		t.checkout,
+		t.syncOp,
 	}
 }
 
@@ -829,6 +878,9 @@ func (t *TUI) quit() {
 		return
 	}
 	t.quitting = true
+
+	// 先停掉动画，避免 ticker 在 app.Stop 之后继续投递更新。
+	t.stopSyncSpinner()
 
 	// Close 是非阻塞的，先阻止新的请求并取消在途 Load。
 	t.closeLoaders()
@@ -945,7 +997,7 @@ func (t *TUI) refreshBranches(selected string) {
 		filter = strings.ToLower(strings.TrimSpace(t.filterText.GetText()))
 	}
 
-	branchRoot := buildBranchTree(t.Branches, filter, t.HeadRef, t.headerStyle, t.headerSelectedStyle, t.selectedStyle)
+	branchRoot := buildBranchTree(t.Branches, filter, t.HeadRef, t.syncFrame, t.headerStyle, t.headerSelectedStyle, t.selectedStyle)
 	t.branchList.SetRoot(branchRoot)
 
 	if node := t.branchNode(selected); node != nil {
@@ -1333,6 +1385,14 @@ func (t *TUI) checkoutBranch() {
 		return
 	}
 	t.executeCheckout(node)
+}
+
+// syncBranch 拉取当前分支、推送当前分支或拉取远端引用；同一时间只允许一个同步操作。
+func (t *TUI) syncBranch(op syncOp) {
+	if t.syncOp == nil || t.syncOp.Loading() {
+		return
+	}
+	t.executeSync(op)
 }
 
 /** REFS */
@@ -1960,6 +2020,117 @@ func (t *TUI) showCheckout(_ checkoutRequest, branch string, err error) {
 	t.pendingBranch = branch
 	t.reloadRefs()
 	t.reloadCommits()
+}
+
+/** SYNC */
+
+// executeSync 通过 Reload 绕过缓存，保证每次按键都真正执行 git 命令。
+func (t *TUI) executeSync(op syncOp) {
+	t.syncOp.Reload(syncOpRequest{op: op})
+}
+
+func (t *TUI) showSyncLoading(req syncOpRequest) {
+	t.statusStart("sync", t.syncLabel(req.op, false))
+	t.startSyncSpinner()
+}
+
+func (t *TUI) showSync(req syncOpRequest, _ string, err error) {
+	t.stopSyncSpinner()
+
+	message := t.syncLabel(req.op, true)
+	if err != nil {
+		// git 的错误可能是多行，压成一行避免撑坏单行 statusBar。
+		message = strings.Join(strings.Fields(err.Error()), " ")
+		switch req.op {
+		case opPull:
+			message = "pull failed: " + message
+		case opPush:
+			message = "push failed: " + message
+		default:
+			message = "fetch failed: " + message
+		}
+	}
+	t.statusDone("sync", message)
+
+	// pull 失败也可能留下冲突或已更新的 refs，统一按当前 tab 刷新。
+	t.refreshTab(t.activeTab)
+}
+
+// syncLabel 返回同步操作的 loading/完成文案。
+func (t *TUI) syncLabel(op syncOp, done bool) string {
+	switch op {
+	case opPull:
+		if done {
+			return "pulled " + t.HeadRef
+		}
+		return "pull " + t.HeadRef
+	case opPush:
+		if done {
+			return "pushed " + t.HeadRef
+		}
+		return "push " + t.HeadRef
+	default:
+		if done {
+			return "fetched"
+		}
+		return "fetch"
+	}
+}
+
+// startSyncSpinner 启动当前分支前的点阵动画；已有动画时不重复启动。
+func (t *TUI) startSyncSpinner() {
+	if t.syncStop != nil || t.app == nil {
+		return
+	}
+	stop := make(chan struct{})
+	t.syncStop = stop
+	t.syncFrame = 0
+	t.updateSyncIndicator()
+
+	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				t.app.QueueUpdateDraw(func() {
+					// 排队期间同步操作可能已经结束，停止后不再改动分支文本。
+					select {
+					case <-stop:
+						return
+					default:
+					}
+					t.syncFrame = (t.syncFrame + 1) % len(syncFrames)
+					t.updateSyncIndicator()
+				})
+			}
+		}
+	}()
+}
+
+// stopSyncSpinner 停止动画并把当前分支前的标记恢复成对勾。
+func (t *TUI) stopSyncSpinner() {
+	if t.syncStop != nil {
+		close(t.syncStop)
+		t.syncStop = nil
+	}
+	t.syncFrame = -1
+	t.updateSyncIndicator()
+}
+
+// updateSyncIndicator 按当前动画帧更新 HEAD 指向的本地分支节点。
+func (t *TUI) updateSyncIndicator() {
+	node := t.branchNode(t.HeadRef)
+	if node == nil {
+		return
+	}
+	branch, ok := node.GetReference().(core.Branch)
+	if !ok {
+		return
+	}
+	node.SetText(branchLabel(branch, t.HeadRef, t.syncFrame))
 }
 
 /** STATUS */
