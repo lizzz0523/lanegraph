@@ -12,7 +12,7 @@ import (
 )
 
 func GitRepoName(ctx context.Context, repo string) string {
-	root, err := gitOutput(ctx, repo, "rev-parse", "--show-toplevel")
+	root, err := gitOutputTrimmed(ctx, repo, "rev-parse", "--show-toplevel")
 	if err != nil || root == "" {
 		return filepath.Base(repo)
 	}
@@ -20,15 +20,15 @@ func GitRepoName(ctx context.Context, repo string) string {
 }
 
 func GitRepoHead(ctx context.Context, repo string) (string, string) {
-	hash, _ := gitOutput(ctx, repo, "rev-parse", "HEAD")
+	hash, _ := gitOutputTrimmed(ctx, repo, "rev-parse", "HEAD")
 
 	// HEAD 指向分支时直接显示分支名
-	if ref, err := gitOutput(ctx, repo, "symbolic-ref", "--short", "-q", "HEAD"); err == nil && ref != "" {
+	if ref, err := gitOutputTrimmed(ctx, repo, "symbolic-ref", "--short", "-q", "HEAD"); err == nil && ref != "" {
 		return ref, hash
 	}
 	// detached HEAD：优先显示指向该提交的 tag，其次本地分支
 	for _, pattern := range []string{"refs/tags", "refs/heads"} {
-		if ref, err := gitOutput(ctx, repo, "for-each-ref", "--points-at", "HEAD", "--count=1", "--format=%(refname:short)", pattern); err == nil && ref != "" {
+		if ref, err := gitOutputTrimmed(ctx, repo, "for-each-ref", "--points-at", "HEAD", "--count=1", "--format=%(refname:short)", pattern); err == nil && ref != "" {
 			return ref, hash
 		}
 	}
@@ -69,7 +69,7 @@ func (b Branch) LocalName() string {
 
 func GitBranches(ctx context.Context, repo string) ([]Branch, error) {
 	// 本地 + 远端分支；按提交时间倒序，最新改动的排在前面
-	refs, err := gitOutput(ctx, repo, "for-each-ref", "--sort=-committerdate",
+	refs, err := gitOutputTrimmed(ctx, repo, "for-each-ref", "--sort=-committerdate",
 		"--format=%(refname)%00%(refname:short)%00%(objectname)%00%(symref)",
 		"refs/heads", "refs/remotes")
 	if err != nil {
@@ -113,26 +113,26 @@ func GitCheckout(ctx context.Context, repo string, branch Branch) (string, error
 
 	// 远端分支对应的本地分支已存在时直接切换，不重置、不改 upstream。
 	if branch.Remote && !gitRefExists(ctx, repo, "refs/heads/"+local) {
-		if _, err := gitOutputUntrimmed(ctx, repo, "checkout", "-b", local, "--track", branch.Name); err != nil {
+		if _, err := gitOutput(ctx, repo, nil, "checkout", "-b", local, "--track", branch.Name); err != nil {
 			return "", fmt.Errorf("git checkout error: %w", gitStderr(err))
 		}
 		return local, nil
 	}
 
-	if _, err := gitOutputUntrimmed(ctx, repo, "checkout", local); err != nil {
+	if _, err := gitOutput(ctx, repo, nil, "checkout", local); err != nil {
 		return "", fmt.Errorf("git checkout error: %w", gitStderr(err))
 	}
 	return local, nil
 }
 
 func gitRefExists(ctx context.Context, repo, ref string) bool {
-	_, err := gitOutput(ctx, repo, "show-ref", "--verify", "--quiet", ref)
+	_, err := gitOutputTrimmed(ctx, repo, "show-ref", "--verify", "--quiet", ref)
 	return err == nil
 }
 
 // GitPull 拉取当前分支的上游变更，返回 git 的输出。
 func GitPull(ctx context.Context, repo string) (string, error) {
-	output, err := gitRemote(ctx, repo, "pull")
+	output, err := gitOutput(ctx, repo, gitRemoteEnv(), "pull")
 	if err != nil {
 		return "", fmt.Errorf("git pull error: %w", gitStderr(err))
 	}
@@ -141,7 +141,7 @@ func GitPull(ctx context.Context, repo string) (string, error) {
 
 // GitPush 推送当前分支到它的上游远端，返回 git 的输出。
 func GitPush(ctx context.Context, repo string) (string, error) {
-	output, err := gitRemote(ctx, repo, "push")
+	output, err := gitOutput(ctx, repo, gitRemoteEnv(), "push")
 	if err != nil {
 		return "", fmt.Errorf("git push error: %w", gitStderr(err))
 	}
@@ -150,11 +150,17 @@ func GitPush(ctx context.Context, repo string) (string, error) {
 
 // GitFetch 拉取远端引用，返回 git 的输出。
 func GitFetch(ctx context.Context, repo string) (string, error) {
-	output, err := gitRemote(ctx, repo, "fetch")
+	output, err := gitOutput(ctx, repo, gitRemoteEnv(), "fetch")
 	if err != nil {
 		return "", fmt.Errorf("git fetch error: %w", gitStderr(err))
 	}
 	return output, nil
+}
+
+// gitRemoteEnv 返回访问远端时使用的非交互环境：
+// TUI 独占终端，禁止 git 弹出凭据和编辑器提示。
+func gitRemoteEnv() []string {
+	return append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_EDITOR=true")
 }
 
 type Commit struct {
@@ -183,7 +189,7 @@ func GitCommits(ctx context.Context, repo string) ([]Commit, error) {
 	// 起点为 HEAD + 本地分支 + 远端分支 + 标签（不含 stash），未合并的分支也会被画出来
 	// topo-order 让同一分支的提交连续输出，减少 lane 交错；它和 date-order 一样保证父提交在子提交之后
 	// -z 用 NUL 分隔记录，body 里的换行才不会把一条记录拆成多行
-	log, err := gitOutput(ctx, repo, "log", "-z", "--topo-order", "--branches",
+	log, err := gitOutputTrimmed(ctx, repo, "log", "-z", "--topo-order", "--branches",
 		"--remotes", "--tags", "HEAD", "--format=%H%x00%P%x00%D%x00%an%x00%cI%x00%s%x00%b")
 	if err != nil {
 		return nil, fmt.Errorf("git log error: %w", err)
@@ -215,7 +221,7 @@ func GitCommits(ctx context.Context, repo string) ([]Commit, error) {
 
 // GitFileHistory 返回 path 涉及的提交历史，按 git log 默认顺序（新到旧）。
 func GitFileHistory(ctx context.Context, repo, path string) ([]Commit, error) {
-	log, err := gitOutput(ctx, repo, "log", "-z", "--format=%H%x00%P%x00%an%x00%cI%x00%s", "--", path)
+	log, err := gitOutputTrimmed(ctx, repo, "log", "-z", "--format=%H%x00%P%x00%an%x00%cI%x00%s", "--", path)
 	if err != nil {
 		return nil, fmt.Errorf("git file history error: %w", err)
 	}
@@ -276,7 +282,7 @@ func GitCommitFiles(ctx context.Context, repo string, commit Commit, compare *Co
 	} else {
 		args = []string{"show", "--format=", "--name-status", "-z", "-M", commit.Hash}
 	}
-	diff, err := gitOutputUntrimmed(ctx, repo, args...)
+	diff, err := gitOutput(ctx, repo, nil, args...)
 	if err != nil {
 		return nil, fmt.Errorf("git commit files error: %w", err)
 	}
@@ -286,17 +292,17 @@ func GitCommitFiles(ctx context.Context, repo string, commit Commit, compare *Co
 // GitLocalChanges 返回本地工作区的全部变更：
 // 暂存区（index vs HEAD）、未暂存（worktree vs index）和未跟踪文件。
 func GitLocalChanges(ctx context.Context, repo string) ([]FileChange, error) {
-	staged, err := gitOutputUntrimmed(ctx, repo, "diff", "--cached", "--name-status", "-z", "-M")
+	staged, err := gitOutput(ctx, repo, nil, "diff", "--cached", "--name-status", "-z", "-M")
 	if err != nil {
 		return nil, fmt.Errorf("git staged changes error: %w", err)
 	}
 
-	unstaged, err := gitOutputUntrimmed(ctx, repo, "diff", "--name-status", "-z", "-M")
+	unstaged, err := gitOutput(ctx, repo, nil, "diff", "--name-status", "-z", "-M")
 	if err != nil {
 		return nil, fmt.Errorf("git unstaged changes error: %w", err)
 	}
 
-	untracked, err := gitOutputUntrimmed(ctx, repo, "ls-files", "--others", "--exclude-standard", "-z")
+	untracked, err := gitOutput(ctx, repo, nil, "ls-files", "--others", "--exclude-standard", "-z")
 	if err != nil {
 		return nil, fmt.Errorf("git untracked files error: %w", err)
 	}
@@ -346,7 +352,7 @@ func GitStage(ctx context.Context, repo string, change FileChange) error {
 		return nil
 	}
 	args := append([]string{"add", "-A", "--"}, change.paths()...)
-	if _, err := gitOutputUntrimmed(ctx, repo, args...); err != nil {
+	if _, err := gitOutput(ctx, repo, nil, args...); err != nil {
 		return fmt.Errorf("git stage error: %w", gitStderr(err))
 	}
 	return nil
@@ -362,14 +368,14 @@ func GitUnstage(ctx context.Context, repo string, change FileChange) error {
 	// 空仓库还没有 HEAD，reset 无法执行，只能把文件从索引里移除。
 	if !gitRefExists(ctx, repo, "HEAD") {
 		args := append([]string{"rm", "-r", "--cached", "-q", "--"}, paths...)
-		if _, err := gitOutputUntrimmed(ctx, repo, args...); err != nil {
+		if _, err := gitOutput(ctx, repo, nil, args...); err != nil {
 			return fmt.Errorf("git unstage error: %w", gitStderr(err))
 		}
 		return nil
 	}
 
 	args := append([]string{"reset", "-q", "HEAD", "--"}, paths...)
-	if _, err := gitOutputUntrimmed(ctx, repo, args...); err != nil {
+	if _, err := gitOutput(ctx, repo, nil, args...); err != nil {
 		return fmt.Errorf("git unstage error: %w", gitStderr(err))
 	}
 	return nil
@@ -408,14 +414,14 @@ func discardWorktree(ctx context.Context, repo string, change FileChange) error 
 func discardStaged(ctx context.Context, repo string, change FileChange) error {
 	if !gitRefExists(ctx, repo, "HEAD") {
 		args := append([]string{"rm", "-r", "--cached", "-q", "--"}, change.paths()...)
-		if _, err := gitOutputUntrimmed(ctx, repo, args...); err != nil {
+		if _, err := gitOutput(ctx, repo, nil, args...); err != nil {
 			return fmt.Errorf("git discard error: %w", gitStderr(err))
 		}
 		return removeWorktree(repo, change.Path)
 	}
 
 	args := append([]string{"reset", "-q", "HEAD", "--"}, change.paths()...)
-	if _, err := gitOutputUntrimmed(ctx, repo, args...); err != nil {
+	if _, err := gitOutput(ctx, repo, nil, args...); err != nil {
 		return fmt.Errorf("git discard error: %w", gitStderr(err))
 	}
 
@@ -436,7 +442,7 @@ func discardStaged(ctx context.Context, repo string, change FileChange) error {
 // restoreWorktree 用索引里的版本覆盖工作区文件。
 func restoreWorktree(ctx context.Context, repo string, paths ...string) error {
 	args := append([]string{"restore", "--worktree", "--"}, paths...)
-	if _, err := gitOutputUntrimmed(ctx, repo, args...); err != nil {
+	if _, err := gitOutput(ctx, repo, nil, args...); err != nil {
 		return fmt.Errorf("git restore error: %w", gitStderr(err))
 	}
 	return nil
@@ -481,7 +487,7 @@ func GitFileDiff(ctx context.Context, repo string, commit Commit, compare *Commi
 	}
 	args = append(args, change.Path)
 
-	diff, err := gitOutputUntrimmed(ctx, repo, args...)
+	diff, err := gitOutput(ctx, repo, nil, args...)
 	if err != nil {
 		return "", fmt.Errorf("git file diff error: %w", err)
 	}
@@ -535,7 +541,7 @@ func gitWorkingDiff(ctx context.Context, repo string, change FileChange, base ..
 		args = append(args, change.OldPath)
 	}
 	args = append(args, change.Path)
-	return gitOutputUntrimmed(ctx, repo, args...)
+	return gitOutput(ctx, repo, nil, args...)
 }
 
 // gitDiffNoIndex 生成未跟踪文件相对 /dev/null 的 diff。
@@ -568,35 +574,20 @@ func gitStderr(err error) error {
 	return err
 }
 
-// gitRemote 执行访问远端的 git 命令。
-// TUI 独占终端，禁用凭据和编辑器交互，避免 pull 需要合并信息、
-// push/fetch 需要认证时卡在后台，失败原因交给状态栏展示。
-func gitRemote(ctx context.Context, repo string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = repo
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_EDITOR=true")
-	output, err := cmd.Output()
-	if err != nil {
-		if ctx.Err() != nil {
-			return "", ctx.Err()
-		}
-		return "", err
-	}
-	return string(output), nil
-}
-
-func gitOutput(ctx context.Context, repo string, args ...string) (string, error) {
-	output, err := gitOutputUntrimmed(ctx, repo, args...)
+func gitOutputTrimmed(ctx context.Context, repo string, args ...string) (string, error) {
+	output, err := gitOutput(ctx, repo, nil, args...)
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(output), nil
 }
 
-// gitOutputUntrimmed 保留原始输出，供 -z 分隔的路径解析使用，避免 TrimSpace 破坏文件名。
-func gitOutputUntrimmed(ctx context.Context, repo string, args ...string) (string, error) {
+// gitOutput 保留原始输出，供 -z 分隔的路径解析使用，避免 TrimSpace 破坏文件名。
+// env 为 nil 时继承当前进程环境。
+func gitOutput(ctx context.Context, repo string, env []string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = repo
+	cmd.Env = env
 	output, err := cmd.Output()
 	if err != nil {
 		if ctx.Err() != nil {
