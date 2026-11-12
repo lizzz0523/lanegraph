@@ -33,11 +33,8 @@ func GitRepoHead(ctx context.Context, repo string) (string, string) {
 		}
 	}
 	// 没有 ref 可显示时回退到 7 位短 hash
-	if len(hash) > 7 {
-		return hash[:7], hash
-	}
 	if hash != "" {
-		return hash, hash
+		return shortHash(hash), hash
 	}
 	return "HEAD", ""
 }
@@ -206,6 +203,19 @@ type Commit struct {
 	Date    time.Time
 	Subject string
 	Body    string
+}
+
+// shortHash 返回 7 位短 hash。
+func shortHash(hash string) string {
+	if len(hash) > 7 {
+		return hash[:7]
+	}
+	return hash
+}
+
+// ShortHash 返回提交的 7 位短 hash。
+func (c Commit) ShortHash() string {
+	return shortHash(c.Hash)
 }
 
 // diffBase 返回 diff 的基准提交：优先使用显式 compare，其次第一个 parent。

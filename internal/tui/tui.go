@@ -1090,7 +1090,7 @@ func (t *TUI) resetCommit() {
 	commit := t.Commits[row]
 
 	message := fmt.Sprintf("Reset %s to %s?\n\n%s\n\n[gray]Soft[-] keeps index and working tree\n[gray]Mixed[-] resets index, keeps working tree\n[red]Hard[-] discards index and working tree changes",
-		tview.Escape(t.HeadRef), tview.Escape(shortHash(commit.Hash)), tview.Escape(commit.Subject))
+		tview.Escape(t.HeadRef), tview.Escape(commit.ShortHash()), tview.Escape(commit.Subject))
 
 	prompt := tview.NewModal().
 		SetText(message).
@@ -2162,7 +2162,7 @@ func (t *TUI) executeReset(commit core.Commit, mode core.ResetMode) {
 }
 
 func (t *TUI) showResetLoading(req resetRequest) {
-	t.statusStart("reset", t.resetLabel(req, false))
+	t.statusStart("reset", "resetting --"+req.mode.String()+" "+req.commit.ShortHash())
 }
 
 func (t *TUI) showReset(req resetRequest, _ string, err error) {
@@ -2172,16 +2172,8 @@ func (t *TUI) showReset(req resetRequest, _ string, err error) {
 		t.statusDone("reset", "reset failed: "+message)
 		return
 	}
-	t.statusDone("reset", t.resetLabel(req, true))
+	t.statusDone("reset", "reset --"+req.mode.String()+" "+req.commit.ShortHash())
 
 	// reset 会移动 HEAD，并可能改变索引和工作区，统一按当前 tab 刷新。
 	t.refreshTab(t.activeTab)
-}
-
-// resetLabel 返回 reset 操作的 loading/完成文案。
-func (t *TUI) resetLabel(req resetRequest, done bool) string {
-	if done {
-		return "reset --" + req.mode.String() + " " + shortHash(req.commit.Hash)
-	}
-	return "resetting --" + req.mode.String() + " " + shortHash(req.commit.Hash)
 }
