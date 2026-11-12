@@ -83,6 +83,7 @@ type TUI struct {
 	changeOp *async.Loader[string, changeOpRequest]
 	checkout *async.Loader[string, checkoutRequest]
 	syncOp   *async.Loader[string, syncOpRequest]
+	reset    *async.Loader[string, resetRequest]
 }
 
 type refsRequest struct{}
@@ -147,6 +148,11 @@ const (
 
 type syncOpRequest struct {
 	op syncOp
+}
+
+type resetRequest struct {
+	commit core.Commit
+	mode   core.ResetMode
 }
 
 func New(st *core.State) *TUI {
@@ -268,6 +274,15 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetBorderPadding(0, 0, 1, 1).
 		SetFocusFunc(func() { t.setFocusBorder(commitList.Box, true) }).
 		SetBlurFunc(func() { t.setFocusBorder(commitList.Box, false) })
+
+	// R 把当前分支 reset 到选中的 commit。
+	commitList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyRune && event.Rune() == 'R' {
+			t.resetCommit()
+			return nil
+		}
+		return event
+	})
 
 	commitList.setLines(renderGraph(t.Commits, core.ComputeGraph(t.Commits)))
 
@@ -790,6 +805,18 @@ func (t *TUI) setupLoaders() {
 		OnLoading: t.showSyncLoading,
 		OnResult:  t.showSync,
 	})
+
+	t.reset = async.New(async.Config[string, resetRequest]{
+		Key: func(req resetRequest) string {
+			return fmt.Sprintf("%s\x00%d", req.commit.Hash, req.mode)
+		},
+		Load: func(ctx context.Context, req resetRequest) (string, error) {
+			return t.Reset(ctx, req.commit, req.mode)
+		},
+		Post:      post,
+		OnLoading: t.showResetLoading,
+		OnResult:  t.showReset,
+	})
 }
 
 func (t *TUI) loaders() []async.LoaderLifecycle {
@@ -805,6 +832,7 @@ func (t *TUI) loaders() []async.LoaderLifecycle {
 		t.changeOp,
 		t.checkout,
 		t.syncOp,
+		t.reset,
 	}
 }
 
@@ -1048,6 +1076,53 @@ func (t *TUI) compareCommit(index int) {
 	}
 
 	t.applyCompare(&compare)
+}
+
+// resetCommit 先弹窗选择 reset 模式，确认后把当前分支重置到选中的 commit。
+func (t *TUI) resetCommit() {
+	if t.reset == nil || t.root == nil || t.promptVisible || t.reset.Loading() {
+		return
+	}
+	row := t.commitList.currentItem()
+	if row < 0 || row >= len(t.Commits) {
+		return
+	}
+	commit := t.Commits[row]
+
+	message := fmt.Sprintf("Reset %s to %s?\n\n%s\n\n[gray]Soft[-] keeps index and working tree\n[gray]Mixed[-] resets index, keeps working tree\n[red]Hard[-] discards index and working tree changes",
+		tview.Escape(t.HeadRef), tview.Escape(shortHash(commit.Hash)), tview.Escape(commit.Subject))
+
+	prompt := tview.NewModal().
+		SetText(message).
+		AddButtons([]string{"Cancel", "Soft", "Mixed", "Hard"}).
+		SetDoneFunc(func(buttonIndex int, _ string) {
+			t.root.RemovePage("reset")
+			t.promptVisible = false
+			t.app.SetFocus(t.commitList)
+			switch buttonIndex {
+			case 1:
+				t.executeReset(commit, core.ResetSoft)
+			case 2:
+				t.executeReset(commit, core.ResetMixed)
+			case 3:
+				t.executeReset(commit, core.ResetHard)
+			}
+		})
+
+	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
+	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
+	prompt.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+	prompt.Box.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+
+	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
+	// 固定成白底黑字，保证按钮文字始终是深色。
+	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
+		Background(tview.Styles.PrimaryTextColor).
+		Foreground(tcell.ColorBlack))
+
+	t.promptVisible = true
+	t.root.AddPage("reset", prompt, true, true)
+	t.app.SetFocus(prompt)
 }
 
 // openFile 用系统默认应用打开当前选中的文件；目录、分组和占位节点忽略。
@@ -2032,14 +2107,14 @@ func (t *TUI) executeSync(op syncOp) {
 }
 
 func (t *TUI) showSyncLoading(req syncOpRequest) {
-	t.statusStart("sync", t.syncOpLabel(req.op, false))
+	t.statusStart("sync", t.syncOpLabel(req, false))
 	t.startSyncSpinner()
 }
 
 func (t *TUI) showSync(req syncOpRequest, _ string, err error) {
 	t.stopSyncSpinner()
 
-	message := t.syncOpLabel(req.op, true)
+	message := t.syncOpLabel(req, true)
 	if err != nil {
 		// git 的错误可能是多行，压成一行避免撑坏单行 statusBar。
 		message = strings.Join(strings.Fields(err.Error()), " ")
@@ -2059,8 +2134,8 @@ func (t *TUI) showSync(req syncOpRequest, _ string, err error) {
 }
 
 // syncOpLabel 返回同步操作的 loading/完成文案。
-func (t *TUI) syncOpLabel(op syncOp, done bool) string {
-	switch op {
+func (t *TUI) syncOpLabel(req syncOpRequest, done bool) string {
+	switch req.op {
 	case opPull:
 		if done {
 			return "pulled " + t.HeadRef
@@ -2077,4 +2152,36 @@ func (t *TUI) syncOpLabel(op syncOp, done bool) string {
 		}
 		return "fetch"
 	}
+}
+
+/** RESET */
+
+// executeReset 通过 Reload 绕过缓存，保证每次选择都真正执行 git reset。
+func (t *TUI) executeReset(commit core.Commit, mode core.ResetMode) {
+	t.reset.Reload(resetRequest{commit: commit, mode: mode})
+}
+
+func (t *TUI) showResetLoading(req resetRequest) {
+	t.statusStart("reset", t.resetLabel(req, false))
+}
+
+func (t *TUI) showReset(req resetRequest, _ string, err error) {
+	if err != nil {
+		// git 的错误可能是多行，压成一行避免撑坏单行 statusBar。
+		message := strings.Join(strings.Fields(err.Error()), " ")
+		t.statusDone("reset", "reset failed: "+message)
+		return
+	}
+	t.statusDone("reset", t.resetLabel(req, true))
+
+	// reset 会移动 HEAD，并可能改变索引和工作区，统一按当前 tab 刷新。
+	t.refreshTab(t.activeTab)
+}
+
+// resetLabel 返回 reset 操作的 loading/完成文案。
+func (t *TUI) resetLabel(req resetRequest, done bool) string {
+	if done {
+		return "reset --" + req.mode.String() + " " + shortHash(req.commit.Hash)
+	}
+	return "resetting --" + req.mode.String() + " " + shortHash(req.commit.Hash)
 }

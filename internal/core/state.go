@@ -127,6 +127,11 @@ func (s *State) Checkout(ctx context.Context, branch Branch) (string, error) {
 	return GitCheckout(ctx, s.Repo, branch)
 }
 
+// Reset 把当前分支重置到 commit。
+func (s *State) Reset(ctx context.Context, commit Commit, mode ResetMode) (string, error) {
+	return GitReset(ctx, s.Repo, commit, mode)
+}
+
 // Pull 拉取当前分支的上游变更。
 func (s *State) Pull(ctx context.Context) (string, error) {
 	return GitPull(ctx, s.Repo)

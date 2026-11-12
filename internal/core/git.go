@@ -130,6 +130,41 @@ func gitRefExists(ctx context.Context, repo, ref string) bool {
 	return err == nil
 }
 
+// ResetMode 是 git reset 的重置模式。
+type ResetMode uint8
+
+const (
+	ResetSoft ResetMode = iota
+	ResetMixed
+	ResetHard
+)
+
+// String 返回 git reset 对应的模式名。
+func (m ResetMode) String() string {
+	switch m {
+	case ResetSoft:
+		return "soft"
+	case ResetMixed:
+		return "mixed"
+	case ResetHard:
+		return "hard"
+	default:
+		return fmt.Sprintf("unknown(%d)", uint8(m))
+	}
+}
+
+// GitReset 把当前分支重置到 commit；soft/mixed 保留工作区，hard 同时重置工作区。
+func GitReset(ctx context.Context, repo string, commit Commit, mode ResetMode) (string, error) {
+	if mode != ResetSoft && mode != ResetMixed && mode != ResetHard {
+		return "", fmt.Errorf("unknown reset mode: %d", mode)
+	}
+	output, err := gitOutput(ctx, repo, nil, "reset", "--"+mode.String(), commit.Hash)
+	if err != nil {
+		return "", fmt.Errorf("git reset error: %w", gitStderr(err))
+	}
+	return output, nil
+}
+
 // GitPull 拉取当前分支的上游变更，返回 git 的输出。
 func GitPull(ctx context.Context, repo string) (string, error) {
 	output, err := gitOutput(ctx, repo, gitRemoteEnv(), "pull")

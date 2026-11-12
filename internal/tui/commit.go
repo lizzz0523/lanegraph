@@ -73,6 +73,14 @@ func commitDate(date, now time.Time) string {
 	return date.Format("Jan _2  2006")
 }
 
+// shortHash 返回提交的 7 位短 hash。
+func shortHash(hash string) string {
+	if len(hash) > 7 {
+		return hash[:7]
+	}
+	return hash
+}
+
 type cell struct {
 	up, down, left, right bool
 	vColor, hColor        string
@@ -190,11 +198,7 @@ func renderGraph(commits []core.Commit, graph core.Graph) []string {
 			fmt.Fprintf(&out, "%s%s%s%s%s", charColor, char, c.hColor, conn, colorReset)
 		}
 
-		hash := commit.Hash
-		if len(hash) > 7 {
-			hash = hash[:7]
-		}
-		fmt.Fprintf(&out, " %s%s%s", colorHash, hash, colorReset)
+		fmt.Fprintf(&out, " %s%s%s", colorHash, shortHash(commit.Hash), colorReset)
 		fmt.Fprintf(&out, " %s%s%s", colorOf[commit.Author], tview.Escape(authorInitial(commit.Author)), colorReset)
 		fmt.Fprintf(&out, " %s%s%s", colorDate, tview.Escape(commitDate(commit.Date, now)), colorReset)
 		if commit.Refs != "" {
