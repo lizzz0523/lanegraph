@@ -41,7 +41,9 @@ func remoteLabel(name string, expanded bool) string {
 }
 
 // buildBranchTree 根据分支列表和过滤条件构建分支树。
-func buildBranchTree(branches []core.Branch, filter, headRef string, syncFrame int, headerStyle, headerSelectedStyle, selectedStyle tcell.Style) *tview.TreeNode {
+// remote 目录默认折叠，remoteExpanded 记录用户手动展开过的 remote；
+// 过滤激活时临时展开所有 remote 目录，让匹配的远端分支可见。
+func buildBranchTree(branches []core.Branch, filter, headRef string, syncFrame int, remoteExpanded map[string]bool, headerStyle, headerSelectedStyle, selectedStyle tcell.Style) *tview.TreeNode {
 	// 隐藏 root，用 Local / Remote 作为分组标题。
 	localNode := tview.NewTreeNode("Local").
 		SetTextStyle(headerStyle).
@@ -69,9 +71,10 @@ func buildBranchTree(branches []core.Branch, filter, headRef string, syncFrame i
 			if branch.RemoteName != "" {
 				folderNode, ok := remoteFolders[branch.RemoteName]
 				if !ok {
-					folderNode = tview.NewTreeNode(remoteLabel(branch.RemoteName, true)).
+					expanded := filter != "" || remoteExpanded[branch.RemoteName]
+					folderNode = tview.NewTreeNode(remoteLabel(branch.RemoteName, expanded)).
 						SetReference(branch.RemoteName).
-						SetExpanded(true).
+						SetExpanded(expanded).
 						SetSelectedTextStyle(selectedStyle)
 					remoteNode.AddChild(folderNode)
 					remoteFolders[branch.RemoteName] = folderNode
@@ -129,7 +132,7 @@ func findBranchNode(root *tview.TreeNode, name string) *tview.TreeNode {
 	return found
 }
 
-// setRemoteExpanded 同步 remote 分组节点的展开状态和箭头图标。
+// setRemoteExpanded 同步 remote 目录节点的展开状态和箭头图标。
 func setRemoteExpanded(node *tview.TreeNode, expanded bool) {
 	node.SetExpanded(expanded)
 	if name, ok := node.GetReference().(string); ok {

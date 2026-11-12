@@ -56,6 +56,7 @@ type TUI struct {
 	pendingCommit  string            // history 跳转后等待 commits 刷新完成再选中的提交
 	promptVisible  bool              // discard 确认弹窗是否正在显示
 	historyVisible bool              // 文件历史弹窗是否正在显示
+	remoteExpanded map[string]bool   // 用户手动展开过的 remote 目录，按 remote 名记录
 	syncFrame      int               // 分支同步动画当前帧；-1 表示没有在执行同步操作
 	syncStop       chan struct{}     // 关闭后停止分支同步动画
 	quitting       bool              // 退出流程已启动，忽略重复退出
@@ -511,7 +512,7 @@ func (t *TUI) setupUI() tview.Primitive {
 			node := branchList.GetCurrentNode()
 			if node != nil {
 				if _, isFolder := node.GetReference().(string); isFolder {
-					setRemoteExpanded(node, !node.IsExpanded())
+					t.toggleRemoteFolder(node)
 				} else {
 					t.checkoutBranch()
 				}
@@ -524,7 +525,7 @@ func (t *TUI) setupUI() tview.Primitive {
 	// 回车或鼠标点击 remote 目录时切换展开状态，点击分支时跳转到对应 commit。
 	branchList.SetSelectedFunc(func(node *tview.TreeNode) {
 		if _, isFolder := node.GetReference().(string); isFolder {
-			setRemoteExpanded(node, !node.IsExpanded())
+			t.toggleRemoteFolder(node)
 			return
 		}
 		if branch, ok := node.GetReference().(core.Branch); ok {
@@ -1023,7 +1024,7 @@ func (t *TUI) refreshBranches(selected string) {
 		filter = strings.ToLower(strings.TrimSpace(t.filterText.GetText()))
 	}
 
-	branchRoot := buildBranchTree(t.Branches, filter, t.HeadRef, t.syncFrame, t.headerStyle, t.headerSelectedStyle, t.selectedStyle)
+	branchRoot := buildBranchTree(t.Branches, filter, t.HeadRef, t.syncFrame, t.remoteExpanded, t.headerStyle, t.headerSelectedStyle, t.selectedStyle)
 	t.branchList.SetRoot(branchRoot)
 
 	if node := t.branchNode(selected); node != nil {
@@ -1033,6 +1034,18 @@ func (t *TUI) refreshBranches(selected string) {
 	// 默认选中第一个分支，而不是分组标题或 remote 目录。
 	if node := firstBranchNode(branchRoot); node != nil {
 		t.branchList.SetCurrentNode(node)
+	}
+}
+
+// toggleRemoteFolder 切换 remote 目录的展开状态，并记住用户的选择以便重建分支树时恢复。
+func (t *TUI) toggleRemoteFolder(node *tview.TreeNode) {
+	expanded := !node.IsExpanded()
+	setRemoteExpanded(node, expanded)
+	if name, ok := node.GetReference().(string); ok {
+		if t.remoteExpanded == nil {
+			t.remoteExpanded = make(map[string]bool)
+		}
+		t.remoteExpanded[name] = expanded
 	}
 }
 
