@@ -66,7 +66,7 @@ type TUI struct {
 	quitting       bool              // 退出流程已启动，忽略重复退出
 
 	tabStyle            tcell.Style
-	accentStyle         tcell.Style
+	tabActiveStyle      tcell.Style
 	selectedStyle       tcell.Style
 	headerStyle         tcell.Style
 	headerSelectedStyle tcell.Style
@@ -705,7 +705,7 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.syncFrame = -1
 
 	t.tabStyle = defaultStyle
-	t.accentStyle = accentStyle
+	t.tabActiveStyle = accentStyle
 	t.selectedStyle = selectedStyle
 	t.headerStyle = headerStyle
 	t.headerSelectedStyle = headerSelectedStyle
@@ -1077,7 +1077,7 @@ func (t *TUI) refreshTabStyles() {
 func (t *TUI) setTabStyle(button *tview.Button, active bool) {
 	style := t.tabStyle
 	if active {
-		style = t.accentStyle
+		style = t.tabActiveStyle
 	}
 	button.SetStyle(style).SetActivatedStyle(style)
 }
