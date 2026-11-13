@@ -132,6 +132,11 @@ func (s *State) Reset(ctx context.Context, commit Commit, mode ResetMode) (strin
 	return GitReset(ctx, s.Repo, commit, mode)
 }
 
+// Rebase 把当前分支 rebase 到 commit。
+func (s *State) Rebase(ctx context.Context, commit Commit) (string, error) {
+	return GitRebase(ctx, s.Repo, commit)
+}
+
 // Pull 拉取当前分支的上游变更。
 func (s *State) Pull(ctx context.Context) (string, error) {
 	return GitPull(ctx, s.Repo)

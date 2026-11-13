@@ -54,7 +54,7 @@ type TUI struct {
 	statusBusy     map[string]string // statusBar 当前展示的 loading 项，key 为槽位
 	pendingBranch  string            // checkout 后等待 refs 刷新完成再选中的分支
 	pendingCommit  string            // history 跳转后等待 commits 刷新完成再选中的提交
-	promptVisible  bool              // discard 确认弹窗是否正在显示
+	promptVisible  bool              // 确认弹窗是否正在显示
 	historyVisible bool              // 文件历史弹窗是否正在显示
 	remoteExpanded map[string]bool   // 用户手动展开过的 remote 目录，按 remote 名记录
 	syncFrame      int               // 分支同步动画当前帧；-1 表示没有在执行同步操作
@@ -84,7 +84,7 @@ type TUI struct {
 	changeOp *async.Loader[string, changeOpRequest]
 	checkout *async.Loader[string, checkoutRequest]
 	syncOp   *async.Loader[string, syncOpRequest]
-	reset    *async.Loader[string, resetRequest]
+	commitOp *async.Loader[string, commitOpRequest]
 }
 
 type refsRequest struct{}
@@ -151,9 +151,18 @@ type syncOpRequest struct {
 	op syncOp
 }
 
-type resetRequest struct {
-	commit core.Commit
-	mode   core.ResetMode
+// commitOp 是 commit 列表上的操作类型。
+type commitOp uint8
+
+const (
+	opReset commitOp = iota
+	opRebase
+)
+
+type commitOpRequest struct {
+	op        commitOp
+	commit    core.Commit
+	resetMode core.ResetMode // 仅 reset 使用
 }
 
 func New(st *core.State) *TUI {
@@ -276,11 +285,17 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetFocusFunc(func() { t.setFocusBorder(commitList.Box, true) }).
 		SetBlurFunc(func() { t.setFocusBorder(commitList.Box, false) })
 
-	// R 把当前分支 reset 到选中的 commit。
+	// r 把当前分支 rebase 到选中的 commit；R 把当前分支 reset 到选中的 commit。
 	commitList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyRune && event.Rune() == 'R' {
-			t.resetCommit()
-			return nil
+		if event.Key() == tcell.KeyRune {
+			switch event.Rune() {
+			case 'r':
+				t.rebaseCommit()
+				return nil
+			case 'R':
+				t.resetCommit()
+				return nil
+			}
 		}
 		return event
 	})
@@ -807,16 +822,21 @@ func (t *TUI) setupLoaders() {
 		OnResult:  t.showSync,
 	})
 
-	t.reset = async.New(async.Config[string, resetRequest]{
-		Key: func(req resetRequest) string {
-			return fmt.Sprintf("%s\x00%d", req.commit.Hash, req.mode)
+	t.commitOp = async.New(async.Config[string, commitOpRequest]{
+		Key: func(req commitOpRequest) string {
+			return fmt.Sprintf("%d\x00%s\x00%d", req.op, req.commit.Hash, req.resetMode)
 		},
-		Load: func(ctx context.Context, req resetRequest) (string, error) {
-			return t.Reset(ctx, req.commit, req.mode)
+		Load: func(ctx context.Context, req commitOpRequest) (string, error) {
+			switch req.op {
+			case opReset:
+				return t.Reset(ctx, req.commit, req.resetMode)
+			default:
+				return t.Rebase(ctx, req.commit)
+			}
 		},
 		Post:      post,
-		OnLoading: t.showResetLoading,
-		OnResult:  t.showReset,
+		OnLoading: t.showCommitOpLoading,
+		OnResult:  t.showCommitOp,
 	})
 }
 
@@ -833,7 +853,7 @@ func (t *TUI) loaders() []async.LoaderLifecycle {
 		t.changeOp,
 		t.checkout,
 		t.syncOp,
-		t.reset,
+		t.commitOp,
 	}
 }
 
@@ -1091,9 +1111,51 @@ func (t *TUI) compareCommit(index int) {
 	t.applyCompare(&compare)
 }
 
+// rebaseCommit 先弹窗确认，再把当前分支 rebase 到选中的 commit。
+func (t *TUI) rebaseCommit() {
+	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Loading() {
+		return
+	}
+	row := t.commitList.currentItem()
+	if row < 0 || row >= len(t.Commits) {
+		return
+	}
+	commit := t.Commits[row]
+
+	message := fmt.Sprintf("Rebase %s onto %s?\n\n%s\n\n[gray]Local changes will be stashed and restored automatically.",
+		tview.Escape(t.HeadRef), tview.Escape(commit.ShortHash()), tview.Escape(commit.Subject))
+
+	prompt := tview.NewModal().
+		SetText(message).
+		AddButtons([]string{"Cancel", "Rebase"}).
+		SetDoneFunc(func(buttonIndex int, _ string) {
+			t.root.RemovePage("rebase")
+			t.promptVisible = false
+			t.app.SetFocus(t.commitList)
+			if buttonIndex == 1 {
+				t.executeCommitOp(commitOpRequest{op: opRebase, commit: commit})
+			}
+		})
+
+	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
+	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
+	prompt.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+	prompt.Box.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+
+	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
+	// 固定成白底黑字，保证按钮文字始终是深色。
+	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
+		Background(tview.Styles.PrimaryTextColor).
+		Foreground(tcell.ColorBlack))
+
+	t.promptVisible = true
+	t.root.AddPage("rebase", prompt, true, true)
+	t.app.SetFocus(prompt)
+}
+
 // resetCommit 先弹窗选择 reset 模式，确认后把当前分支重置到选中的 commit。
 func (t *TUI) resetCommit() {
-	if t.reset == nil || t.root == nil || t.promptVisible || t.reset.Loading() {
+	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Loading() {
 		return
 	}
 	row := t.commitList.currentItem()
@@ -1114,11 +1176,11 @@ func (t *TUI) resetCommit() {
 			t.app.SetFocus(t.commitList)
 			switch buttonIndex {
 			case 1:
-				t.executeReset(commit, core.ResetSoft)
+				t.executeCommitOp(commitOpRequest{op: opReset, commit: commit, resetMode: core.ResetSoft})
 			case 2:
-				t.executeReset(commit, core.ResetMixed)
+				t.executeCommitOp(commitOpRequest{op: opReset, commit: commit, resetMode: core.ResetMixed})
 			case 3:
-				t.executeReset(commit, core.ResetHard)
+				t.executeCommitOp(commitOpRequest{op: opReset, commit: commit, resetMode: core.ResetHard})
 			}
 		})
 
@@ -2167,26 +2229,47 @@ func (t *TUI) syncOpLabel(req syncOpRequest, done bool) string {
 	}
 }
 
-/** RESET */
+/** COMMIT OP */
 
-// executeReset 通过 Reload 绕过缓存，保证每次选择都真正执行 git reset。
-func (t *TUI) executeReset(commit core.Commit, mode core.ResetMode) {
-	t.reset.Reload(resetRequest{commit: commit, mode: mode})
+// executeCommitOp 通过 Reload 绕过缓存，保证每次选择都真正执行 git 操作。
+func (t *TUI) executeCommitOp(req commitOpRequest) {
+	t.commitOp.Reload(req)
 }
 
-func (t *TUI) showResetLoading(req resetRequest) {
-	t.statusStart("reset", "resetting --"+req.mode.String()+" "+req.commit.ShortHash())
+func (t *TUI) showCommitOpLoading(req commitOpRequest) {
+	t.statusStart("commit", t.commitOpLabel(req, false))
 }
 
-func (t *TUI) showReset(req resetRequest, _ string, err error) {
+func (t *TUI) showCommitOp(req commitOpRequest, _ string, err error) {
+	message := t.commitOpLabel(req, true)
 	if err != nil {
 		// git 的错误可能是多行，压成一行避免撑坏单行 statusBar。
-		message := strings.Join(strings.Fields(err.Error()), " ")
-		t.statusDone("reset", "reset failed: "+message)
-		return
+		message = strings.Join(strings.Fields(err.Error()), " ")
+		switch req.op {
+		case opReset:
+			message = "reset failed: " + message
+		default:
+			message = "rebase failed: " + message
+		}
 	}
-	t.statusDone("reset", "reset --"+req.mode.String()+" "+req.commit.ShortHash())
+	t.statusDone("commit", message)
 
-	// reset 会移动 HEAD，并可能改变索引和工作区，统一按当前 tab 刷新。
+	// reset/rebase 会移动 HEAD，并可能改变索引和工作区；rebase 冲突时还会留下中间状态。
 	t.refreshTab(t.activeTab)
+}
+
+// commitOpLabel 返回 commit 操作的 loading/完成文案。
+func (t *TUI) commitOpLabel(req commitOpRequest, done bool) string {
+	switch req.op {
+	case opReset:
+		if done {
+			return "reset --" + req.resetMode.String() + " " + req.commit.ShortHash()
+		}
+		return "resetting --" + req.resetMode.String() + " " + req.commit.ShortHash()
+	default:
+		if done {
+			return "rebased onto " + req.commit.ShortHash()
+		}
+		return "rebasing onto " + req.commit.ShortHash()
+	}
 }

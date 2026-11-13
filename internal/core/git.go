@@ -162,6 +162,15 @@ func GitReset(ctx context.Context, repo string, commit Commit, mode ResetMode) (
 	return output, nil
 }
 
+// GitRebase 把当前分支 rebase 到 commit，并自动暂存和恢复本地改动。
+func GitRebase(ctx context.Context, repo string, commit Commit) (string, error) {
+	output, err := gitOutput(ctx, repo, nil, "rebase", "--autostash", commit.Hash)
+	if err != nil {
+		return "", fmt.Errorf("git rebase error: %w", gitStderr(err))
+	}
+	return output, nil
+}
+
 // GitPull 拉取当前分支的上游变更，返回 git 的输出。
 func GitPull(ctx context.Context, repo string) (string, error) {
 	output, err := gitOutput(ctx, repo, gitRemoteEnv(), "pull")
