@@ -14,6 +14,8 @@ type State struct {
 	RepoName string
 	HeadRef  string
 	HeadHash string
+	// Rebasing 表示仓库有未完成的 rebase（冲突解决中）。
+	Rebasing bool
 
 	Commits  []Commit
 	Branches []Branch
@@ -48,6 +50,7 @@ func NewState(ctx context.Context, repo string) (State, error) {
 	s.RepoName = GitRepoName(ctx, repo)
 	s.HeadRef = refs.HeadRef
 	s.HeadHash = refs.HeadHash
+	s.Rebasing = refs.Rebasing
 	s.Branches = refs.Branches
 	s.Commits = commits
 	return s, nil
@@ -68,6 +71,7 @@ type Refs struct {
 	Branches []Branch
 	HeadRef  string
 	HeadHash string
+	Rebasing bool
 }
 
 // Refs 返回仓库的分支与 HEAD 快照。
@@ -81,6 +85,7 @@ func (s *State) Refs(ctx context.Context) (Refs, error) {
 		Branches: branches,
 		HeadRef:  headRef,
 		HeadHash: headHash,
+		Rebasing: GitRebaseInProgress(ctx, s.Repo),
 	}, nil
 }
 
@@ -135,6 +140,16 @@ func (s *State) Reset(ctx context.Context, commit Commit, mode ResetMode) (strin
 // Rebase 把当前分支 rebase 到 commit。
 func (s *State) Rebase(ctx context.Context, commit Commit) (string, error) {
 	return GitRebase(ctx, s.Repo, commit)
+}
+
+// RebaseContinue 在冲突解决并暂存后继续 rebase。
+func (s *State) RebaseContinue(ctx context.Context) (string, error) {
+	return GitRebaseContinue(ctx, s.Repo)
+}
+
+// RebaseAbort 取消未完成的 rebase。
+func (s *State) RebaseAbort(ctx context.Context) (string, error) {
+	return GitRebaseAbort(ctx, s.Repo)
 }
 
 // Pull 拉取当前分支的上游变更。

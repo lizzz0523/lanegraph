@@ -48,3 +48,17 @@ func (t *TUI) renderStatus() {
 	sort.Strings(messages)
 	t.statusBar.SetText("[gray]loading " + strings.Join(messages, ", ") + "…[-]")
 }
+
+// renderRebaseActions 按 rebase 状态显示或隐藏 statusBar 右侧的 Continue / Abort 按钮。
+func (t *TUI) renderRebaseActions() {
+	if t.statusRow == nil || t.rebaseContinue == nil || t.rebaseAbort == nil {
+		return
+	}
+	continueWidth, abortWidth := 0, 0
+	if t.Rebasing {
+		continueWidth = tview.TaggedStringWidth(t.rebaseContinue.GetLabel()) + 2
+		abortWidth = tview.TaggedStringWidth(t.rebaseAbort.GetLabel()) + 2
+	}
+	t.statusRow.ResizeItem(t.rebaseContinue, continueWidth, 0)
+	t.statusRow.ResizeItem(t.rebaseAbort, abortWidth, 0)
+}

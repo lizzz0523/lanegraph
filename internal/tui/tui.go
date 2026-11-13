@@ -32,6 +32,10 @@ type TUI struct {
 	branchList *tview.TreeView
 	mainPanels *tview.Pages
 	statusBar  *tview.TextView
+	statusRow  *tview.Flex
+	// rebaseContinue / rebaseAbort 只在 rebase 未完成时出现在 statusBar 右侧。
+	rebaseContinue *tview.Button
+	rebaseAbort    *tview.Button
 
 	commitPanel *tview.Flex
 	commitList  *listView
@@ -62,7 +66,7 @@ type TUI struct {
 	quitting       bool              // 退出流程已启动，忽略重复退出
 
 	tabStyle            tcell.Style
-	tabActiveStyle      tcell.Style
+	accentStyle         tcell.Style
 	selectedStyle       tcell.Style
 	headerStyle         tcell.Style
 	headerSelectedStyle tcell.Style
@@ -157,6 +161,8 @@ type commitOp uint8
 const (
 	opReset commitOp = iota
 	opRebase
+	opRebaseContinue
+	opRebaseAbort
 )
 
 type commitOpRequest struct {
@@ -261,10 +267,16 @@ func (t *TUI) setupUI() tview.Primitive {
 		Foreground(tview.Styles.PrimaryTextColor).
 		Background(tcell.NewHexColor(0x2f4f4f))
 
-	// 激活 tab 用和边框高亮一致的 aqua 背景，配黑字保证对比度。
-	tabActiveStyle := tcell.StyleDefault.
+	// 强调色用和边框高亮一致的 aqua 背景，配黑字保证对比度；
+	// 激活 tab 和 statusBar 上的主操作按钮共用。
+	accentStyle := tcell.StyleDefault.
 		Foreground(tcell.ColorBlack).
 		Background(tcell.ColorAqua)
+
+	// 危险操作用红字，配终端默认背景。
+	dangerStyle := tcell.StyleDefault.
+		Foreground(tcell.ColorIndianRed).
+		Background(tview.Styles.PrimitiveBackgroundColor)
 
 	headerStyle := tcell.StyleDefault.
 		Foreground(tcell.ColorGray).
@@ -627,10 +639,41 @@ func (t *TUI) setupUI() tview.Primitive {
 
 	statusBar.SetBorderPadding(0, 0, 1, 1)
 
+	// 左键按下也要吞掉，否则 Button 会自己 setFocus，抢走面板焦点。
+	bindStatusButton := func(button *tview.Button) {
+		button.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+			if !button.InRect(event.Position()) {
+				return action, event
+			}
+			if action == tview.MouseLeftDown {
+				return tview.MouseConsumed, nil
+			}
+			return action, event
+		})
+	}
+
+	// rebase 未完成时，在 statusBar 右侧显示 Continue / Abort；
+	// 平时宽度为 0，不占用状态栏空间。
+	rebaseContinue := tview.NewButton("Continue rebase")
+	rebaseContinue.SetStyle(accentStyle).SetActivatedStyle(accentStyle)
+	rebaseContinue.SetSelectedFunc(t.continueRebase)
+	bindStatusButton(rebaseContinue)
+
+	rebaseAbort := tview.NewButton("Abort rebase")
+	rebaseAbort.SetStyle(dangerStyle).SetActivatedStyle(dangerStyle)
+	rebaseAbort.SetSelectedFunc(t.abortRebase)
+	bindStatusButton(rebaseAbort)
+
+	statusRow := tview.NewFlex().
+		AddItem(statusBar, 0, 1, false).
+		AddItem(rebaseContinue, 0, 0, false).
+		AddItem(rebaseAbort, 0, 0, false).
+		AddItem(nil, 1, 0, false)
+
 	mainPage := tview.NewFlex().
 		SetDirection(tview.FlexRow).
 		AddItem(content, 0, 1, true).
-		AddItem(statusBar, 1, 0, false)
+		AddItem(statusRow, 1, 0, false)
 
 	root := tview.NewPages().
 		AddPage("main", mainPage, true, true)
@@ -643,6 +686,9 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.branchList = branchList
 	t.mainPanels = mainPanels
 	t.statusBar = statusBar
+	t.statusRow = statusRow
+	t.rebaseContinue = rebaseContinue
+	t.rebaseAbort = rebaseAbort
 
 	t.commitPanel = commitPanel
 	t.commitList = commitList
@@ -659,7 +705,7 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.syncFrame = -1
 
 	t.tabStyle = defaultStyle
-	t.tabActiveStyle = tabActiveStyle
+	t.accentStyle = accentStyle
 	t.selectedStyle = selectedStyle
 	t.headerStyle = headerStyle
 	t.headerSelectedStyle = headerSelectedStyle
@@ -830,6 +876,10 @@ func (t *TUI) setupLoaders() {
 			switch req.op {
 			case opReset:
 				return t.Reset(ctx, req.commit, req.resetMode)
+			case opRebaseContinue:
+				return t.RebaseContinue(ctx)
+			case opRebaseAbort:
+				return t.RebaseAbort(ctx)
 			default:
 				return t.Rebase(ctx, req.commit)
 			}
@@ -1027,7 +1077,7 @@ func (t *TUI) refreshTabStyles() {
 func (t *TUI) setTabStyle(button *tview.Button, active bool) {
 	style := t.tabStyle
 	if active {
-		style = t.tabActiveStyle
+		style = t.accentStyle
 	}
 	button.SetStyle(style).SetActivatedStyle(style)
 }
@@ -1150,6 +1200,54 @@ func (t *TUI) rebaseCommit() {
 
 	t.promptVisible = true
 	t.root.AddPage("rebase", prompt, true, true)
+	t.app.SetFocus(prompt)
+}
+
+// continueRebase 在冲突解决并暂存后继续 rebase。
+func (t *TUI) continueRebase() {
+	if t.commitOp == nil || t.commitOp.Loading() {
+		return
+	}
+	t.executeCommitOp(commitOpRequest{op: opRebaseContinue})
+}
+
+// abortRebase 先弹窗确认，再取消未完成的 rebase。
+func (t *TUI) abortRebase() {
+	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Loading() {
+		return
+	}
+
+	previous := t.app.GetFocus()
+
+	prompt := tview.NewModal().
+		SetText("Abort rebase?\n\nAll conflict resolutions will be lost.").
+		AddButtons([]string{"Cancel", "Abort"}).
+		SetDoneFunc(func(buttonIndex int, _ string) {
+			t.root.RemovePage("rebase-abort")
+			t.promptVisible = false
+			if previous != nil {
+				t.app.SetFocus(previous)
+			} else {
+				t.app.SetFocus(t.commitList)
+			}
+			if buttonIndex == 1 {
+				t.executeCommitOp(commitOpRequest{op: opRebaseAbort})
+			}
+		})
+
+	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
+	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
+	prompt.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+	prompt.Box.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+
+	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
+	// 固定成白底黑字，保证按钮文字始终是深色。
+	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
+		Background(tview.Styles.PrimaryTextColor).
+		Foreground(tcell.ColorBlack))
+
+	t.promptVisible = true
+	t.root.AddPage("rebase-abort", prompt, true, true)
 	t.app.SetFocus(prompt)
 }
 
@@ -1570,6 +1668,8 @@ func (t *TUI) showRefs(_ refsRequest, refs core.Refs, err error) {
 	t.Branches = refs.Branches
 	t.HeadRef = refs.HeadRef
 	t.HeadHash = refs.HeadHash
+	t.Rebasing = refs.Rebasing
+	t.renderRebaseActions()
 	if t.repoHead != nil {
 		t.repoHead.SetText(t.HeadRef)
 	}
@@ -2248,6 +2348,10 @@ func (t *TUI) showCommitOp(req commitOpRequest, _ string, err error) {
 		switch req.op {
 		case opReset:
 			message = "reset failed: " + message
+		case opRebaseContinue:
+			message = "rebase continue failed: " + message
+		case opRebaseAbort:
+			message = "rebase abort failed: " + message
 		default:
 			message = "rebase failed: " + message
 		}
@@ -2266,6 +2370,16 @@ func (t *TUI) commitOpLabel(req commitOpRequest, done bool) string {
 			return "reset --" + req.resetMode.String() + " " + req.commit.ShortHash()
 		}
 		return "resetting --" + req.resetMode.String() + " " + req.commit.ShortHash()
+	case opRebaseContinue:
+		if done {
+			return "rebase continued"
+		}
+		return "continuing rebase"
+	case opRebaseAbort:
+		if done {
+			return "rebase aborted"
+		}
+		return "aborting rebase"
 	default:
 		if done {
 			return "rebased onto " + req.commit.ShortHash()

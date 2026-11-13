@@ -171,6 +171,46 @@ func GitRebase(ctx context.Context, repo string, commit Commit) (string, error) 
 	return output, nil
 }
 
+// GitRebaseInProgress 返回仓库是否停在未完成的 rebase 中。
+// rebase-merge 和 rebase-apply 是两种后端；rebase-apply 下的 applying 表示 git am，不算 rebase。
+func GitRebaseInProgress(ctx context.Context, repo string) bool {
+	if gitPathExists(ctx, repo, "rebase-merge") {
+		return true
+	}
+	return gitPathExists(ctx, repo, "rebase-apply") && !gitPathExists(ctx, repo, "rebase-apply/applying")
+}
+
+// gitPathExists 判断 git 路径是否存在；路径由 git 解析，兼容 worktree 的独立 gitdir。
+func gitPathExists(ctx context.Context, repo, name string) bool {
+	path, err := gitOutputTrimmed(ctx, repo, "rev-parse", "--git-path", name)
+	if err != nil || path == "" {
+		return false
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(repo, path)
+	}
+	_, err = os.Stat(path)
+	return err == nil
+}
+
+// GitRebaseContinue 在冲突解决并暂存后继续 rebase，返回 git 的输出。
+func GitRebaseContinue(ctx context.Context, repo string) (string, error) {
+	output, err := gitOutput(ctx, repo, gitRebaseEnv(), "rebase", "--continue")
+	if err != nil {
+		return "", fmt.Errorf("git rebase continue error: %w", gitStderr(err))
+	}
+	return output, nil
+}
+
+// GitRebaseAbort 取消未完成的 rebase，恢复到 rebase 之前的状态。
+func GitRebaseAbort(ctx context.Context, repo string) (string, error) {
+	output, err := gitOutput(ctx, repo, nil, "rebase", "--abort")
+	if err != nil {
+		return "", fmt.Errorf("git rebase abort error: %w", gitStderr(err))
+	}
+	return output, nil
+}
+
 // GitPull 拉取当前分支的上游变更，返回 git 的输出。
 func GitPull(ctx context.Context, repo string) (string, error) {
 	output, err := gitOutput(ctx, repo, gitRemoteEnv(), "pull")
@@ -202,6 +242,12 @@ func GitFetch(ctx context.Context, repo string) (string, error) {
 // TUI 独占终端，禁止 git 弹出凭据和编辑器提示。
 func gitRemoteEnv() []string {
 	return append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_EDITOR=true")
+}
+
+// gitRebaseEnv 返回继续 rebase 时使用的环境：
+// 解决冲突后 --continue 会打开提交信息编辑器，TUI 独占终端，直接接受默认信息。
+func gitRebaseEnv() []string {
+	return append(os.Environ(), "GIT_EDITOR=true")
 }
 
 type Commit struct {
