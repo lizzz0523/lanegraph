@@ -666,6 +666,9 @@ func colorizeDiff(ctx context.Context, diff string, options DiffOptions) (string
 		"--line-numbers-right-style=gray",
 		"--line-numbers-zero-style=gray",
 		"--inline-hint-style=gray",
+		// 压暗 +/− 行的整行底色；强调片段仍由 delta 的 emph 样式自动提亮
+		"--minus-style=syntax \"#3b2323\"",
+		"--plus-style=syntax \"#20352a\"",
 	}
 	if options.SideBySide {
 		width := options.Width
