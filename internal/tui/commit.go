@@ -225,3 +225,17 @@ func renderCommit(commit core.Commit, width int) string {
 	}
 	return text
 }
+
+// renderCommitFull 生成弹窗中的完整 commit 信息；作者/时间、subject 和 body 分段显示。
+func renderCommitFull(commit core.Commit) string {
+	if commit.Hash == "" {
+		return ""
+	}
+
+	text := fmt.Sprintf("[aqua]%v[-] [gray]%v[-]  %s%v%s", tview.Escape(commit.Author), commit.Date.Format("Jan _2, 2006 15:04:05 -0700"), colorHash, commit.Hash, colorReset)
+	text += "\n\n[::b]" + tview.Escape(commit.Subject) + "[-::-]"
+	if body := strings.Trim(commit.Body, "\r\n"); body != "" {
+		text += "\n\n" + tview.Escape(body)
+	}
+	return text
+}

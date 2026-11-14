@@ -50,20 +50,21 @@ type TUI struct {
 	historyList *listView
 	historyDiff *tview.TextView
 
-	activeTab      string // 当前显示的主面板 tab
-	infoWidth      int
-	diffWidth      int               // 当前 diff 渲染使用的面板内宽（side-by-side 时有效）
-	historyWidth   int               // history 弹窗内 diff 的渲染宽度
-	statusMsg      string            // 最近一次操作结果，loading 结束后保留
-	statusBusy     map[string]string // statusBar 当前展示的 loading 项，key 为槽位
-	pendingBranch  string            // checkout 后等待 refs 刷新完成再选中的分支
-	pendingCommit  string            // history 跳转后等待 commits 刷新完成再选中的提交
-	promptVisible  bool              // 确认弹窗是否正在显示
-	historyVisible bool              // 文件历史弹窗是否正在显示
-	remoteExpanded map[string]bool   // 用户手动展开过的 remote 目录，按 remote 名记录
-	syncFrame      int               // 分支同步动画当前帧；-1 表示没有在执行同步操作
-	syncStop       chan struct{}     // 关闭后停止分支同步动画
-	quitting       bool              // 退出流程已启动，忽略重复退出
+	activeTab         string // 当前显示的主面板 tab
+	infoWidth         int
+	diffWidth         int               // 当前 diff 渲染使用的面板内宽（side-by-side 时有效）
+	historyWidth      int               // history 弹窗内 diff 的渲染宽度
+	statusMsg         string            // 最近一次操作结果，loading 结束后保留
+	statusBusy        map[string]string // statusBar 当前展示的 loading 项，key 为槽位
+	pendingBranch     string            // checkout 后等待 refs 刷新完成再选中的分支
+	pendingCommit     string            // history 跳转后等待 commits 刷新完成再选中的提交
+	promptVisible     bool              // 确认弹窗是否正在显示
+	historyVisible    bool              // 文件历史弹窗是否正在显示
+	commitInfoVisible bool              // commit 详情弹窗是否正在显示
+	remoteExpanded    map[string]bool   // 用户手动展开过的 remote 目录，按 remote 名记录
+	syncFrame         int               // 分支同步动画当前帧；-1 表示没有在执行同步操作
+	syncStop          chan struct{}     // 关闭后停止分支同步动画
+	quitting          bool              // 退出流程已启动，忽略重复退出
 
 	tabStyle            tcell.Style
 	tabActiveStyle      tcell.Style
@@ -183,9 +184,14 @@ func (t *TUI) Run() error {
 		EnableMouse(true)
 
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		// history 弹窗显示时，Esc/q 只关闭弹窗；Ctrl+Q 仍然随时可退出。
-		if t.historyVisible && (event.Key() == tcell.KeyEscape || (event.Key() == tcell.KeyRune && event.Rune() == 'q')) {
-			t.closeHistory()
+		// history / commit 详情弹窗显示时，Esc/q 只关闭弹窗；Ctrl+Q 仍然随时可退出。
+		if (t.historyVisible || t.commitInfoVisible) &&
+			(event.Key() == tcell.KeyEscape || (event.Key() == tcell.KeyRune && event.Rune() == 'q')) {
+			if t.historyVisible {
+				t.closeHistory()
+			} else if t.commitInfoVisible {
+				t.closeCommitInfo()
+			}
 			return nil
 		}
 
@@ -199,10 +205,10 @@ func (t *TUI) Run() error {
 			t.filterText.SetText("", false)
 			app.SetFocus(t.branchList)
 			return nil
-		case event.Key() == tcell.KeyTab && !t.promptVisible:
+		case event.Key() == tcell.KeyTab && !t.promptVisible && !t.commitInfoVisible:
 			app.SetFocus(t.nextFocus(1))
 			return nil
-		case event.Key() == tcell.KeyBacktab && !t.promptVisible:
+		case event.Key() == tcell.KeyBacktab && !t.promptVisible && !t.commitInfoVisible:
 			app.SetFocus(t.nextFocus(-1))
 			return nil
 		// p / P / f 全局触发当前分支的 pull / push / fetch；filter 输入时不拦截。
@@ -329,10 +335,21 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetTitleAlign(tview.AlignLeft).
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
+		SetFocusFunc(func() { t.setFocusBorder(commitInfo.Box, true) }).
+		SetBlurFunc(func() { t.setFocusBorder(commitInfo.Box, false) }).
 		SetDrawFunc(func(_ tcell.Screen, _, _, _, _ int) (int, int, int, int) {
 			t.syncCommitInfoWidth(commitInfo)
 			return commitInfo.GetInnerRect()
 		})
+
+	// 空格弹窗查看完整的 commit 信息。
+	commitInfo.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyRune && event.Rune() == ' ' {
+			t.openCommitInfo()
+			return nil
+		}
+		return event
+	})
 
 	fileList := tview.NewTreeView().
 		SetRoot(buildFileTree(nil, selectedStyle)).
@@ -717,6 +734,7 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.setFocusBorder(filterText.Box, false)
 	t.setFocusBorder(branchList.Box, false)
 	t.setFocusBorder(commitList.Box, true)
+	t.setFocusBorder(commitInfo.Box, false)
 	t.setFocusBorder(fileList.Box, false)
 	t.setFocusBorder(fileDiff.Box, false)
 	t.setFocusBorder(changeList.Box, false)
@@ -1011,7 +1029,7 @@ func (t *TUI) focusChain() []tview.Primitive {
 	if t.activeTab == tabChange {
 		return []tview.Primitive{t.filterText, t.branchList, t.changeList, t.changeDiff}
 	}
-	return []tview.Primitive{t.filterText, t.branchList, t.commitList, t.fileList, t.fileDiff}
+	return []tview.Primitive{t.filterText, t.branchList, t.commitList, t.commitInfo, t.fileList, t.fileDiff}
 }
 
 // setFocusBorder 按焦点状态切换边框和标题颜色。
@@ -1298,6 +1316,66 @@ func (t *TUI) resetCommit() {
 	t.app.SetFocus(prompt)
 }
 
+// openCommitInfo 弹窗显示当前 commit 的完整信息；j/k、PgUp/PgDn 可滚动。
+func (t *TUI) openCommitInfo() {
+	if t.root == nil || t.promptVisible || t.historyVisible || t.commitInfoVisible {
+		return
+	}
+	commit := t.CurrentCommit
+	if commit.Hash == "" {
+		return
+	}
+
+	commitInfo := tview.NewTextView().
+		SetDynamicColors(true).
+		SetScrollable(true).
+		SetWrap(true).
+		SetText(renderCommitFull(commit))
+
+	commitInfo.SetTitle(" commit ").
+		SetTitleAlign(tview.AlignLeft).
+		SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1).
+		SetFocusFunc(func() { t.setFocusBorder(commitInfo.Box, true) }).
+		SetBlurFunc(func() { t.setFocusBorder(commitInfo.Box, false) })
+
+	// 弹窗铺满 mainPage 所在区域，左右各留 15 列、上下各留 3 行，
+	// 和 history 弹窗保持一致的留白。
+	inner := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(nil, 15, 0, false).
+		AddItem(commitInfo, 0, 1, true).
+		AddItem(nil, 15, 0, false)
+
+	popup := tview.NewFlex().
+		AddItem(nil, 35, 0, false).
+		AddItem(inner, 0, 1, true).
+		AddItem(nil, 35, 0, false)
+
+	// 只有信息面板接收鼠标；其余区域直接消费，避免点击穿透到下面的主界面。
+	popup.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if commitInfo.InRect(event.Position()) {
+			return action, event
+		}
+		return tview.MouseConsumed, nil
+	})
+
+	t.commitInfoVisible = true
+	t.root.AddPage("commit-info", popup, true, true)
+	t.app.SetFocus(commitInfo)
+}
+
+// closeCommitInfo 关闭 commit 详情弹窗，把焦点还给 commit 信息面板。
+func (t *TUI) closeCommitInfo() {
+	if !t.commitInfoVisible {
+		return
+	}
+	t.commitInfoVisible = false
+	t.root.RemovePage("commit-info")
+	if t.commitInfo != nil {
+		t.app.SetFocus(t.commitInfo)
+	}
+}
+
 // openFile 用系统默认应用打开当前选中的文件；目录、分组和占位节点忽略。
 func (t *TUI) openFile(node *tview.TreeNode) {
 	if node == nil {
@@ -1377,20 +1455,20 @@ func (t *TUI) openHistory(node *tview.TreeNode) {
 	t.focusOnScroll(historyList)
 	t.focusOnScroll(historyDiff)
 
-	contentH := tview.NewFlex().
+	history := tview.NewFlex().
 		AddItem(historyList, 40, 0, true).
 		AddItem(historyDiff, 0, 1, false)
 
-	contentV := tview.NewFlex().SetDirection(tview.FlexRow).
+	inner := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(nil, 3, 0, false).
-		AddItem(contentH, 0, 1, true).
+		AddItem(history, 0, 1, true).
 		AddItem(nil, 3, 0, false)
 
 	// 弹窗铺满 mainPage 所在区域，左右各留 15 列、上下各留 3 行，
 	// 内容区正好是 mainPage 宽 - 30、高 - 6。
 	popup := tview.NewFlex().
 		AddItem(nil, 15, 0, false).
-		AddItem(contentV, 0, 1, true).
+		AddItem(inner, 0, 1, true).
 		AddItem(nil, 15, 0, false)
 
 	// 弹窗铺满 mainPage，只有两个子面板需要接收鼠标；其余区域直接消费，
