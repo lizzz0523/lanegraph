@@ -1160,12 +1160,12 @@ func (t *TUI) refreshCommit(force bool) {
 	t.requestFiles(commit, t.CompareCommit)
 }
 
-// compareCommit 由 Ctrl+点击触发：把 index 对应的 commit 设为对比基准。
-func (t *TUI) compareCommit(index int) {
-	if t.commitList == nil || index < 0 || index >= len(t.Commits) {
+// compareCommit 由 Ctrl+点击触发：把 row 对应的 commit 设为对比基准。
+func (t *TUI) compareCommit(row int) {
+	if t.commitList == nil || row < 0 || row >= len(t.Commits) {
 		return
 	}
-	compare := t.Commits[index]
+	compare := t.Commits[row]
 
 	// 当前 commit 不能和自己比较；再次点击已标记的 commit 视为取消对比。
 	if compare.Hash == t.CurrentCommit.Hash ||
@@ -1520,11 +1520,11 @@ func (t *TUI) selectHistory() {
 	if !t.historyVisible {
 		return
 	}
-	index := t.historyList.currentItem()
-	if index < 0 || index >= len(t.HistoryCommits) {
+	row := t.historyList.currentItem()
+	if row < 0 || row >= len(t.HistoryCommits) {
 		return
 	}
-	t.requestHistoryDiff(t.HistoryCommits[index])
+	t.requestHistoryDiff(t.HistoryCommits[row])
 }
 
 // locateHistory 关闭历史弹窗，切到 commit tab 并定位到选中的 commit。
@@ -1532,11 +1532,11 @@ func (t *TUI) locateHistory() {
 	if !t.historyVisible {
 		return
 	}
-	index := t.historyList.currentItem()
-	if index < 0 || index >= len(t.HistoryCommits) {
+	row := t.historyList.currentItem()
+	if row < 0 || row >= len(t.HistoryCommits) {
 		return
 	}
-	hash := t.HistoryCommits[index].Hash
+	hash := t.HistoryCommits[row].Hash
 
 	t.closeHistory()
 	t.pendingCommit = hash
