@@ -446,24 +446,25 @@ func parseNameStatus(output string, scope ChangeScope) []FileChange {
 	return changes
 }
 
-// GitStage 把 change 对应的改动加入暂存区；删除和重命名也会一并在索引中更新。
-func GitStage(ctx context.Context, repo string, change FileChange) error {
-	if change.Path == "" {
+// GitStage 把 changes 对应的改动加入暂存区；删除和重命名也会一并在索引中更新。
+func GitStage(ctx context.Context, repo string, changes []FileChange) error {
+	paths := changePaths(changes)
+	if len(paths) == 0 {
 		return nil
 	}
-	args := append([]string{"add", "-A", "--"}, change.paths()...)
+	args := append([]string{"add", "-A", "--"}, paths...)
 	if _, err := gitOutput(ctx, repo, nil, args...); err != nil {
 		return fmt.Errorf("git stage error: %w", gitStderr(err))
 	}
 	return nil
 }
 
-// GitUnstage 把 change 从暂存区移回工作区。
-func GitUnstage(ctx context.Context, repo string, change FileChange) error {
-	if change.Path == "" {
+// GitUnstage 把 changes 从暂存区移回工作区。
+func GitUnstage(ctx context.Context, repo string, changes []FileChange) error {
+	paths := changePaths(changes)
+	if len(paths) == 0 {
 		return nil
 	}
-	paths := change.paths()
 
 	// 空仓库还没有 HEAD，reset 无法执行，只能把文件从索引里移除。
 	if !gitRefExists(ctx, repo, "HEAD") {
@@ -479,6 +480,18 @@ func GitUnstage(ctx context.Context, repo string, change FileChange) error {
 		return fmt.Errorf("git unstage error: %w", gitStderr(err))
 	}
 	return nil
+}
+
+// changePaths 汇总多个变更需要传给 git 的路径，跳过没有路径的占位项。
+func changePaths(changes []FileChange) []string {
+	var paths []string
+	for _, change := range changes {
+		if change.Path == "" {
+			continue
+		}
+		paths = append(paths, change.paths()...)
+	}
+	return paths
 }
 
 // GitDiscard 丢弃 change 对应的改动：

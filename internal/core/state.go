@@ -112,14 +112,14 @@ func (s *State) LocalDiff(ctx context.Context, change FileChange, options DiffOp
 	return GitLocalFileDiff(ctx, s.Repo, change, options)
 }
 
-// Stage 把单个文件变更加入暂存区。
-func (s *State) Stage(ctx context.Context, change FileChange) error {
-	return GitStage(ctx, s.Repo, change)
+// Stage 把变更加入暂存区。
+func (s *State) Stage(ctx context.Context, changes []FileChange) error {
+	return GitStage(ctx, s.Repo, changes)
 }
 
-// Unstage 把单个文件变更移回工作区。
-func (s *State) Unstage(ctx context.Context, change FileChange) error {
-	return GitUnstage(ctx, s.Repo, change)
+// Unstage 把变更移回工作区。
+func (s *State) Unstage(ctx context.Context, changes []FileChange) error {
+	return GitUnstage(ctx, s.Repo, changes)
 }
 
 // Discard 丢弃单个文件的改动。

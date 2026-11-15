@@ -134,9 +134,12 @@ const (
 	opDiscard
 )
 
+// changeOpRequest 是一次本地变更操作；stage/unstage 可针对目录下的多个文件，
+// discard 只对单个文件生效（changes 长度为 1）。
 type changeOpRequest struct {
-	op     changeOp
-	change core.FileChange
+	op      changeOp
+	changes []core.FileChange
+	path    string // 状态栏文案：单文件为文件路径，目录为目录路径
 }
 
 type checkoutRequest struct {
@@ -451,7 +454,8 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetFocusFunc(func() { t.setFocusBorder(changeList.Box, true) }).
 		SetBlurFunc(func() { t.setFocusBorder(changeList.Box, false) })
 
-	// 空格切换暂存状态，d 丢弃改动，o 打开文件，h 查看文件历史；目录节点保留 TreeView 的展开/收起行为。
+	// 空格 stage/unstage 当前文件或目录内的全部变更，d 丢弃文件改动，o 打开文件，h 查看文件历史；
+	// 目录的展开/收起用 Enter。
 	changeList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() != tcell.KeyRune {
 			return event
@@ -842,16 +846,19 @@ func (t *TUI) setupLoaders() {
 
 	t.changeOp = async.New(async.Config[string, changeOpRequest]{
 		Key: func(req changeOpRequest) string {
-			return fmt.Sprintf("%d\x00%d\x00%s", req.op, req.change.Scope, req.change.Path)
+			return fmt.Sprintf("%d\x00%s", req.op, req.path)
 		},
 		Load: func(ctx context.Context, req changeOpRequest) (string, error) {
 			switch req.op {
 			case opStage:
-				return req.change.Path, t.Stage(ctx, req.change)
+				return req.path, t.Stage(ctx, req.changes)
 			case opUnstage:
-				return req.change.Path, t.Unstage(ctx, req.change)
+				return req.path, t.Unstage(ctx, req.changes)
 			default:
-				return req.change.Path, t.Discard(ctx, req.change)
+				if len(req.changes) == 0 {
+					return req.path, nil
+				}
+				return req.path, t.Discard(ctx, req.changes[0])
 			}
 		},
 		Post:      post,
@@ -1567,7 +1574,7 @@ func (t *TUI) selectLocalFile(node *tview.TreeNode) {
 	t.requestLocalDiff(node)
 }
 
-// toggleLocalChange 用空格在暂存区和未暂存区之间移动当前文件。
+// toggleLocalChange 用空格暂存/取消暂存当前文件；目录节点处理目录内的全部变更。
 func (t *TUI) toggleLocalChange() {
 	if t.changeOp == nil || t.localFiles.Loading() || t.changeOp.Loading() {
 		return
@@ -1577,20 +1584,31 @@ func (t *TUI) toggleLocalChange() {
 		return
 	}
 
-	change, ok := node.GetReference().(core.FileChange)
-	if !ok {
-		// 目录节点：空格仍然展开/收起。
-		if _, isFolder := node.GetReference().(string); isFolder {
-			setFolderExpanded(node, !node.IsExpanded())
+	if change, ok := node.GetReference().(core.FileChange); ok {
+		op := opStage
+		if change.Scope == core.ScopeStaged {
+			op = opUnstage
 		}
+		t.executeChangeOp(op, []core.FileChange{change}, change.Path)
 		return
 	}
 
+	if _, isFolder := node.GetReference().(string); !isFolder {
+		return
+	}
+	changes := folderChanges(node)
+	if len(changes) == 0 {
+		// 没有可操作的文件时保留展开/收起行为。
+		setFolderExpanded(node, !node.IsExpanded())
+		return
+	}
+
+	// 同一组内的文件 scope 一致，用第一项决定方向；目录路径用于状态栏文案。
 	op := opStage
-	if change.Scope == core.ScopeStaged {
+	if changes[0].Scope == core.ScopeStaged {
 		op = opUnstage
 	}
-	t.executeChangeOp(op, change)
+	t.executeChangeOp(op, changes, folderPath(t.changeList.GetPath(node)))
 }
 
 // discardLocalChange 先弹窗确认，再丢弃当前文件的改动。
@@ -1625,7 +1643,7 @@ func (t *TUI) discardLocalChange() {
 			t.promptVisible = false
 			t.app.SetFocus(t.changeList)
 			if buttonIndex == 1 {
-				t.executeChangeOp(opDiscard, change)
+				t.executeChangeOp(opDiscard, []core.FileChange{change}, change.Path)
 			}
 		})
 
@@ -2003,8 +2021,13 @@ func (t *TUI) showLocalLoading(_ localFilesRequest) {
 }
 
 func (t *TUI) showLocal(_ localFilesRequest, changes []core.FileChange, err error) {
-	// 刷新后尽量恢复原来的选中文件，避免每次切 tab 都跳回第一项。
+	// 刷新后尽量恢复原来的选中项，避免每次切 tab 都跳回第一项。
+	// 目录节点按完整路径恢复，这样 stage/unstage 目录后光标会跟到另一组。
 	previous := t.localChange()
+	folder := ""
+	if previous.Path == "" {
+		folder = folderPath(t.changeList.GetPath(t.changeList.GetCurrentNode()))
+	}
 
 	title := " local changes "
 	var changeRoot *tview.TreeNode
@@ -2029,6 +2052,9 @@ func (t *TUI) showLocal(_ localFilesRequest, changes []core.FileChange, err erro
 		t.clearLocalDiff("no changes")
 	default:
 		node := findLocalNode(changeRoot, previous)
+		if node == nil && folder != "" {
+			node = findLocalFolder(changeRoot, folder)
+		}
 		if node == nil {
 			node = firstFileNode(changeRoot)
 		}
@@ -2281,8 +2307,8 @@ func (t *TUI) syncDiffViewWidth(view *tview.TextView) {
 
 /** CHANGE OP */
 
-func (t *TUI) executeChangeOp(op changeOp, change core.FileChange) {
-	t.changeOp.Reload(changeOpRequest{op: op, change: change})
+func (t *TUI) executeChangeOp(op changeOp, changes []core.FileChange, path string) {
+	t.changeOp.Reload(changeOpRequest{op: op, changes: changes, path: path})
 }
 
 func (t *TUI) showChangeOpLoading(req changeOpRequest) {
@@ -2303,22 +2329,26 @@ func (t *TUI) showChangeOp(req changeOpRequest, _ string, err error) {
 
 // changeOpLabel 返回本地变更操作的 loading/完成文案。
 func (t *TUI) changeOpLabel(req changeOpRequest, done bool) string {
+	path := req.path
+	if len(req.changes) > 1 {
+		path = fmt.Sprintf("%s (%d files)", req.path, len(req.changes))
+	}
 	switch req.op {
 	case opStage:
 		if done {
-			return "staged " + req.change.Path
+			return "staged " + path
 		}
-		return "staging " + req.change.Path
+		return "staging " + path
 	case opUnstage:
 		if done {
-			return "unstaged " + req.change.Path
+			return "unstaged " + path
 		}
-		return "unstaging " + req.change.Path
+		return "unstaging " + path
 	default:
 		if done {
-			return "discarded " + req.change.Path
+			return "discarded " + path
 		}
-		return "discarding " + req.change.Path
+		return "discarding " + path
 	}
 }
 

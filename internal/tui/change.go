@@ -214,6 +214,67 @@ func findLocalNodeBy(node *tview.TreeNode, target core.FileChange, matchScope bo
 	return nil
 }
 
+// findLocalFolder 在重建后的树里按完整路径找回目录节点。
+func findLocalFolder(root *tview.TreeNode, target string) *tview.TreeNode {
+	if target == "" {
+		return nil
+	}
+	for _, group := range root.GetChildren() {
+		if found := findLocalFolderBy(group, "", target); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+func findLocalFolderBy(node *tview.TreeNode, prefix, target string) *tview.TreeNode {
+	for _, child := range node.GetChildren() {
+		name, ok := child.GetReference().(string)
+		if !ok {
+			continue
+		}
+		full := name
+		if prefix != "" {
+			full = prefix + "/" + name
+		}
+		if full == target {
+			return child
+		}
+		if found := findLocalFolderBy(child, full, target); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+// folderChanges 收集目录节点下的全部文件变更。
+func folderChanges(node *tview.TreeNode) []core.FileChange {
+	var changes []core.FileChange
+	for _, child := range node.GetChildren() {
+		if change, ok := child.GetReference().(core.FileChange); ok {
+			changes = append(changes, change)
+			continue
+		}
+		changes = append(changes, folderChanges(child)...)
+	}
+	return changes
+}
+
+// folderPath 把目录层级拼成完整路径，跳过 root 和分组标题。
+// compactFolders 合并后的节点引用已经是 a/b/c，未合并时引用只是单段名，两种都能拼对。
+func folderPath(path []*tview.TreeNode) string {
+	if len(path) < 3 {
+		return ""
+	}
+	parts := make([]string, 0, len(path)-2)
+	for _, node := range path[2:] {
+		if name, ok := node.GetReference().(string); ok {
+			parts = append(parts, name)
+		}
+	}
+	return strings.Join(parts, "/")
+}
+
 // setFolderExpanded 同步目录节点的展开状态和箭头图标。
 func setFolderExpanded(node *tview.TreeNode, expanded bool) {
 	node.SetExpanded(expanded)
