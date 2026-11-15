@@ -3,7 +3,9 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	"lanegraph/internal/async"
 	"lanegraph/internal/core"
@@ -2437,6 +2439,62 @@ func (t *TUI) syncOpLabel(req syncOpRequest, done bool) string {
 	}
 }
 
+// startSyncSpinner 启动当前分支前的点阵动画；已有动画时不重复启动。
+func (t *TUI) startSyncSpinner() {
+	if t.syncStop != nil || t.app == nil {
+		return
+	}
+	stop := make(chan struct{})
+	t.syncStop = stop
+	t.syncFrame = 0
+	t.renderSyncIndicator()
+
+	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				t.app.QueueUpdateDraw(func() {
+					// 排队期间同步操作可能已经结束，停止后不再改动分支文本。
+					select {
+					case <-stop:
+						return
+					default:
+					}
+					t.syncFrame = (t.syncFrame + 1) % len(syncFrames)
+					t.renderSyncIndicator()
+				})
+			}
+		}
+	}()
+}
+
+// stopSyncSpinner 停止动画并把当前分支前的标记恢复成对勾。
+func (t *TUI) stopSyncSpinner() {
+	if t.syncStop != nil {
+		close(t.syncStop)
+		t.syncStop = nil
+	}
+	t.syncFrame = -1
+	t.renderSyncIndicator()
+}
+
+// renderSyncIndicator 按当前动画帧更新 HEAD 指向的本地分支节点。
+func (t *TUI) renderSyncIndicator() {
+	node := t.branchNode(t.HeadRef)
+	if node == nil {
+		return
+	}
+	branch, ok := node.GetReference().(core.Branch)
+	if !ok {
+		return
+	}
+	node.SetText(branchLabel(branch, t.HeadRef, t.syncFrame))
+}
+
 /** COMMIT OP */
 
 // executeCommitOp 通过 Reload 绕过缓存，保证每次选择都真正执行 git 操作。
@@ -2494,4 +2552,62 @@ func (t *TUI) commitOpLabel(req commitOpRequest, done bool) string {
 		}
 		return "rebasing onto " + req.commit.ShortHash()
 	}
+}
+
+/** STATUS */
+
+// statusStart 标记一个槽位正在加载；同一槽位重复调用只更新文案。
+func (t *TUI) statusStart(slot, message string) {
+	if t.statusBar == nil {
+		return
+	}
+	if t.statusBusy == nil {
+		t.statusBusy = make(map[string]string)
+	}
+	t.statusBusy[slot] = message
+	t.renderStatus()
+}
+
+// statusDone 结束槽位的 loading；message 非空时同时更新最近完成信息。
+func (t *TUI) statusDone(slot, message string) {
+	if t.statusBar == nil {
+		return
+	}
+	delete(t.statusBusy, slot)
+	if message != "" {
+		t.statusMsg = message
+	}
+	t.renderStatus()
+}
+
+func (t *TUI) renderStatus() {
+	if len(t.statusBusy) == 0 {
+		if t.statusMsg == "" {
+			t.statusBar.SetText("")
+			return
+		}
+		t.statusBar.SetText("[gray]" + tview.Escape(t.statusMsg) + "[-]")
+		return
+	}
+
+	messages := make([]string, 0, len(t.statusBusy))
+	for _, message := range t.statusBusy {
+		messages = append(messages, tview.Escape(message))
+	}
+	sort.Strings(messages)
+	t.statusBar.SetText("[gray]loading " + strings.Join(messages, ", ") + "…[-]")
+}
+
+// renderRebaseActions 按 rebase 状态显示或隐藏 statusBar 右侧的 Continue / Abort 按钮。
+func (t *TUI) renderRebaseActions() {
+	if t.statusRow == nil || t.rebaseContinue == nil || t.rebaseAbort == nil {
+		return
+	}
+	continueWidth, abortWidth := 0, 0
+	if t.Rebasing {
+		continueWidth = tview.TaggedStringWidth(t.rebaseContinue.GetLabel()) + 2
+		abortWidth = tview.TaggedStringWidth(t.rebaseAbort.GetLabel()) + 2
+	}
+	t.statusRow.ResizeItem(t.rebaseContinue, continueWidth, 0)
+	t.statusRow.ResizeItem(t.rebaseAbort, abortWidth, 0)
 }
