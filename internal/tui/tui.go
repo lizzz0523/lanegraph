@@ -376,8 +376,12 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetFocusFunc(func() { t.setFocusBorder(fileList.Box, true) }).
 		SetBlurFunc(func() { t.setFocusBorder(fileList.Box, false) })
 
+	// 本次事件开始前的当前节点：只有已经是选中项的目录再次被选中时才展开/收起。
+	var filePrevCurrent *tview.TreeNode
+
 	// o 用系统默认应用打开选中的文件，h 查看文件历史。
 	fileList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		filePrevCurrent = fileList.GetCurrentNode()
 		if event.Key() != tcell.KeyRune {
 			return event
 		}
@@ -392,11 +396,12 @@ func (t *TUI) setupUI() tview.Primitive {
 		return event
 	})
 
-	t.focusOnScrollTree(fileList)
+	t.focusOnScrollTree(fileList, func() { filePrevCurrent = fileList.GetCurrentNode() })
 
-	// 文件预览由 changed 负责，这里只处理目录展开/收起。
+	// 文件预览由 changed 负责，这里只处理目录展开/收起；
+	// 鼠标第一次点中目录只移动光标，再次点击已选中的目录才切换。
 	fileList.SetSelectedFunc(func(node *tview.TreeNode) {
-		if t.files.Loading() || len(node.GetChildren()) == 0 {
+		if t.files.Loading() || len(node.GetChildren()) == 0 || node != filePrevCurrent {
 			return
 		}
 		setFolderExpanded(node, !node.IsExpanded())
@@ -464,9 +469,13 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetFocusFunc(func() { t.setFocusBorder(changeList.Box, true) }).
 		SetBlurFunc(func() { t.setFocusBorder(changeList.Box, false) })
 
+	// 本次事件开始前的当前节点：只有已经是选中项的目录再次被选中时才展开/收起。
+	var changePrevCurrent *tview.TreeNode
+
 	// 空格 stage/unstage 当前文件或目录内的全部变更，d 丢弃文件改动，o 打开文件，h 查看文件历史；
 	// 目录的展开/收起用 Enter。
 	changeList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		changePrevCurrent = changeList.GetCurrentNode()
 		if event.Key() != tcell.KeyRune {
 			return event
 		}
@@ -487,11 +496,12 @@ func (t *TUI) setupUI() tview.Primitive {
 		return event
 	})
 
-	t.focusOnScrollTree(changeList)
+	t.focusOnScrollTree(changeList, func() { changePrevCurrent = changeList.GetCurrentNode() })
 
-	// 文件预览由 changed 负责，这里只处理目录展开/收起。
+	// 文件预览由 changed 负责，这里只处理目录展开/收起；
+	// 鼠标第一次点中目录只移动光标，再次点击已选中的目录才切换。
 	changeList.SetSelectedFunc(func(node *tview.TreeNode) {
-		if t.localFiles.Loading() || len(node.GetChildren()) == 0 {
+		if t.localFiles.Loading() || len(node.GetChildren()) == 0 || node != changePrevCurrent {
 			return
 		}
 		setFolderExpanded(node, !node.IsExpanded())
@@ -563,9 +573,13 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetFocusFunc(func() { t.setFocusBorder(branchList.Box, true) }).
 		SetBlurFunc(func() { t.setFocusBorder(branchList.Box, false) })
 
+	// 本次事件开始前的当前节点：只有已经是选中项的 remote 目录再次被选中时才展开/收起。
+	var branchPrevCurrent *tview.TreeNode
+
 	// 空格 checkout 当前分支；remote 目录则切换展开状态。
 	// TreeView 默认把空格当选中，必须在这里先截获。
 	branchList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		branchPrevCurrent = branchList.GetCurrentNode()
 		if event.Key() == tcell.KeyRune && event.Rune() == ' ' {
 			node := branchList.GetCurrentNode()
 			if node != nil {
@@ -580,10 +594,12 @@ func (t *TUI) setupUI() tview.Primitive {
 		return event
 	})
 
-	// 回车或鼠标点击 remote 目录时切换展开状态，点击分支时跳转到对应 commit。
+	// 回车或再次点击已选中的 remote 目录时切换展开状态，点击分支时跳转到对应 commit。
 	branchList.SetSelectedFunc(func(node *tview.TreeNode) {
 		if _, isFolder := node.GetReference().(string); isFolder {
-			t.toggleRemoteFolder(node)
+			if node == branchPrevCurrent {
+				t.toggleRemoteFolder(node)
+			}
 			return
 		}
 		if branch, ok := node.GetReference().(core.Branch); ok {
@@ -594,7 +610,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		}
 	})
 
-	t.focusOnScrollTree(branchList)
+	t.focusOnScrollTree(branchList, func() { branchPrevCurrent = branchList.GetCurrentNode() })
 
 	repoHead := tview.NewTextView().
 		SetText(t.HeadRef).
@@ -984,7 +1000,8 @@ func (t *TUI) focusOnScroll(p scrollFocusable) {
 // focusOnScrollTree 同上，并跳过 MouseLeftDown 的默认处理：
 // TreeView 按下鼠标后会重绘，并把视口外的选中项拉回可见范围，
 // 导致随后的点击按新的 offsetY 命中错误的行。焦点只能在这里自己补。
-func (t *TUI) focusOnScrollTree(p scrollFocusable) {
+// onClick 在默认的点击处理之前调用，用来区分“点击移动光标”和“再次点击当前节点”。
+func (t *TUI) focusOnScrollTree(p scrollFocusable, onClick func()) {
 	p.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
 		if !p.InRect(event.Position()) {
 			return action, event
@@ -1000,6 +1017,8 @@ func (t *TUI) focusOnScrollTree(p scrollFocusable) {
 			if !p.HasFocus() {
 				t.app.SetFocus(p)
 			}
+		case tview.MouseLeftClick:
+			onClick()
 		}
 		return action, event
 	})
