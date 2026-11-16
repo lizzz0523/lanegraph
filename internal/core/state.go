@@ -16,6 +16,8 @@ type State struct {
 	HeadHash string
 	// Rebasing 表示仓库有未完成的 rebase（冲突解决中）。
 	Rebasing bool
+	// Merging 表示仓库有未完成的 merge（冲突解决中）。
+	Merging bool
 
 	Commits  []Commit
 	Branches []Branch
@@ -51,6 +53,7 @@ func NewState(ctx context.Context, repo string) (State, error) {
 	s.HeadRef = refs.HeadRef
 	s.HeadHash = refs.HeadHash
 	s.Rebasing = refs.Rebasing
+	s.Merging = refs.Merging
 	s.Branches = refs.Branches
 	s.Commits = commits
 	return s, nil
@@ -72,6 +75,7 @@ type Refs struct {
 	HeadRef  string
 	HeadHash string
 	Rebasing bool
+	Merging  bool
 }
 
 // Refs 返回仓库的分支与 HEAD 快照。
@@ -86,6 +90,7 @@ func (s *State) Refs(ctx context.Context) (Refs, error) {
 		HeadRef:  headRef,
 		HeadHash: headHash,
 		Rebasing: GitRebaseInProgress(ctx, s.Repo),
+		Merging:  GitMergeInProgress(ctx, s.Repo),
 	}, nil
 }
 
@@ -142,6 +147,11 @@ func (s *State) Rebase(ctx context.Context, commit Commit) (string, error) {
 	return GitRebase(ctx, s.Repo, commit)
 }
 
+// Merge 把 commit 合入当前分支。
+func (s *State) Merge(ctx context.Context, commit Commit) (string, error) {
+	return GitMerge(ctx, s.Repo, commit)
+}
+
 // RebaseContinue 在冲突解决并暂存后继续 rebase。
 func (s *State) RebaseContinue(ctx context.Context) (string, error) {
 	return GitRebaseContinue(ctx, s.Repo)
@@ -150,6 +160,16 @@ func (s *State) RebaseContinue(ctx context.Context) (string, error) {
 // RebaseAbort 取消未完成的 rebase。
 func (s *State) RebaseAbort(ctx context.Context) (string, error) {
 	return GitRebaseAbort(ctx, s.Repo)
+}
+
+// MergeContinue 在冲突解决并暂存后继续 merge。
+func (s *State) MergeContinue(ctx context.Context) (string, error) {
+	return GitMergeContinue(ctx, s.Repo)
+}
+
+// MergeAbort 取消未完成的 merge。
+func (s *State) MergeAbort(ctx context.Context) (string, error) {
+	return GitMergeAbort(ctx, s.Repo)
 }
 
 // Pull 拉取当前分支的上游变更。

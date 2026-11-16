@@ -35,9 +35,10 @@ type TUI struct {
 	mainPanels *tview.Pages
 	statusBar  *tview.TextView
 	statusRow  *tview.Flex
-	// rebaseContinue / rebaseAbort 只在 rebase 未完成时出现在 statusBar 右侧。
-	rebaseContinue *tview.Button
-	rebaseAbort    *tview.Button
+	// continueButton / abortButton 按当前未完成的操作（rebase / merge）显示对应文案和动作；
+	// 没有未完成操作时宽度为 0。
+	continueButton *tview.Button
+	abortButton    *tview.Button
 
 	commitPanel *tview.Flex
 	commitList  *listView
@@ -169,6 +170,9 @@ const (
 	opRebase
 	opRebaseContinue
 	opRebaseAbort
+	opMerge
+	opMergeContinue
+	opMergeAbort
 )
 
 type commitOpRequest struct {
@@ -308,7 +312,8 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetFocusFunc(func() { t.setFocusBorder(commitList.Box, true) }).
 		SetBlurFunc(func() { t.setFocusBorder(commitList.Box, false) })
 
-	// r 把当前分支 rebase 到选中的 commit；R 把当前分支 reset 到选中的 commit。
+	// r 把当前分支 rebase 到选中的 commit；R 把当前分支 reset 到选中的 commit；
+	// m 把选中的 commit merge 到当前分支。
 	commitList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyRune {
 			switch event.Rune() {
@@ -317,6 +322,9 @@ func (t *TUI) setupUI() tview.Primitive {
 				return nil
 			case 'R':
 				t.resetCommit()
+				return nil
+			case 'm':
+				t.mergeCommit()
 				return nil
 			}
 		}
@@ -675,22 +683,20 @@ func (t *TUI) setupUI() tview.Primitive {
 		})
 	}
 
-	// rebase 未完成时，在 statusBar 右侧显示 Continue / Abort；
-	// 平时宽度为 0，不占用状态栏空间。
-	rebaseContinue := tview.NewButton("Continue rebase")
-	rebaseContinue.SetStyle(accentStyle).SetActivatedStyle(accentStyle)
-	rebaseContinue.SetSelectedFunc(t.continueRebase)
-	bindStatusButton(rebaseContinue)
+	// rebase / merge 未完成时，在 statusBar 右侧显示 Continue / Abort；
+	// 文案和动作由 renderInProgressActions 按当前状态切换，平时宽度为 0，不占用状态栏空间。
+	continueButton := tview.NewButton("")
+	continueButton.SetStyle(accentStyle).SetActivatedStyle(accentStyle)
+	bindStatusButton(continueButton)
 
-	rebaseAbort := tview.NewButton("Abort rebase")
-	rebaseAbort.SetStyle(dangerStyle).SetActivatedStyle(dangerStyle)
-	rebaseAbort.SetSelectedFunc(t.abortRebase)
-	bindStatusButton(rebaseAbort)
+	abortButton := tview.NewButton("")
+	abortButton.SetStyle(dangerStyle).SetActivatedStyle(dangerStyle)
+	bindStatusButton(abortButton)
 
 	statusRow := tview.NewFlex().
 		AddItem(statusBar, 0, 1, false).
-		AddItem(rebaseContinue, 0, 0, false).
-		AddItem(rebaseAbort, 0, 0, false).
+		AddItem(continueButton, 0, 0, false).
+		AddItem(abortButton, 0, 0, false).
 		AddItem(nil, 1, 0, false)
 
 	mainPage := tview.NewFlex().
@@ -710,8 +716,8 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.mainPanels = mainPanels
 	t.statusBar = statusBar
 	t.statusRow = statusRow
-	t.rebaseContinue = rebaseContinue
-	t.rebaseAbort = rebaseAbort
+	t.continueButton = continueButton
+	t.abortButton = abortButton
 
 	t.commitPanel = commitPanel
 	t.commitList = commitList
@@ -903,10 +909,16 @@ func (t *TUI) setupLoaders() {
 			switch req.op {
 			case opReset:
 				return t.Reset(ctx, req.commit, req.resetMode)
+			case opMerge:
+				return t.Merge(ctx, req.commit)
 			case opRebaseContinue:
 				return t.RebaseContinue(ctx)
+			case opMergeContinue:
+				return t.MergeContinue(ctx)
 			case opRebaseAbort:
 				return t.RebaseAbort(ctx)
+			case opMergeAbort:
+				return t.MergeAbort(ctx)
 			default:
 				return t.Rebase(ctx, req.commit)
 			}
@@ -1275,6 +1287,96 @@ func (t *TUI) abortRebase() {
 
 	t.promptVisible = true
 	t.root.AddPage("rebase-abort", prompt, true, true)
+	t.app.SetFocus(prompt)
+}
+
+// mergeCommit 先弹窗确认，再把选中的 commit merge 到当前分支。
+func (t *TUI) mergeCommit() {
+	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Loading() {
+		return
+	}
+	row := t.commitList.currentItem()
+	if row < 0 || row >= len(t.Commits) {
+		return
+	}
+	commit := t.Commits[row]
+
+	message := fmt.Sprintf("Merge %s into %s?\n\n%s\n\n[gray]Local changes will be stashed and restored automatically.",
+		tview.Escape(commit.ShortHash()), tview.Escape(t.HeadRef), tview.Escape(commit.Subject))
+
+	prompt := tview.NewModal().
+		SetText(message).
+		AddButtons([]string{"Cancel", "Merge"}).
+		SetDoneFunc(func(buttonIndex int, _ string) {
+			t.root.RemovePage("merge")
+			t.promptVisible = false
+			t.app.SetFocus(t.commitList)
+			if buttonIndex == 1 {
+				t.executeCommitOp(commitOpRequest{op: opMerge, commit: commit})
+			}
+		})
+
+	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
+	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
+	prompt.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+	prompt.Box.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+
+	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
+	// 固定成白底黑字，保证按钮文字始终是深色。
+	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
+		Background(tview.Styles.PrimaryTextColor).
+		Foreground(tcell.ColorBlack))
+
+	t.promptVisible = true
+	t.root.AddPage("merge", prompt, true, true)
+	t.app.SetFocus(prompt)
+}
+
+// continueMerge 在冲突解决并暂存后继续 merge。
+func (t *TUI) continueMerge() {
+	if t.commitOp == nil || t.commitOp.Loading() {
+		return
+	}
+	t.executeCommitOp(commitOpRequest{op: opMergeContinue})
+}
+
+// abortMerge 先弹窗确认，再取消未完成的 merge。
+func (t *TUI) abortMerge() {
+	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Loading() {
+		return
+	}
+
+	previous := t.app.GetFocus()
+
+	prompt := tview.NewModal().
+		SetText("Abort merge?\n\nAll conflict resolutions will be lost.").
+		AddButtons([]string{"Cancel", "Abort"}).
+		SetDoneFunc(func(buttonIndex int, _ string) {
+			t.root.RemovePage("merge-abort")
+			t.promptVisible = false
+			if previous != nil {
+				t.app.SetFocus(previous)
+			} else {
+				t.app.SetFocus(t.commitList)
+			}
+			if buttonIndex == 1 {
+				t.executeCommitOp(commitOpRequest{op: opMergeAbort})
+			}
+		})
+
+	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
+	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
+	prompt.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+	prompt.Box.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+
+	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
+	// 固定成白底黑字，保证按钮文字始终是深色。
+	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
+		Background(tview.Styles.PrimaryTextColor).
+		Foreground(tcell.ColorBlack))
+
+	t.promptVisible = true
+	t.root.AddPage("merge-abort", prompt, true, true)
 	t.app.SetFocus(prompt)
 }
 
@@ -1767,7 +1869,8 @@ func (t *TUI) showRefs(_ refsRequest, refs core.Refs, err error) {
 	t.HeadRef = refs.HeadRef
 	t.HeadHash = refs.HeadHash
 	t.Rebasing = refs.Rebasing
-	t.renderRebaseActions()
+	t.Merging = refs.Merging
+	t.renderInProgressActions()
 	if t.repoHead != nil {
 		t.repoHead.SetText(t.HeadRef)
 	}
@@ -2518,6 +2621,12 @@ func (t *TUI) showCommitOp(req commitOpRequest, _ string, err error) {
 			message = "rebase continue failed: " + message
 		case opRebaseAbort:
 			message = "rebase abort failed: " + message
+		case opMerge:
+			message = "merge failed: " + message
+		case opMergeContinue:
+			message = "merge continue failed: " + message
+		case opMergeAbort:
+			message = "merge abort failed: " + message
 		default:
 			message = "rebase failed: " + message
 		}
@@ -2546,6 +2655,21 @@ func (t *TUI) commitOpLabel(req commitOpRequest, done bool) string {
 			return "rebase aborted"
 		}
 		return "aborting rebase"
+	case opMerge:
+		if done {
+			return "merged " + req.commit.ShortHash()
+		}
+		return "merging " + req.commit.ShortHash()
+	case opMergeContinue:
+		if done {
+			return "merge continued"
+		}
+		return "continuing merge"
+	case opMergeAbort:
+		if done {
+			return "merge aborted"
+		}
+		return "aborting merge"
 	default:
 		if done {
 			return "rebased onto " + req.commit.ShortHash()
@@ -2598,16 +2722,31 @@ func (t *TUI) renderStatus() {
 	t.statusBar.SetText("[gray]loading " + strings.Join(messages, ", ") + "…[-]")
 }
 
-// renderRebaseActions 按 rebase 状态显示或隐藏 statusBar 右侧的 Continue / Abort 按钮。
-func (t *TUI) renderRebaseActions() {
-	if t.statusRow == nil || t.rebaseContinue == nil || t.rebaseAbort == nil {
+// renderInProgressActions 按 rebase / merge 状态切换 statusBar 右侧 Continue / Abort 的文案和动作。
+// 两种操作不会同时进行；都处于未完成状态时优先显示 rebase。
+func (t *TUI) renderInProgressActions() {
+	if t.statusRow == nil || t.continueButton == nil || t.abortButton == nil {
 		return
 	}
-	continueWidth, abortWidth := 0, 0
-	if t.Rebasing {
-		continueWidth = tview.TaggedStringWidth(t.rebaseContinue.GetLabel()) + 2
-		abortWidth = tview.TaggedStringWidth(t.rebaseAbort.GetLabel()) + 2
+
+	var continueLabel, abortLabel string
+	var continueFunc, abortFunc func()
+	switch {
+	case t.Rebasing:
+		continueLabel, abortLabel = "Continue rebase", "Abort rebase"
+		continueFunc, abortFunc = t.continueRebase, t.abortRebase
+	case t.Merging:
+		continueLabel, abortLabel = "Continue merge", "Abort merge"
+		continueFunc, abortFunc = t.continueMerge, t.abortMerge
 	}
-	t.statusRow.ResizeItem(t.rebaseContinue, continueWidth, 0)
-	t.statusRow.ResizeItem(t.rebaseAbort, abortWidth, 0)
+	t.continueButton.SetLabel(continueLabel).SetSelectedFunc(continueFunc)
+	t.abortButton.SetLabel(abortLabel).SetSelectedFunc(abortFunc)
+
+	continueWidth, abortWidth := 0, 0
+	if continueLabel != "" {
+		continueWidth = tview.TaggedStringWidth(continueLabel) + 2
+		abortWidth = tview.TaggedStringWidth(abortLabel) + 2
+	}
+	t.statusRow.ResizeItem(t.continueButton, continueWidth, 0)
+	t.statusRow.ResizeItem(t.abortButton, abortWidth, 0)
 }
