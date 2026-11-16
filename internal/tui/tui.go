@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"lanegraph/internal/async"
 	"lanegraph/internal/core"
+	"lanegraph/internal/loader"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -77,22 +77,22 @@ type TUI struct {
 	borderColor         tcell.Color
 	borderFocusColor    tcell.Color
 
-	refs    *async.Loader[core.Refs, refsRequest]
-	commits *async.Loader[[]core.Commit, commitsRequest]
+	refs    *loader.Loader[core.Refs, refsRequest]
+	commits *loader.Loader[[]core.Commit, commitsRequest]
 
-	diff  *async.Loader[string, diffRequest]
-	files *async.Loader[[]core.FileChange, filesRequest]
+	diff  *loader.Loader[string, diffRequest]
+	files *loader.Loader[[]core.FileChange, filesRequest]
 
-	localDiff  *async.Loader[string, localDiffRequest]
-	localFiles *async.Loader[[]core.FileChange, localFilesRequest]
+	localDiff  *loader.Loader[string, localDiffRequest]
+	localFiles *loader.Loader[[]core.FileChange, localFilesRequest]
 
-	fileHistory     *async.Loader[[]core.Commit, historyRequest]
-	fileHistoryDiff *async.Loader[string, historyDiffRequest]
+	fileHistory     *loader.Loader[[]core.Commit, historyRequest]
+	fileHistoryDiff *loader.Loader[string, historyDiffRequest]
 
-	changeOp *async.Loader[string, changeOpRequest]
-	checkout *async.Loader[string, checkoutRequest]
-	syncOp   *async.Loader[string, syncOpRequest]
-	commitOp *async.Loader[string, commitOpRequest]
+	changeOp *loader.Loader[string, changeOpRequest]
+	checkout *loader.Loader[string, checkoutRequest]
+	syncOp   *loader.Loader[string, syncOpRequest]
+	commitOp *loader.Loader[string, commitOpRequest]
 }
 
 type refsRequest struct{}
@@ -776,7 +776,7 @@ func (t *TUI) setupLoaders() {
 		return compare.Hash
 	}
 
-	t.refs = async.New(async.Config[core.Refs, refsRequest]{
+	t.refs = loader.New(loader.Config[core.Refs, refsRequest]{
 		Key: func(refsRequest) string { return "refs" },
 		Load: func(ctx context.Context, _ refsRequest) (core.Refs, error) {
 			return t.Refs(ctx)
@@ -786,7 +786,7 @@ func (t *TUI) setupLoaders() {
 		OnResult:  t.showRefs,
 	})
 
-	t.commits = async.New(async.Config[[]core.Commit, commitsRequest]{
+	t.commits = loader.New(loader.Config[[]core.Commit, commitsRequest]{
 		Key: func(commitsRequest) string { return "commits" },
 		Load: func(ctx context.Context, _ commitsRequest) ([]core.Commit, error) {
 			return t.History(ctx)
@@ -796,7 +796,7 @@ func (t *TUI) setupLoaders() {
 		OnResult:  t.showCommits,
 	})
 
-	t.files = async.New(async.Config[[]core.FileChange, filesRequest]{
+	t.files = loader.New(loader.Config[[]core.FileChange, filesRequest]{
 		Key: func(req filesRequest) string {
 			return fmt.Sprintf("%s\x00%s", req.commit.Hash, compareKey(req.compare))
 		},
@@ -808,7 +808,7 @@ func (t *TUI) setupLoaders() {
 		OnResult:  t.showFiles,
 	})
 
-	t.diff = async.New(async.Config[string, diffRequest]{
+	t.diff = loader.New(loader.Config[string, diffRequest]{
 		Key: func(req diffRequest) string {
 			return fmt.Sprintf("%s\x00%s\x00%s\x00%s", req.commit.Hash, compareKey(req.compare), req.change.Path, req.options)
 		},
@@ -820,7 +820,7 @@ func (t *TUI) setupLoaders() {
 		OnResult:  t.showFileDiff,
 	})
 
-	t.fileHistory = async.New(async.Config[[]core.Commit, historyRequest]{
+	t.fileHistory = loader.New(loader.Config[[]core.Commit, historyRequest]{
 		Key: func(req historyRequest) string { return req.path },
 		Load: func(ctx context.Context, req historyRequest) ([]core.Commit, error) {
 			return t.FileHistory(ctx, req.path)
@@ -829,7 +829,7 @@ func (t *TUI) setupLoaders() {
 		OnResult: t.showHistory,
 	})
 
-	t.fileHistoryDiff = async.New(async.Config[string, historyDiffRequest]{
+	t.fileHistoryDiff = loader.New(loader.Config[string, historyDiffRequest]{
 		Key: func(req historyDiffRequest) string {
 			return fmt.Sprintf("%s\x00%s\x00%s", req.commit.Hash, req.change.Path, req.options)
 		},
@@ -840,7 +840,7 @@ func (t *TUI) setupLoaders() {
 		OnResult: t.showHistoryDiff,
 	})
 
-	t.localFiles = async.New(async.Config[[]core.FileChange, localFilesRequest]{
+	t.localFiles = loader.New(loader.Config[[]core.FileChange, localFilesRequest]{
 		Key: func(localFilesRequest) string { return "local" },
 		Load: func(ctx context.Context, _ localFilesRequest) ([]core.FileChange, error) {
 			return t.LocalFiles(ctx)
@@ -850,7 +850,7 @@ func (t *TUI) setupLoaders() {
 		OnResult:  t.showLocal,
 	})
 
-	t.localDiff = async.New(async.Config[string, localDiffRequest]{
+	t.localDiff = loader.New(loader.Config[string, localDiffRequest]{
 		Key: func(req localDiffRequest) string {
 			return fmt.Sprintf("%d\x00%s\x00%s", req.change.Scope, req.change.Path, req.options)
 		},
@@ -862,7 +862,7 @@ func (t *TUI) setupLoaders() {
 		OnResult:  t.showLocalDiff,
 	})
 
-	t.changeOp = async.New(async.Config[string, changeOpRequest]{
+	t.changeOp = loader.New(loader.Config[string, changeOpRequest]{
 		Key: func(req changeOpRequest) string {
 			return fmt.Sprintf("%d\x00%s", req.op, req.path)
 		},
@@ -884,7 +884,7 @@ func (t *TUI) setupLoaders() {
 		OnResult:  t.showChangeOp,
 	})
 
-	t.checkout = async.New(async.Config[string, checkoutRequest]{
+	t.checkout = loader.New(loader.Config[string, checkoutRequest]{
 		Key: func(req checkoutRequest) string { return req.branch.Name },
 		Load: func(ctx context.Context, req checkoutRequest) (string, error) {
 			return t.Checkout(ctx, req.branch)
@@ -894,7 +894,7 @@ func (t *TUI) setupLoaders() {
 		OnResult:  t.showCheckout,
 	})
 
-	t.syncOp = async.New(async.Config[string, syncOpRequest]{
+	t.syncOp = loader.New(loader.Config[string, syncOpRequest]{
 		Key: func(req syncOpRequest) string { return fmt.Sprintf("%d", req.op) },
 		Load: func(ctx context.Context, req syncOpRequest) (string, error) {
 			switch req.op {
@@ -911,7 +911,7 @@ func (t *TUI) setupLoaders() {
 		OnResult:  t.showSync,
 	})
 
-	t.commitOp = async.New(async.Config[string, commitOpRequest]{
+	t.commitOp = loader.New(loader.Config[string, commitOpRequest]{
 		Key: func(req commitOpRequest) string {
 			return fmt.Sprintf("%d\x00%s\x00%d", req.op, req.commit.Hash, req.resetMode)
 		},
@@ -939,8 +939,8 @@ func (t *TUI) setupLoaders() {
 	})
 }
 
-func (t *TUI) loaders() []async.LoaderLifecycle {
-	return []async.LoaderLifecycle{
+func (t *TUI) loaders() []loader.Lifecycle {
+	return []loader.Lifecycle{
 		t.refs,
 		t.commits,
 		t.files,

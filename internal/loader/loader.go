@@ -1,4 +1,4 @@
-package async
+package loader
 
 import (
 	"context"
@@ -33,8 +33,8 @@ type slot[K any] struct {
 	cancel context.CancelFunc
 }
 
-// LoaderLifecycle 统一描述 Loader 的关闭与等待操作，便于管理不同泛型实例。
-type LoaderLifecycle interface {
+// Lifecycle 统一描述 Loader 的关闭与等待操作，便于管理不同泛型实例。
+type Lifecycle interface {
 	Close()
 	Wait()
 }

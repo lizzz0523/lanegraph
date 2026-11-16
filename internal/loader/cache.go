@@ -1,4 +1,4 @@
-package async
+package loader
 
 import "container/list"
 
