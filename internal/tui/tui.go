@@ -89,10 +89,10 @@ type TUI struct {
 	fileHistory     *loader.Loader[[]core.Commit, historyRequest]
 	fileHistoryDiff *loader.Loader[string, historyDiffRequest]
 
-	changeOp *loader.Loader[string, changeOpRequest]
 	checkout *loader.Loader[string, checkoutRequest]
 	syncOp   *loader.Loader[string, syncOpRequest]
 	commitOp *loader.Loader[string, commitOpRequest]
+	changeOp *loader.Loader[string, changeOpRequest]
 }
 
 type refsRequest struct{}
@@ -126,23 +126,6 @@ type historyDiffRequest struct {
 	commit  core.Commit
 	change  core.FileChange
 	options core.DiffOptions
-}
-
-// changeOp 是本地变更列表上的操作类型。
-type changeOp uint8
-
-const (
-	opStage changeOp = iota
-	opUnstage
-	opDiscard
-)
-
-// changeOpRequest 是一次本地变更操作；stage/unstage 可针对目录下的多个文件，
-// discard 只对单个文件生效（changes 长度为 1）。
-type changeOpRequest struct {
-	op      changeOp
-	changes []core.FileChange
-	path    string // 状态栏文案：单文件为文件路径，目录为目录路径
 }
 
 type checkoutRequest struct {
@@ -179,6 +162,23 @@ type commitOpRequest struct {
 	op        commitOp
 	commit    core.Commit
 	resetMode core.ResetMode // 仅 reset 使用
+}
+
+// changeOp 是本地变更列表上的操作类型。
+type changeOp uint8
+
+const (
+	opStage changeOp = iota
+	opUnstage
+	opDiscard
+)
+
+// changeOpRequest 是一次本地变更操作；stage/unstage 可针对目录下的多个文件，
+// discard 只对单个文件生效（changes 长度为 1）。
+type changeOpRequest struct {
+	op      changeOp
+	changes []core.FileChange
+	path    string // 状态栏文案：单文件为文件路径，目录为目录路径
 }
 
 func New(st *core.State) *TUI {
@@ -862,28 +862,6 @@ func (t *TUI) setupLoaders() {
 		OnResult:  t.showLocalDiff,
 	})
 
-	t.changeOp = loader.New(loader.Config[string, changeOpRequest]{
-		Key: func(req changeOpRequest) string {
-			return fmt.Sprintf("%d\x00%s", req.op, req.path)
-		},
-		Load: func(ctx context.Context, req changeOpRequest) (string, error) {
-			switch req.op {
-			case opStage:
-				return req.path, t.Stage(ctx, req.changes)
-			case opUnstage:
-				return req.path, t.Unstage(ctx, req.changes)
-			default:
-				if len(req.changes) == 0 {
-					return req.path, nil
-				}
-				return req.path, t.Discard(ctx, req.changes[0])
-			}
-		},
-		Post:      post,
-		OnLoading: t.showChangeOpLoading,
-		OnResult:  t.showChangeOp,
-	})
-
 	t.checkout = loader.New(loader.Config[string, checkoutRequest]{
 		Key: func(req checkoutRequest) string { return req.branch.Name },
 		Load: func(ctx context.Context, req checkoutRequest) (string, error) {
@@ -937,6 +915,28 @@ func (t *TUI) setupLoaders() {
 		OnLoading: t.showCommitOpLoading,
 		OnResult:  t.showCommitOp,
 	})
+
+	t.changeOp = loader.New(loader.Config[string, changeOpRequest]{
+		Key: func(req changeOpRequest) string {
+			return fmt.Sprintf("%d\x00%s", req.op, req.path)
+		},
+		Load: func(ctx context.Context, req changeOpRequest) (string, error) {
+			switch req.op {
+			case opStage:
+				return req.path, t.Stage(ctx, req.changes)
+			case opUnstage:
+				return req.path, t.Unstage(ctx, req.changes)
+			default:
+				if len(req.changes) == 0 {
+					return req.path, nil
+				}
+				return req.path, t.Discard(ctx, req.changes[0])
+			}
+		},
+		Post:      post,
+		OnLoading: t.showChangeOpLoading,
+		OnResult:  t.showChangeOp,
+	})
 }
 
 func (t *TUI) loaders() []loader.Lifecycle {
@@ -949,10 +949,10 @@ func (t *TUI) loaders() []loader.Lifecycle {
 		t.localDiff,
 		t.fileHistory,
 		t.fileHistoryDiff,
-		t.changeOp,
 		t.checkout,
 		t.syncOp,
 		t.commitOp,
+		t.changeOp,
 	}
 }
 
@@ -2425,53 +2425,6 @@ func (t *TUI) syncDiffViewWidth(view *tview.TextView) {
 	t.refreshActiveDiff()
 }
 
-/** CHANGE OP */
-
-func (t *TUI) executeChangeOp(op changeOp, changes []core.FileChange, path string) {
-	t.changeOp.Reload(changeOpRequest{op: op, changes: changes, path: path})
-}
-
-func (t *TUI) showChangeOpLoading(req changeOpRequest) {
-	t.statusStart("change", t.changeOpLabel(req, false))
-}
-
-func (t *TUI) showChangeOp(req changeOpRequest, _ string, err error) {
-	message := t.changeOpLabel(req, true)
-	if err != nil {
-		// git 的错误可能是多行，压成一行避免撑坏单行 statusBar。
-		message += " failed: " + strings.Join(strings.Fields(err.Error()), " ")
-		t.statusDone("change", message)
-		return
-	}
-	t.statusDone("change", message)
-	t.reloadLocal()
-}
-
-// changeOpLabel 返回本地变更操作的 loading/完成文案。
-func (t *TUI) changeOpLabel(req changeOpRequest, done bool) string {
-	path := req.path
-	if len(req.changes) > 1 {
-		path = fmt.Sprintf("%s (%d files)", req.path, len(req.changes))
-	}
-	switch req.op {
-	case opStage:
-		if done {
-			return "staged " + path
-		}
-		return "staging " + path
-	case opUnstage:
-		if done {
-			return "unstaged " + path
-		}
-		return "unstaging " + path
-	default:
-		if done {
-			return "discarded " + path
-		}
-		return "discarding " + path
-	}
-}
-
 /** CHECKOUT */
 
 // executeCheckout 通过节点引用取分支并绕过缓存，保证每次按空格都真正执行 git checkout。
@@ -2502,7 +2455,7 @@ func (t *TUI) showCheckout(_ checkoutRequest, branch string, err error) {
 	t.reloadCommits()
 }
 
-/** SYNC */
+/** SYNC OP */
 
 // executeSync 通过 Reload 绕过缓存，保证每次按键都真正执行 git 命令。
 func (t *TUI) executeSync(op syncOp) {
@@ -2690,6 +2643,53 @@ func (t *TUI) commitOpLabel(req commitOpRequest, done bool) string {
 			return "rebased onto " + req.commit.ShortHash()
 		}
 		return "rebasing onto " + req.commit.ShortHash()
+	}
+}
+
+/** CHANGE OP */
+
+func (t *TUI) executeChangeOp(op changeOp, changes []core.FileChange, path string) {
+	t.changeOp.Reload(changeOpRequest{op: op, changes: changes, path: path})
+}
+
+func (t *TUI) showChangeOpLoading(req changeOpRequest) {
+	t.statusStart("change", t.changeOpLabel(req, false))
+}
+
+func (t *TUI) showChangeOp(req changeOpRequest, _ string, err error) {
+	message := t.changeOpLabel(req, true)
+	if err != nil {
+		// git 的错误可能是多行，压成一行避免撑坏单行 statusBar。
+		message += " failed: " + strings.Join(strings.Fields(err.Error()), " ")
+		t.statusDone("change", message)
+		return
+	}
+	t.statusDone("change", message)
+	t.reloadLocal()
+}
+
+// changeOpLabel 返回本地变更操作的 loading/完成文案。
+func (t *TUI) changeOpLabel(req changeOpRequest, done bool) string {
+	path := req.path
+	if len(req.changes) > 1 {
+		path = fmt.Sprintf("%s (%d files)", req.path, len(req.changes))
+	}
+	switch req.op {
+	case opStage:
+		if done {
+			return "staged " + path
+		}
+		return "staging " + path
+	case opUnstage:
+		if done {
+			return "unstaged " + path
+		}
+		return "unstaging " + path
+	default:
+		if done {
+			return "discarded " + path
+		}
+		return "discarding " + path
 	}
 }
 

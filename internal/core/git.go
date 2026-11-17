@@ -180,33 +180,6 @@ func GitRebaseInProgress(ctx context.Context, repo string) bool {
 	return gitPathExists(ctx, repo, "rebase-apply") && !gitPathExists(ctx, repo, "rebase-apply/applying")
 }
 
-// GitMerge 把 commit 合入当前分支，并自动暂存和恢复本地改动。
-func GitMerge(ctx context.Context, repo string, commit Commit) (string, error) {
-	output, err := gitOutput(ctx, repo, nil, "merge", "--no-edit", "--autostash", commit.Hash)
-	if err != nil {
-		return "", fmt.Errorf("git merge error: %w", gitStderr(err))
-	}
-	return output, nil
-}
-
-// GitMergeInProgress 返回仓库是否停在未完成的 merge 中。
-func GitMergeInProgress(ctx context.Context, repo string) bool {
-	return gitPathExists(ctx, repo, "MERGE_HEAD")
-}
-
-// gitPathExists 判断 git 路径是否存在；路径由 git 解析，兼容 worktree 的独立 gitdir。
-func gitPathExists(ctx context.Context, repo, name string) bool {
-	path, err := gitOutputTrimmed(ctx, repo, "rev-parse", "--git-path", name)
-	if err != nil || path == "" {
-		return false
-	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(repo, path)
-	}
-	_, err = os.Stat(path)
-	return err == nil
-}
-
 // GitRebaseContinue 在冲突解决并暂存后继续 rebase，返回 git 的输出。
 func GitRebaseContinue(ctx context.Context, repo string) (string, error) {
 	output, err := gitOutput(ctx, repo, gitContinueEnv(), "rebase", "--continue")
@@ -225,6 +198,20 @@ func GitRebaseAbort(ctx context.Context, repo string) (string, error) {
 	return output, nil
 }
 
+// GitMerge 把 commit 合入当前分支，并自动暂存和恢复本地改动。
+func GitMerge(ctx context.Context, repo string, commit Commit) (string, error) {
+	output, err := gitOutput(ctx, repo, nil, "merge", "--no-edit", "--autostash", commit.Hash)
+	if err != nil {
+		return "", fmt.Errorf("git merge error: %w", gitStderr(err))
+	}
+	return output, nil
+}
+
+// GitMergeInProgress 返回仓库是否停在未完成的 merge 中。
+func GitMergeInProgress(ctx context.Context, repo string) bool {
+	return gitPathExists(ctx, repo, "MERGE_HEAD")
+}
+
 // GitMergeContinue 在冲突解决并暂存后继续 merge，返回 git 的输出。
 func GitMergeContinue(ctx context.Context, repo string) (string, error) {
 	output, err := gitOutput(ctx, repo, gitContinueEnv(), "merge", "--continue")
@@ -241,6 +228,25 @@ func GitMergeAbort(ctx context.Context, repo string) (string, error) {
 		return "", fmt.Errorf("git merge abort error: %w", gitStderr(err))
 	}
 	return output, nil
+}
+
+// gitPathExists 判断 git 路径是否存在；路径由 git 解析，兼容 worktree 的独立 gitdir。
+func gitPathExists(ctx context.Context, repo, name string) bool {
+	path, err := gitOutputTrimmed(ctx, repo, "rev-parse", "--git-path", name)
+	if err != nil || path == "" {
+		return false
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(repo, path)
+	}
+	_, err = os.Stat(path)
+	return err == nil
+}
+
+// gitContinueEnv 返回继续 rebase / merge 时使用的环境：
+// 解决冲突后 --continue 会打开提交信息编辑器，TUI 独占终端，直接接受默认信息。
+func gitContinueEnv() []string {
+	return append(os.Environ(), "GIT_EDITOR=true")
 }
 
 // GitPull 拉取当前分支的上游变更，返回 git 的输出。
@@ -274,12 +280,6 @@ func GitFetch(ctx context.Context, repo string) (string, error) {
 // TUI 独占终端，禁止 git 弹出凭据和编辑器提示。
 func gitRemoteEnv() []string {
 	return append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_EDITOR=true")
-}
-
-// gitContinueEnv 返回继续 rebase / merge 时使用的环境：
-// 解决冲突后 --continue 会打开提交信息编辑器，TUI 独占终端，直接接受默认信息。
-func gitContinueEnv() []string {
-	return append(os.Environ(), "GIT_EDITOR=true")
 }
 
 type Commit struct {

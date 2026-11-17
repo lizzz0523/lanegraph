@@ -19,9 +19,9 @@ type State struct {
 	// Merging 表示仓库有未完成的 merge（冲突解决中）。
 	Merging bool
 
-	Commits  []Commit
 	Branches []Branch
 
+	Commits       []Commit
 	CurrentCommit Commit
 	CompareCommit *Commit
 
@@ -60,15 +60,6 @@ func NewState(ctx context.Context, repo string) (State, error) {
 }
 
 // History 返回仓库的提交历史。
-func (s *State) History(ctx context.Context) ([]Commit, error) {
-	return GitCommits(ctx, s.Repo)
-}
-
-// FileHistory 返回某个文件的提交历史。
-func (s *State) FileHistory(ctx context.Context, path string) ([]Commit, error) {
-	return GitFileHistory(ctx, s.Repo, path)
-}
-
 // Refs 是仓库的分支与 HEAD 快照。
 type Refs struct {
 	Branches []Branch
@@ -132,9 +123,13 @@ func (s *State) Discard(ctx context.Context, change FileChange) error {
 	return GitDiscard(ctx, s.Repo, change)
 }
 
-// Checkout 切换分支并返回实际检出的本地分支名。
-func (s *State) Checkout(ctx context.Context, branch Branch) (string, error) {
-	return GitCheckout(ctx, s.Repo, branch)
+func (s *State) History(ctx context.Context) ([]Commit, error) {
+	return GitCommits(ctx, s.Repo)
+}
+
+// FileHistory 返回某个文件的提交历史。
+func (s *State) FileHistory(ctx context.Context, path string) ([]Commit, error) {
+	return GitFileHistory(ctx, s.Repo, path)
 }
 
 // Reset 把当前分支重置到 commit。
@@ -147,11 +142,6 @@ func (s *State) Rebase(ctx context.Context, commit Commit) (string, error) {
 	return GitRebase(ctx, s.Repo, commit)
 }
 
-// Merge 把 commit 合入当前分支。
-func (s *State) Merge(ctx context.Context, commit Commit) (string, error) {
-	return GitMerge(ctx, s.Repo, commit)
-}
-
 // RebaseContinue 在冲突解决并暂存后继续 rebase。
 func (s *State) RebaseContinue(ctx context.Context) (string, error) {
 	return GitRebaseContinue(ctx, s.Repo)
@@ -160,6 +150,11 @@ func (s *State) RebaseContinue(ctx context.Context) (string, error) {
 // RebaseAbort 取消未完成的 rebase。
 func (s *State) RebaseAbort(ctx context.Context) (string, error) {
 	return GitRebaseAbort(ctx, s.Repo)
+}
+
+// Merge 把 commit 合入当前分支。
+func (s *State) Merge(ctx context.Context, commit Commit) (string, error) {
+	return GitMerge(ctx, s.Repo, commit)
 }
 
 // MergeContinue 在冲突解决并暂存后继续 merge。
@@ -185,6 +180,11 @@ func (s *State) Push(ctx context.Context) (string, error) {
 // Fetch 拉取远端引用。
 func (s *State) Fetch(ctx context.Context) (string, error) {
 	return GitFetch(ctx, s.Repo)
+}
+
+// Checkout 切换分支并返回实际检出的本地分支名。
+func (s *State) Checkout(ctx context.Context, branch Branch) (string, error) {
+	return GitCheckout(ctx, s.Repo, branch)
 }
 
 // OpenFile 使用系统默认应用打开仓库内的文件（仅支持 macOS）。
