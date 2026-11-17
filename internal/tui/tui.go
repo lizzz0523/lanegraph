@@ -209,9 +209,12 @@ func (t *TUI) Run() error {
 		}
 
 		filtering := t.filterText != nil && t.filterText.HasFocus()
+		// filter 和 commit 输入框里要能正常输入字母；Ctrl+Q 仍然随时可退出。
+		typing := filtering ||
+			(t.commitSubject != nil && t.commitSubject.HasFocus()) ||
+			(t.commitDescription != nil && t.commitDescription.HasFocus())
 		switch {
-		// filter 输入框里要能正常输入 q；Ctrl+Q 仍然随时可退出。
-		case event.Key() == tcell.KeyCtrlQ || (event.Key() == tcell.KeyRune && event.Rune() == 'q' && !filtering && !t.promptVisible):
+		case event.Key() == tcell.KeyCtrlQ || (event.Key() == tcell.KeyRune && event.Rune() == 'q' && !typing && !t.promptVisible):
 			t.quit()
 			return nil
 		case event.Key() == tcell.KeyEscape && filtering:
@@ -224,8 +227,8 @@ func (t *TUI) Run() error {
 		case event.Key() == tcell.KeyBacktab && !t.promptVisible && !t.commitInfoVisible:
 			app.SetFocus(t.nextFocus(-1))
 			return nil
-		// p / P / f 全局触发当前分支的 pull / push / fetch；filter 输入时不拦截。
-		case event.Key() == tcell.KeyRune && !filtering && !t.promptVisible:
+		// p / P / f 全局触发当前分支的 pull / push / fetch；输入框输入时不拦截。
+		case event.Key() == tcell.KeyRune && !typing && !t.promptVisible:
 			switch event.Rune() {
 			case 'p':
 				t.syncBranch(opPull)
