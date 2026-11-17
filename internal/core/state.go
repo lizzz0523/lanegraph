@@ -18,6 +18,8 @@ type State struct {
 	Rebasing bool
 	// Merging 表示仓库有未完成的 merge（冲突解决中）。
 	Merging bool
+	// Squashing 表示 squash merge 已应用但尚未提交。
+	Squashing bool
 
 	Branches []Branch
 
@@ -54,6 +56,7 @@ func NewState(ctx context.Context, repo string) (State, error) {
 	s.HeadHash = refs.HeadHash
 	s.Rebasing = refs.Rebasing
 	s.Merging = refs.Merging
+	s.Squashing = refs.Squashing
 	s.Branches = refs.Branches
 	s.Commits = commits
 	return s, nil
@@ -62,11 +65,12 @@ func NewState(ctx context.Context, repo string) (State, error) {
 // History 返回仓库的提交历史。
 // Refs 是仓库的分支与 HEAD 快照。
 type Refs struct {
-	Branches []Branch
-	HeadRef  string
-	HeadHash string
-	Rebasing bool
-	Merging  bool
+	Branches  []Branch
+	HeadRef   string
+	HeadHash  string
+	Rebasing  bool
+	Merging   bool
+	Squashing bool
 }
 
 // Refs 返回仓库的分支与 HEAD 快照。
@@ -77,11 +81,12 @@ func (s *State) Refs(ctx context.Context) (Refs, error) {
 	}
 	headRef, headHash := GitRepoHead(ctx, s.Repo)
 	return Refs{
-		Branches: branches,
-		HeadRef:  headRef,
-		HeadHash: headHash,
-		Rebasing: GitRebaseInProgress(ctx, s.Repo),
-		Merging:  GitMergeInProgress(ctx, s.Repo),
+		Branches:  branches,
+		HeadRef:   headRef,
+		HeadHash:  headHash,
+		Rebasing:  GitRebaseInProgress(ctx, s.Repo),
+		Merging:   GitMergeInProgress(ctx, s.Repo),
+		Squashing: GitSquashInProgress(ctx, s.Repo),
 	}, nil
 }
 
@@ -134,9 +139,9 @@ func (s *State) RebaseAbort(ctx context.Context) (string, error) {
 	return GitRebaseAbort(ctx, s.Repo)
 }
 
-// Merge 把 commit 合入当前分支。
-func (s *State) Merge(ctx context.Context, commit Commit) (string, error) {
-	return GitMerge(ctx, s.Repo, commit)
+// Merge 把 commit 按 mode 合入当前分支。
+func (s *State) Merge(ctx context.Context, commit Commit, mode MergeMode) (string, error) {
+	return GitMerge(ctx, s.Repo, commit, mode)
 }
 
 // MergeContinue 在冲突解决并暂存后继续 merge。
@@ -147,6 +152,16 @@ func (s *State) MergeContinue(ctx context.Context) (string, error) {
 // MergeAbort 取消未完成的 merge。
 func (s *State) MergeAbort(ctx context.Context) (string, error) {
 	return GitMergeAbort(ctx, s.Repo)
+}
+
+// SquashContinue 提交待完成的 squash。
+func (s *State) SquashContinue(ctx context.Context) (string, error) {
+	return GitSquashContinue(ctx, s.Repo)
+}
+
+// SquashAbort 取消待完成的 squash。
+func (s *State) SquashAbort(ctx context.Context) (string, error) {
+	return GitSquashAbort(ctx, s.Repo)
 }
 
 // Commit 用 subject 和可选的 description 提交暂存区改动；amend 为 true 时改写 HEAD 提交。

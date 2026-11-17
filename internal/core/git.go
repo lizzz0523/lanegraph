@@ -343,9 +343,35 @@ func GitRebaseAbort(ctx context.Context, repo string) (string, error) {
 	return output, nil
 }
 
-// GitMerge 把 commit 合入当前分支，并自动暂存和恢复本地改动。
-func GitMerge(ctx context.Context, repo string, commit Commit) (string, error) {
-	output, err := gitOutput(ctx, repo, nil, "merge", "--no-edit", "--autostash", commit.Hash)
+// MergeMode 是 git merge 的合并方式。
+type MergeMode uint8
+
+const (
+	MergeFF MergeMode = iota
+	MergeNoFF
+	MergeSquash
+)
+
+// String 返回 git merge 对应的模式名。
+func (m MergeMode) String() string {
+	switch m {
+	case MergeFF:
+		return "ff"
+	case MergeNoFF:
+		return "no-ff"
+	case MergeSquash:
+		return "squash"
+	default:
+		return fmt.Sprintf("unknown(%d)", uint8(m))
+	}
+}
+
+// GitMerge 按 mode 把 commit 合入当前分支，并自动暂存和恢复本地改动。
+func GitMerge(ctx context.Context, repo string, commit Commit, mode MergeMode) (string, error) {
+	if mode != MergeFF && mode != MergeNoFF && mode != MergeSquash {
+		return "", fmt.Errorf("unknown merge mode: %d", mode)
+	}
+	output, err := gitOutput(ctx, repo, nil, "merge", "--"+mode.String(), "--no-edit", "--autostash", commit.Hash)
 	if err != nil {
 		return "", fmt.Errorf("git merge error: %w", gitStderr(err))
 	}
@@ -375,17 +401,73 @@ func GitMergeAbort(ctx context.Context, repo string) (string, error) {
 	return output, nil
 }
 
-// gitPathExists 判断 git 路径是否存在；路径由 git 解析，兼容 worktree 的独立 gitdir。
+// GitSquashInProgress 返回是否有待提交的 squash merge。
+// squash 用 SQUASH_MSG 记录状态，不会生成 MERGE_HEAD。
+func GitSquashInProgress(ctx context.Context, repo string) bool {
+	return gitPathExists(ctx, repo, "SQUASH_MSG")
+}
+
+// GitSquashContinue 提交 squash 结果，使用 git 生成的 squash 提交信息；
+// 有 autostash 时 git commit 会自动恢复本地改动。
+func GitSquashContinue(ctx context.Context, repo string) (string, error) {
+	output, err := gitOutput(ctx, repo, gitContinueEnv(), "commit", "--no-edit")
+	if err != nil {
+		return "", fmt.Errorf("git commit error: %w", gitStderr(err))
+	}
+	return output, nil
+}
+
+// GitSquashAbort 取消待提交的 squash，恢复到 merge 之前的状态。
+// squash 没有 MERGE_HEAD，git merge --abort 不可用；reset --merge 会保留未暂存的本地改动，
+// autostash 则会被重新放进 stash，需要再 pop 出来。
+func GitSquashAbort(ctx context.Context, repo string) (string, error) {
+	autostash := ""
+	if path, ok := gitPath(ctx, repo, "MERGE_AUTOSTASH"); ok {
+		if data, err := os.ReadFile(path); err == nil {
+			autostash = strings.TrimSpace(string(data))
+		}
+	}
+
+	output, err := gitOutput(ctx, repo, nil, "reset", "--merge", "ORIG_HEAD")
+	if err != nil {
+		return "", fmt.Errorf("git reset error: %w", gitStderr(err))
+	}
+	if autostash == "" {
+		return output, nil
+	}
+
+	// reset 会把 autostash 重新存成一个新的 stash 条目；确认栈顶就是它再 pop，
+	// 避免误动用户自己的 stash。
+	if stash, err := gitOutputTrimmed(ctx, repo, "rev-parse", "--verify", "refs/stash"); err == nil && stash == autostash {
+		popped, err := gitOutput(ctx, repo, nil, "stash", "pop")
+		if err != nil {
+			return output, fmt.Errorf("git stash pop error: %w", gitStderr(err))
+		}
+		output += popped
+	}
+	return output, nil
+}
+
+// gitPathExists 判断 git 路径是否存在。
 func gitPathExists(ctx context.Context, repo, name string) bool {
+	path, ok := gitPath(ctx, repo, name)
+	if !ok {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// gitPath 返回 git 路径；路径由 git 解析，兼容 worktree 的独立 gitdir。
+func gitPath(ctx context.Context, repo, name string) (string, bool) {
 	path, err := gitOutputTrimmed(ctx, repo, "rev-parse", "--git-path", name)
 	if err != nil || path == "" {
-		return false
+		return "", false
 	}
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(repo, path)
 	}
-	_, err = os.Stat(path)
-	return err == nil
+	return path, true
 }
 
 // gitContinueEnv 返回继续 rebase / merge 时使用的环境：

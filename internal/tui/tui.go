@@ -36,7 +36,7 @@ type TUI struct {
 	mainPanels *tview.Pages
 	statusBar  *tview.TextView
 	statusRow  *tview.Flex
-	// continueButton / abortButton 按当前未完成的操作（rebase / merge）显示对应文案和动作；
+	// continueButton / abortButton 按当前未完成的操作（rebase / merge / squash）显示对应文案和动作；
 	// 没有未完成操作时宽度为 0。
 	continueButton *tview.Button
 	abortButton    *tview.Button
@@ -162,6 +162,8 @@ const (
 	opMerge
 	opMergeContinue
 	opMergeAbort
+	opSquashContinue
+	opSquashAbort
 	opCommit
 )
 
@@ -169,6 +171,7 @@ type commitOpRequest struct {
 	op          commitOp
 	commit      core.Commit
 	resetMode   core.ResetMode // 仅 reset 使用
+	mergeMode   core.MergeMode // 仅 merge 使用
 	subject     string         // 仅 commit 使用
 	description string         // 仅 commit 使用
 	amend       bool           // 仅 commit 使用
@@ -979,14 +982,14 @@ func (t *TUI) setupLoaders() {
 
 	t.commitOp = loader.New(loader.Config[string, commitOpRequest]{
 		Key: func(req commitOpRequest) string {
-			return fmt.Sprintf("%d\x00%s\x00%d", req.op, req.commit.Hash, req.resetMode)
+			return fmt.Sprintf("%d\x00%s\x00%d\x00%d", req.op, req.commit.Hash, req.resetMode, req.mergeMode)
 		},
 		Load: func(ctx context.Context, req commitOpRequest) (string, error) {
 			switch req.op {
 			case opReset:
 				return t.Reset(ctx, req.commit, req.resetMode)
 			case opMerge:
-				return t.Merge(ctx, req.commit)
+				return t.Merge(ctx, req.commit, req.mergeMode)
 			case opRebaseContinue:
 				return t.RebaseContinue(ctx)
 			case opMergeContinue:
@@ -995,6 +998,10 @@ func (t *TUI) setupLoaders() {
 				return t.RebaseAbort(ctx)
 			case opMergeAbort:
 				return t.MergeAbort(ctx)
+			case opSquashContinue:
+				return t.SquashContinue(ctx)
+			case opSquashAbort:
+				return t.SquashAbort(ctx)
 			case opCommit:
 				return t.Commit(ctx, req.subject, req.description, req.amend)
 			default:
@@ -1453,18 +1460,23 @@ func (t *TUI) mergeCommit() {
 	}
 	commit := t.Commits[row]
 
-	message := fmt.Sprintf("Merge %s into %s?\n\n%s\n\n[gray]Local changes will be stashed and restored automatically.",
+	message := fmt.Sprintf("Merge %s into %s?\n\n%s\n\n[gray]Merge[-] fast-forwards when possible, otherwise creates a merge commit\n[gray]No FF[-] always creates a merge commit\n[gray]Squash[-] stages changes without creating a commit\n\n[gray]Local changes will be stashed and restored automatically.",
 		tview.Escape(commit.ShortHash()), tview.Escape(t.HeadRef), tview.Escape(commit.Subject))
 
 	prompt := tview.NewModal().
 		SetText(message).
-		AddButtons([]string{"Cancel", "Merge"}).
+		AddButtons([]string{"Cancel", "Merge", "No FF", "Squash"}).
 		SetDoneFunc(func(buttonIndex int, _ string) {
 			t.root.RemovePage("merge")
 			t.promptVisible = false
 			t.app.SetFocus(t.commitList)
-			if buttonIndex == 1 {
-				t.executeCommitOp(commitOpRequest{op: opMerge, commit: commit})
+			switch buttonIndex {
+			case 1:
+				t.executeCommitOp(commitOpRequest{op: opMerge, commit: commit, mergeMode: core.MergeFF})
+			case 2:
+				t.executeCommitOp(commitOpRequest{op: opMerge, commit: commit, mergeMode: core.MergeNoFF})
+			case 3:
+				t.executeCommitOp(commitOpRequest{op: opMerge, commit: commit, mergeMode: core.MergeSquash})
 			}
 		})
 
@@ -1529,6 +1541,54 @@ func (t *TUI) abortMerge() {
 
 	t.promptVisible = true
 	t.root.AddPage("merge-abort", prompt, true, true)
+	t.app.SetFocus(prompt)
+}
+
+// continueSquash 提交待完成的 squash；冲突未解决时 git 会报错。
+func (t *TUI) continueSquash() {
+	if t.commitOp == nil || t.commitOp.Loading() {
+		return
+	}
+	t.executeCommitOp(commitOpRequest{op: opSquashContinue})
+}
+
+// abortSquash 先弹窗确认，再取消待完成的 squash。
+func (t *TUI) abortSquash() {
+	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Loading() {
+		return
+	}
+
+	previous := t.app.GetFocus()
+
+	prompt := tview.NewModal().
+		SetText("Abort squash?\n\nStaged squash changes and conflict resolutions will be lost.\n\n[gray]Local changes stashed before the merge will be restored.").
+		AddButtons([]string{"Cancel", "Abort"}).
+		SetDoneFunc(func(buttonIndex int, _ string) {
+			t.root.RemovePage("squash-abort")
+			t.promptVisible = false
+			if previous != nil {
+				t.app.SetFocus(previous)
+			} else {
+				t.app.SetFocus(t.commitList)
+			}
+			if buttonIndex == 1 {
+				t.executeCommitOp(commitOpRequest{op: opSquashAbort})
+			}
+		})
+
+	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
+	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
+	prompt.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+	prompt.Box.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+
+	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
+	// 固定成白底黑字，保证按钮文字始终是深色。
+	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
+		Background(tview.Styles.PrimaryTextColor).
+		Foreground(tcell.ColorBlack))
+
+	t.promptVisible = true
+	t.root.AddPage("squash-abort", prompt, true, true)
 	t.app.SetFocus(prompt)
 }
 
@@ -1994,6 +2054,7 @@ func (t *TUI) showRefs(_ refsRequest, refs core.Refs, err error) {
 	t.HeadHash = refs.HeadHash
 	t.Rebasing = refs.Rebasing
 	t.Merging = refs.Merging
+	t.Squashing = refs.Squashing
 	t.renderInProgressActions()
 	if t.repoHead != nil {
 		t.repoHead.SetText(t.HeadRef)
@@ -2748,11 +2809,19 @@ func (t *TUI) showCommitOp(req commitOpRequest, _ string, err error) {
 		case opRebaseAbort:
 			message = "rebase abort failed: " + message
 		case opMerge:
-			message = "merge failed: " + message
+			if req.mergeMode == core.MergeSquash {
+				message = "squash failed: " + message
+			} else {
+				message = "merge failed: " + message
+			}
 		case opMergeContinue:
 			message = "merge continue failed: " + message
 		case opMergeAbort:
 			message = "merge abort failed: " + message
+		case opSquashContinue:
+			message = "squash continue failed: " + message
+		case opSquashAbort:
+			message = "squash abort failed: " + message
 		case opCommit:
 			message = "commit failed: " + message
 		default:
@@ -2794,10 +2863,16 @@ func (t *TUI) commitOpLabel(req commitOpRequest, done bool) string {
 		}
 		return "aborting rebase"
 	case opMerge:
-		if done {
-			return "merged " + req.commit.ShortHash()
+		if req.mergeMode == core.MergeSquash {
+			if done {
+				return "squashed " + req.commit.ShortHash() + " (staged)"
+			}
+			return "squashing " + req.commit.ShortHash()
 		}
-		return "merging " + req.commit.ShortHash()
+		if done {
+			return "merged " + req.commit.ShortHash() + " (" + req.mergeMode.String() + ")"
+		}
+		return "merging " + req.commit.ShortHash() + " (" + req.mergeMode.String() + ")"
 	case opMergeContinue:
 		if done {
 			return "merge continued"
@@ -2808,6 +2883,16 @@ func (t *TUI) commitOpLabel(req commitOpRequest, done bool) string {
 			return "merge aborted"
 		}
 		return "aborting merge"
+	case opSquashContinue:
+		if done {
+			return "squash committed"
+		}
+		return "committing squash"
+	case opSquashAbort:
+		if done {
+			return "squash aborted"
+		}
+		return "aborting squash"
 	case opCommit:
 		if done {
 			if req.amend {
@@ -2918,8 +3003,8 @@ func (t *TUI) renderStatus() {
 	t.statusBar.SetText("[gray]loading " + strings.Join(messages, ", ") + "…[-]")
 }
 
-// renderInProgressActions 按 rebase / merge 状态切换 statusBar 右侧 Continue / Abort 的文案和动作。
-// 两种操作不会同时进行；都处于未完成状态时优先显示 rebase。
+// renderInProgressActions 按 rebase / merge / squash 状态切换 statusBar 右侧 Continue / Abort 的文案和动作。
+// 这些操作不会同时进行；同时处于未完成状态时按 rebase、merge、squash 的顺序优先显示。
 func (t *TUI) renderInProgressActions() {
 	if t.statusRow == nil || t.continueButton == nil || t.abortButton == nil {
 		return
@@ -2934,6 +3019,9 @@ func (t *TUI) renderInProgressActions() {
 	case t.Merging:
 		continueLabel, abortLabel = "Continue merge", "Abort merge"
 		continueFunc, abortFunc = t.continueMerge, t.abortMerge
+	case t.Squashing:
+		continueLabel, abortLabel = "Continue squash", "Abort squash"
+		continueFunc, abortFunc = t.continueSquash, t.abortSquash
 	}
 	t.continueButton.SetLabel(continueLabel).SetSelectedFunc(continueFunc)
 	t.abortButton.SetLabel(abortLabel).SetSelectedFunc(abortFunc)
