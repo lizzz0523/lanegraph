@@ -394,6 +394,22 @@ func gitContinueEnv() []string {
 	return append(os.Environ(), "GIT_EDITOR=true")
 }
 
+// GitCommit 用 subject 和可选的 description 提交暂存区改动；amend 为 true 时改写 HEAD 提交。
+func GitCommit(ctx context.Context, repo, subject, description string, amend bool) (string, error) {
+	args := []string{"commit", "-m", subject}
+	if description != "" {
+		args = append(args, "-m", description)
+	}
+	if amend {
+		args = append(args, "--amend")
+	}
+	output, err := gitOutput(ctx, repo, nil, args...)
+	if err != nil {
+		return "", fmt.Errorf("git commit error: %w", gitStderr(err))
+	}
+	return output, nil
+}
+
 // ChangeScope 标记变更的来源；同一文件可能同时出现在暂存区和未暂存区。
 type ChangeScope uint8
 

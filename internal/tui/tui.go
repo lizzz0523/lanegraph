@@ -52,6 +52,8 @@ type TUI struct {
 	changeDiff        *tview.TextView
 	commitSubject     *tview.TextArea
 	commitDescription *tview.TextArea
+	commitButton      *tview.Button
+	amendCheck        *tview.Checkbox
 
 	historyList *listView
 	historyDiff *tview.TextView
@@ -160,12 +162,16 @@ const (
 	opMerge
 	opMergeContinue
 	opMergeAbort
+	opCommit
 )
 
 type commitOpRequest struct {
-	op        commitOp
-	commit    core.Commit
-	resetMode core.ResetMode // 仅 reset 使用
+	op          commitOp
+	commit      core.Commit
+	resetMode   core.ResetMode // 仅 reset 使用
+	subject     string         // 仅 commit 使用
+	description string         // 仅 commit 使用
+	amend       bool           // 仅 commit 使用
 }
 
 // changeOp 是本地变更列表上的操作类型。
@@ -582,7 +588,8 @@ func (t *TUI) setupUI() tview.Primitive {
 
 	commitButton := tview.NewButton("Commit").
 		SetStyle(selectedStyle).
-		SetActivatedStyle(selectedStyle)
+		SetActivatedStyle(accentStyle).
+		SetSelectedFunc(func() { t.commitChanges() })
 
 	amendCheck := tview.NewCheckbox().
 		SetUncheckedStyle(selectedStyle).
@@ -813,6 +820,8 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.changeDiff = changeDiff
 	t.commitSubject = commitSubject
 	t.commitDescription = commitDescription
+	t.commitButton = commitButton
+	t.amendCheck = amendCheck
 
 	t.activeTab = tabCommit
 	t.statusBusy = make(map[string]string)
@@ -986,6 +995,8 @@ func (t *TUI) setupLoaders() {
 				return t.RebaseAbort(ctx)
 			case opMergeAbort:
 				return t.MergeAbort(ctx)
+			case opCommit:
+				return t.Commit(ctx, req.subject, req.description, req.amend)
 			default:
 				return t.Rebase(ctx, req.commit)
 			}
@@ -1142,7 +1153,7 @@ func (t *TUI) focusChain() []tview.Primitive {
 		return []tview.Primitive{t.historyList, t.historyDiff}
 	}
 	if t.activeTab == tabChange {
-		return []tview.Primitive{t.filterText, t.branchList, t.changeList, t.changeDiff, t.commitSubject, t.commitDescription}
+		return []tview.Primitive{t.filterText, t.branchList, t.changeList, t.changeDiff, t.commitSubject, t.commitDescription, t.commitButton}
 	}
 	return []tview.Primitive{t.filterText, t.branchList, t.commitList, t.commitInfo, t.fileList, t.fileDiff}
 }
@@ -1519,6 +1530,25 @@ func (t *TUI) abortMerge() {
 	t.promptVisible = true
 	t.root.AddPage("merge-abort", prompt, true, true)
 	t.app.SetFocus(prompt)
+}
+
+// commitChanges 用表单内容提交暂存区改动；Amend 勾选时改写 HEAD。
+func (t *TUI) commitChanges() {
+	if t.commitOp == nil || t.commitOp.Loading() {
+		return
+	}
+	subject := strings.TrimSpace(t.commitSubject.GetText())
+	if subject == "" {
+		t.statusDone("commit", "commit subject is required")
+		return
+	}
+	description := strings.TrimSpace(t.commitDescription.GetText())
+	t.executeCommitOp(commitOpRequest{
+		op:          opCommit,
+		subject:     subject,
+		description: description,
+		amend:       t.amendCheck.IsChecked(),
+	})
 }
 
 // openCommitInfo 弹窗显示当前 commit 的完整信息；j/k、PgUp/PgDn 可滚动。
@@ -2723,11 +2753,23 @@ func (t *TUI) showCommitOp(req commitOpRequest, _ string, err error) {
 			message = "merge continue failed: " + message
 		case opMergeAbort:
 			message = "merge abort failed: " + message
+		case opCommit:
+			message = "commit failed: " + message
 		default:
 			message = "rebase failed: " + message
 		}
 	}
 	t.statusDone("commit", message)
+
+	// 提交成功后清空表单，方便继续下一次提交。
+	if err == nil && req.op == opCommit {
+		t.commitSubject.SetText("", false)
+		t.commitDescription.SetText("", false)
+		t.amendCheck.SetChecked(false)
+		if t.activeTab == tabChange {
+			t.app.SetFocus(t.changeList)
+		}
+	}
 
 	// reset/rebase 会移动 HEAD，并可能改变索引和工作区；rebase 冲突时还会留下中间状态。
 	t.refreshTab(t.activeTab)
@@ -2766,6 +2808,17 @@ func (t *TUI) commitOpLabel(req commitOpRequest, done bool) string {
 			return "merge aborted"
 		}
 		return "aborting merge"
+	case opCommit:
+		if done {
+			if req.amend {
+				return "amended commit"
+			}
+			return "committed changes"
+		}
+		if req.amend {
+			return "amending commit"
+		}
+		return "committing changes"
 	default:
 		if done {
 			return "rebased onto " + req.commit.ShortHash()
