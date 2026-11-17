@@ -85,42 +85,9 @@ func (s *State) Refs(ctx context.Context) (Refs, error) {
 	}, nil
 }
 
-// Files 返回某个 commit 相对 compare 的文件变更列表；compare 为 nil 时相对第一个 parent。
-func (s *State) Files(ctx context.Context, commit Commit, compare *Commit) ([]FileChange, error) {
-	return GitCommitFiles(ctx, s.Repo, commit, compare)
-}
-
-// Diff 返回单个文件的 diff，通常是 git-delta 的 ANSI 输出。
-// compare 为 nil 时相对第一个 parent；options 控制空白忽略和左右对照布局。
-// git-delta 不可用时返回原始 diff 和错误，由调用方决定如何展示。
-func (s *State) Diff(ctx context.Context, commit Commit, compare *Commit, change FileChange, options DiffOptions) (string, error) {
-	return GitFileDiff(ctx, s.Repo, commit, compare, change, options)
-}
-
-// LocalFiles 返回暂存区、未暂存和未跟踪的全部本地变更。
-func (s *State) LocalFiles(ctx context.Context) ([]FileChange, error) {
-	return GitLocalChanges(ctx, s.Repo)
-}
-
-// LocalDiff 返回本地单个文件的 diff，通常是 git-delta 的 ANSI 输出。
-// options 控制空白忽略和左右对照布局。
-func (s *State) LocalDiff(ctx context.Context, change FileChange, options DiffOptions) (string, error) {
-	return GitLocalFileDiff(ctx, s.Repo, change, options)
-}
-
-// Stage 把变更加入暂存区。
-func (s *State) Stage(ctx context.Context, changes []FileChange) error {
-	return GitStage(ctx, s.Repo, changes)
-}
-
-// Unstage 把变更移回工作区。
-func (s *State) Unstage(ctx context.Context, changes []FileChange) error {
-	return GitUnstage(ctx, s.Repo, changes)
-}
-
-// Discard 丢弃单个文件的改动。
-func (s *State) Discard(ctx context.Context, change FileChange) error {
-	return GitDiscard(ctx, s.Repo, change)
+// Checkout 切换分支并返回实际检出的本地分支名。
+func (s *State) Checkout(ctx context.Context, branch Branch) (string, error) {
+	return GitCheckout(ctx, s.Repo, branch)
 }
 
 func (s *State) History(ctx context.Context) ([]Commit, error) {
@@ -130,6 +97,21 @@ func (s *State) History(ctx context.Context) ([]Commit, error) {
 // FileHistory 返回某个文件的提交历史。
 func (s *State) FileHistory(ctx context.Context, path string) ([]Commit, error) {
 	return GitFileHistory(ctx, s.Repo, path)
+}
+
+// Pull 拉取当前分支的上游变更。
+func (s *State) Pull(ctx context.Context) (string, error) {
+	return GitPull(ctx, s.Repo)
+}
+
+// Push 推送当前分支到它的上游远端；force 为 true 时使用 --force-with-lease。
+func (s *State) Push(ctx context.Context, force bool) (string, error) {
+	return GitPush(ctx, s.Repo, force)
+}
+
+// Fetch 拉取远端引用。
+func (s *State) Fetch(ctx context.Context) (string, error) {
+	return GitFetch(ctx, s.Repo)
 }
 
 // Reset 把当前分支重置到 commit。
@@ -167,24 +149,42 @@ func (s *State) MergeAbort(ctx context.Context) (string, error) {
 	return GitMergeAbort(ctx, s.Repo)
 }
 
-// Pull 拉取当前分支的上游变更。
-func (s *State) Pull(ctx context.Context) (string, error) {
-	return GitPull(ctx, s.Repo)
+// Files 返回某个 commit 相对 compare 的文件变更列表；compare 为 nil 时相对第一个 parent。
+func (s *State) Files(ctx context.Context, commit Commit, compare *Commit) ([]FileChange, error) {
+	return GitCommitFiles(ctx, s.Repo, commit, compare)
 }
 
-// Push 推送当前分支到它的上游远端；force 为 true 时使用 --force-with-lease。
-func (s *State) Push(ctx context.Context, force bool) (string, error) {
-	return GitPush(ctx, s.Repo, force)
+// Diff 返回单个文件的 diff，通常是 git-delta 的 ANSI 输出。
+// compare 为 nil 时相对第一个 parent；options 控制空白忽略和左右对照布局。
+// git-delta 不可用时返回原始 diff 和错误，由调用方决定如何展示。
+func (s *State) Diff(ctx context.Context, commit Commit, compare *Commit, change FileChange, options DiffOptions) (string, error) {
+	return GitFileDiff(ctx, s.Repo, commit, compare, change, options)
 }
 
-// Fetch 拉取远端引用。
-func (s *State) Fetch(ctx context.Context) (string, error) {
-	return GitFetch(ctx, s.Repo)
+// LocalFiles 返回暂存区、未暂存和未跟踪的全部本地变更。
+func (s *State) LocalFiles(ctx context.Context) ([]FileChange, error) {
+	return GitLocalChanges(ctx, s.Repo)
 }
 
-// Checkout 切换分支并返回实际检出的本地分支名。
-func (s *State) Checkout(ctx context.Context, branch Branch) (string, error) {
-	return GitCheckout(ctx, s.Repo, branch)
+// LocalDiff 返回本地单个文件的 diff，通常是 git-delta 的 ANSI 输出。
+// options 控制空白忽略和左右对照布局。
+func (s *State) LocalDiff(ctx context.Context, change FileChange, options DiffOptions) (string, error) {
+	return GitLocalFileDiff(ctx, s.Repo, change, options)
+}
+
+// Stage 把变更加入暂存区。
+func (s *State) Stage(ctx context.Context, changes []FileChange) error {
+	return GitStage(ctx, s.Repo, changes)
+}
+
+// Unstage 把变更移回工作区。
+func (s *State) Unstage(ctx context.Context, changes []FileChange) error {
+	return GitUnstage(ctx, s.Repo, changes)
+}
+
+// Discard 丢弃单个文件的改动。
+func (s *State) Discard(ctx context.Context, change FileChange) error {
+	return GitDiscard(ctx, s.Repo, change)
 }
 
 // OpenFile 使用系统默认应用打开仓库内的文件（仅支持 macOS）。

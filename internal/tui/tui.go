@@ -822,26 +822,6 @@ func (t *TUI) setupLoaders() {
 		OnResult:  t.showFileDiff,
 	})
 
-	t.fileHistory = loader.New(loader.Config[[]core.Commit, historyRequest]{
-		Key: func(req historyRequest) string { return req.path },
-		Load: func(ctx context.Context, req historyRequest) ([]core.Commit, error) {
-			return t.FileHistory(ctx, req.path)
-		},
-		Post:     post,
-		OnResult: t.showHistory,
-	})
-
-	t.fileHistoryDiff = loader.New(loader.Config[string, historyDiffRequest]{
-		Key: func(req historyDiffRequest) string {
-			return fmt.Sprintf("%s\x00%s\x00%s", req.commit.Hash, req.change.Path, req.options)
-		},
-		Load: func(ctx context.Context, req historyDiffRequest) (string, error) {
-			return renderDiff(t.Diff(ctx, req.commit, nil, req.change, req.options))
-		},
-		Post:     post,
-		OnResult: t.showHistoryDiff,
-	})
-
 	t.localFiles = loader.New(loader.Config[[]core.FileChange, localFilesRequest]{
 		Key: func(localFilesRequest) string { return "local" },
 		Load: func(ctx context.Context, _ localFilesRequest) ([]core.FileChange, error) {
@@ -862,6 +842,26 @@ func (t *TUI) setupLoaders() {
 		Post:      post,
 		OnLoading: t.showLocalDiffLoading,
 		OnResult:  t.showLocalDiff,
+	})
+
+	t.fileHistory = loader.New(loader.Config[[]core.Commit, historyRequest]{
+		Key: func(req historyRequest) string { return req.path },
+		Load: func(ctx context.Context, req historyRequest) ([]core.Commit, error) {
+			return t.FileHistory(ctx, req.path)
+		},
+		Post:     post,
+		OnResult: t.showHistory,
+	})
+
+	t.fileHistoryDiff = loader.New(loader.Config[string, historyDiffRequest]{
+		Key: func(req historyDiffRequest) string {
+			return fmt.Sprintf("%s\x00%s\x00%s", req.commit.Hash, req.change.Path, req.options)
+		},
+		Load: func(ctx context.Context, req historyDiffRequest) (string, error) {
+			return renderDiff(t.Diff(ctx, req.commit, nil, req.change, req.options))
+		},
+		Post:     post,
+		OnResult: t.showHistoryDiff,
 	})
 
 	t.checkout = loader.New(loader.Config[string, checkoutRequest]{
@@ -1219,6 +1219,53 @@ func (t *TUI) compareCommit(row int) {
 	t.applyCompare(&compare)
 }
 
+// resetCommit 先弹窗选择 reset 模式，确认后把当前分支重置到选中的 commit。
+func (t *TUI) resetCommit() {
+	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Loading() {
+		return
+	}
+	row := t.commitList.currentItem()
+	if row < 0 || row >= len(t.Commits) {
+		return
+	}
+	commit := t.Commits[row]
+
+	message := fmt.Sprintf("Reset %s to %s?\n\n%s\n\n[gray]Soft[-] keeps index and working tree\n[gray]Mixed[-] resets index, keeps working tree\n[red]Hard[-] discards index and working tree changes",
+		tview.Escape(t.HeadRef), tview.Escape(commit.ShortHash()), tview.Escape(commit.Subject))
+
+	prompt := tview.NewModal().
+		SetText(message).
+		AddButtons([]string{"Cancel", "Soft", "Mixed", "Hard"}).
+		SetDoneFunc(func(buttonIndex int, _ string) {
+			t.root.RemovePage("reset")
+			t.promptVisible = false
+			t.app.SetFocus(t.commitList)
+			switch buttonIndex {
+			case 1:
+				t.executeCommitOp(commitOpRequest{op: opReset, commit: commit, resetMode: core.ResetSoft})
+			case 2:
+				t.executeCommitOp(commitOpRequest{op: opReset, commit: commit, resetMode: core.ResetMixed})
+			case 3:
+				t.executeCommitOp(commitOpRequest{op: opReset, commit: commit, resetMode: core.ResetHard})
+			}
+		})
+
+	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
+	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
+	prompt.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+	prompt.Box.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+
+	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
+	// 固定成白底黑字，保证按钮文字始终是深色。
+	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
+		Background(tview.Styles.PrimaryTextColor).
+		Foreground(tcell.ColorBlack))
+
+	t.promptVisible = true
+	t.root.AddPage("reset", prompt, true, true)
+	t.app.SetFocus(prompt)
+}
+
 // rebaseCommit 先弹窗确认，再把当前分支 rebase 到选中的 commit。
 func (t *TUI) rebaseCommit() {
 	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Loading() {
@@ -1396,53 +1443,6 @@ func (t *TUI) abortMerge() {
 
 	t.promptVisible = true
 	t.root.AddPage("merge-abort", prompt, true, true)
-	t.app.SetFocus(prompt)
-}
-
-// resetCommit 先弹窗选择 reset 模式，确认后把当前分支重置到选中的 commit。
-func (t *TUI) resetCommit() {
-	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Loading() {
-		return
-	}
-	row := t.commitList.currentItem()
-	if row < 0 || row >= len(t.Commits) {
-		return
-	}
-	commit := t.Commits[row]
-
-	message := fmt.Sprintf("Reset %s to %s?\n\n%s\n\n[gray]Soft[-] keeps index and working tree\n[gray]Mixed[-] resets index, keeps working tree\n[red]Hard[-] discards index and working tree changes",
-		tview.Escape(t.HeadRef), tview.Escape(commit.ShortHash()), tview.Escape(commit.Subject))
-
-	prompt := tview.NewModal().
-		SetText(message).
-		AddButtons([]string{"Cancel", "Soft", "Mixed", "Hard"}).
-		SetDoneFunc(func(buttonIndex int, _ string) {
-			t.root.RemovePage("reset")
-			t.promptVisible = false
-			t.app.SetFocus(t.commitList)
-			switch buttonIndex {
-			case 1:
-				t.executeCommitOp(commitOpRequest{op: opReset, commit: commit, resetMode: core.ResetSoft})
-			case 2:
-				t.executeCommitOp(commitOpRequest{op: opReset, commit: commit, resetMode: core.ResetMixed})
-			case 3:
-				t.executeCommitOp(commitOpRequest{op: opReset, commit: commit, resetMode: core.ResetHard})
-			}
-		})
-
-	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
-	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
-	prompt.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
-	prompt.Box.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
-
-	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
-	// 固定成白底黑字，保证按钮文字始终是深色。
-	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
-		Background(tview.Styles.PrimaryTextColor).
-		Foreground(tcell.ColorBlack))
-
-	t.promptVisible = true
-	t.root.AddPage("reset", prompt, true, true)
 	t.app.SetFocus(prompt)
 }
 
@@ -2493,7 +2493,7 @@ func (t *TUI) showSync(req syncOpRequest, _ string, err error) {
 	t.refreshTab(t.activeTab)
 
 	// rebase / amend 后历史分叉，push 会因非快进而被拒；提示改用 force push。
-	if req.op == opPush && errors.Is(err, core.ErrPushRejected) {
+	if req.op == opPush && errors.Is(err, core.ErrNonFastForward) {
 		t.promptForcePush()
 	}
 }
