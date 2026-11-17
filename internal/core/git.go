@@ -258,11 +258,25 @@ func GitPull(ctx context.Context, repo string) (string, error) {
 	return output, nil
 }
 
+// ErrPushRejected 表示 push 因非快进被拒绝：远端含有本地缺失的提交，
+// 常见于 rebase / amend 之后，需要 force push。
+var ErrPushRejected = errors.New("push rejected: non-fast-forward")
+
 // GitPush 推送当前分支到它的上游远端，返回 git 的输出。
-func GitPush(ctx context.Context, repo string) (string, error) {
-	output, err := gitOutput(ctx, repo, gitRemoteEnv(), "push")
+// force 为 true 时使用 --force-with-lease，避免覆盖别人刚推上去的提交。
+func GitPush(ctx context.Context, repo string, force bool) (string, error) {
+	args := []string{"push"}
+	if force {
+		args = append(args, "--force-with-lease")
+	}
+	output, err := gitOutput(ctx, repo, gitRemoteEnv(), args...)
 	if err != nil {
-		return "", fmt.Errorf("git push error: %w", gitStderr(err))
+		err = gitStderr(err)
+		// 只有非快进才提示 force push；本地落后（fetch first）时强制推送会丢掉远端提交。
+		if strings.Contains(err.Error(), "(non-fast-forward)") {
+			return "", ErrPushRejected
+		}
+		return "", fmt.Errorf("git push error: %w", err)
 	}
 	return output, nil
 }

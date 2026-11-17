@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -138,6 +139,7 @@ type syncOp uint8
 const (
 	opPull syncOp = iota
 	opPush
+	opPushForce
 	opFetch
 )
 
@@ -879,7 +881,9 @@ func (t *TUI) setupLoaders() {
 			case opPull:
 				return t.Pull(ctx)
 			case opPush:
-				return t.Push(ctx)
+				return t.Push(ctx, false)
+			case opPushForce:
+				return t.Push(ctx, true)
 			default:
 				return t.Fetch(ctx)
 			}
@@ -2477,7 +2481,7 @@ func (t *TUI) showSync(req syncOpRequest, _ string, err error) {
 		switch req.op {
 		case opPull:
 			message = "pull failed: " + message
-		case opPush:
+		case opPush, opPushForce:
 			message = "push failed: " + message
 		default:
 			message = "fetch failed: " + message
@@ -2487,6 +2491,11 @@ func (t *TUI) showSync(req syncOpRequest, _ string, err error) {
 
 	// pull 失败也可能留下冲突或已更新的 refs，统一按当前 tab 刷新。
 	t.refreshTab(t.activeTab)
+
+	// rebase / amend 后历史分叉，push 会因非快进而被拒；提示改用 force push。
+	if req.op == opPush && errors.Is(err, core.ErrPushRejected) {
+		t.promptForcePush()
+	}
 }
 
 // syncOpLabel 返回同步操作的 loading/完成文案。
@@ -2497,7 +2506,7 @@ func (t *TUI) syncOpLabel(req syncOpRequest, done bool) string {
 			return "pulled " + t.HeadRef
 		}
 		return "pull " + t.HeadRef
-	case opPush:
+	case opPush, opPushForce:
 		if done {
 			return "pushed " + t.HeadRef
 		}
@@ -2508,6 +2517,50 @@ func (t *TUI) syncOpLabel(req syncOpRequest, done bool) string {
 		}
 		return "fetch"
 	}
+}
+
+// promptForcePush 在 push 因非快进被拒后弹窗确认，确认后用 force push 重推当前分支。
+func (t *TUI) promptForcePush() {
+	// 已有弹窗时只保留 statusBar 的错误信息，避免叠出多个弹窗。
+	if t.root == nil || t.promptVisible {
+		return
+	}
+
+	previous := t.app.GetFocus()
+
+	message := fmt.Sprintf("The remote branch has commits that are not in your local branch.\n\nForce push %s to its upstream?\n\n[red]This rewrites remote history and cannot be undone.[-]",
+		tview.Escape(t.HeadRef))
+
+	prompt := tview.NewModal().
+		SetText(message).
+		AddButtons([]string{"Cancel", "Force Push"}).
+		SetDoneFunc(func(buttonIndex int, _ string) {
+			t.root.RemovePage("force-push")
+			t.promptVisible = false
+			if previous != nil {
+				t.app.SetFocus(previous)
+			} else {
+				t.app.SetFocus(t.branchList)
+			}
+			if buttonIndex == 1 {
+				t.executeSync(opPushForce)
+			}
+		})
+
+	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
+	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
+	prompt.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+	prompt.Box.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+
+	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
+	// 固定成白底黑字，保证按钮文字始终是深色。
+	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
+		Background(tview.Styles.PrimaryTextColor).
+		Foreground(tcell.ColorBlack))
+
+	t.promptVisible = true
+	t.root.AddPage("force-push", prompt, true, true)
+	t.app.SetFocus(prompt)
 }
 
 // startSyncSpinner 启动当前分支前的点阵动画；已有动画时不重复启动。
