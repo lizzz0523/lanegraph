@@ -47,9 +47,13 @@ type TUI struct {
 	fileList    *tview.TreeView
 	fileDiff    *tview.TextView
 
-	changePanel *tview.Flex
-	changeList  *tview.TreeView
-	changeDiff  *tview.TextView
+	changePanel       *tview.Flex
+	changeList        *tview.TreeView
+	changeDiff        *tview.TextView
+	commitSubject     *tview.TextArea
+	commitDescription *tview.TextArea
+	commitButton      *tview.Button
+	amendCheck        *tview.Checkbox
 
 	historyList *listView
 	historyDiff *tview.TextView
@@ -158,12 +162,16 @@ const (
 	opMerge
 	opMergeContinue
 	opMergeAbort
+	opCommit
 )
 
 type commitOpRequest struct {
-	op        commitOp
-	commit    core.Commit
-	resetMode core.ResetMode // 仅 reset 使用
+	op          commitOp
+	commit      core.Commit
+	resetMode   core.ResetMode // 仅 reset 使用
+	subject     string         // 仅 commit 使用
+	description string         // 仅 commit 使用
+	amend       bool           // 仅 commit 使用
 }
 
 // changeOp 是本地变更列表上的操作类型。
@@ -207,14 +215,21 @@ func (t *TUI) Run() error {
 		}
 
 		filtering := t.filterText != nil && t.filterText.HasFocus()
+		committing := (t.commitSubject != nil && t.commitSubject.HasFocus()) ||
+			(t.commitDescription != nil && t.commitDescription.HasFocus())
+		// filter 和 commit 输入框里要能正常输入字母；Ctrl+Q 仍然随时可退出。
+		typing := filtering || committing
 		switch {
-		// filter 输入框里要能正常输入 q；Ctrl+Q 仍然随时可退出。
-		case event.Key() == tcell.KeyCtrlQ || (event.Key() == tcell.KeyRune && event.Rune() == 'q' && !filtering && !t.promptVisible):
+		case event.Key() == tcell.KeyCtrlQ || (event.Key() == tcell.KeyRune && event.Rune() == 'q' && !typing && !t.promptVisible):
 			t.quit()
 			return nil
 		case event.Key() == tcell.KeyEscape && filtering:
 			t.filterText.SetText("", false)
 			app.SetFocus(t.branchList)
+			return nil
+		// commit 输入框里 Esc 回到 local changes 列表。
+		case event.Key() == tcell.KeyEscape && committing:
+			app.SetFocus(t.changeList)
 			return nil
 		case event.Key() == tcell.KeyTab && !t.promptVisible && !t.commitInfoVisible:
 			app.SetFocus(t.nextFocus(1))
@@ -222,8 +237,8 @@ func (t *TUI) Run() error {
 		case event.Key() == tcell.KeyBacktab && !t.promptVisible && !t.commitInfoVisible:
 			app.SetFocus(t.nextFocus(-1))
 			return nil
-		// p / P / f 全局触发当前分支的 pull / push / fetch；filter 输入时不拦截。
-		case event.Key() == tcell.KeyRune && !filtering && !t.promptVisible:
+		// p / P / f 全局触发当前分支的 pull / push / fetch；输入框输入时不拦截。
+		case event.Key() == tcell.KeyRune && !typing && !t.promptVisible:
 			switch event.Rune() {
 			case 'p':
 				t.syncBranch(opPull)
@@ -553,9 +568,68 @@ func (t *TUI) setupUI() tview.Primitive {
 
 	t.focusOnScroll(changeDiff)
 
+	commitSubject := tview.NewTextArea()
+
+	commitSubject.SetTitle(" commit subject ").
+		SetTitleAlign(tview.AlignLeft).
+		SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1).
+		SetFocusFunc(func() { t.setFocusBorder(commitSubject.Box, true) }).
+		SetBlurFunc(func() { t.setFocusBorder(commitSubject.Box, false) })
+
+	commitDescription := tview.NewTextArea()
+
+	commitDescription.SetTitle(" description ").
+		SetTitleAlign(tview.AlignLeft).
+		SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1).
+		SetFocusFunc(func() { t.setFocusBorder(commitDescription.Box, true) }).
+		SetBlurFunc(func() { t.setFocusBorder(commitDescription.Box, false) })
+
+	commitButton := tview.NewButton("Commit").
+		SetStyle(selectedStyle).
+		SetActivatedStyle(accentStyle).
+		SetSelectedFunc(func() { t.commitChanges() })
+
+	amendCheck := tview.NewCheckbox().
+		SetUncheckedStyle(selectedStyle).
+		SetCheckedStyle(selectedStyle).
+		SetActivatedStyle(selectedStyle)
+
+	amendLabel := tview.NewTextView().
+		SetText("Amend")
+
+	amendLabel.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if !amendLabel.InRect(event.Position()) {
+			return action, event
+		}
+		if action == tview.MouseLeftDown {
+			amendCheck.SetChecked(!amendCheck.IsChecked())
+			return tview.MouseMove, event
+		}
+		return action, event
+	})
+
+	commitAction := tview.NewFlex().
+		AddItem(nil, 1, 0, false).
+		AddItem(amendCheck, 1, 0, false).
+		AddItem(nil, 1, 0, false).
+		AddItem(amendLabel, 5, 0, false).
+		AddItem(nil, 0, 1, false).
+		AddItem(commitButton, 16, 0, false).
+		AddItem(nil, 1, 0, false)
+
+	changeInfo := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(changeDiff, 0, 1, false).
+		AddItem(commitSubject, 3, 0, false).
+		AddItem(commitDescription, 5, 0, false).
+		AddItem(commitAction, 1, 0, false).
+		AddItem(nil, 1, 0, false)
+
 	changePanel := tview.NewFlex().
 		AddItem(changeList, 40, 1, true).
-		AddItem(changeDiff, 0, 1, false)
+		AddItem(changeInfo, 0, 1, false)
 
 	filterText := tview.NewTextArea()
 
@@ -744,6 +818,10 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.changePanel = changePanel
 	t.changeList = changeList
 	t.changeDiff = changeDiff
+	t.commitSubject = commitSubject
+	t.commitDescription = commitDescription
+	t.commitButton = commitButton
+	t.amendCheck = amendCheck
 
 	t.activeTab = tabCommit
 	t.statusBusy = make(map[string]string)
@@ -767,6 +845,8 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.setFocusBorder(fileDiff.Box, false)
 	t.setFocusBorder(changeList.Box, false)
 	t.setFocusBorder(changeDiff.Box, false)
+	t.setFocusBorder(commitSubject.Box, false)
+	t.setFocusBorder(commitDescription.Box, false)
 
 	return root
 }
@@ -915,6 +995,8 @@ func (t *TUI) setupLoaders() {
 				return t.RebaseAbort(ctx)
 			case opMergeAbort:
 				return t.MergeAbort(ctx)
+			case opCommit:
+				return t.Commit(ctx, req.subject, req.description, req.amend)
 			default:
 				return t.Rebase(ctx, req.commit)
 			}
@@ -1071,7 +1153,7 @@ func (t *TUI) focusChain() []tview.Primitive {
 		return []tview.Primitive{t.historyList, t.historyDiff}
 	}
 	if t.activeTab == tabChange {
-		return []tview.Primitive{t.filterText, t.branchList, t.changeList, t.changeDiff}
+		return []tview.Primitive{t.filterText, t.branchList, t.changeList, t.changeDiff, t.commitSubject, t.commitDescription, t.commitButton}
 	}
 	return []tview.Primitive{t.filterText, t.branchList, t.commitList, t.commitInfo, t.fileList, t.fileDiff}
 }
@@ -1448,6 +1530,25 @@ func (t *TUI) abortMerge() {
 	t.promptVisible = true
 	t.root.AddPage("merge-abort", prompt, true, true)
 	t.app.SetFocus(prompt)
+}
+
+// commitChanges 用表单内容提交暂存区改动；Amend 勾选时改写 HEAD。
+func (t *TUI) commitChanges() {
+	if t.commitOp == nil || t.commitOp.Loading() {
+		return
+	}
+	subject := strings.TrimSpace(t.commitSubject.GetText())
+	if subject == "" {
+		t.statusDone("commit", "commit subject is required")
+		return
+	}
+	description := strings.TrimSpace(t.commitDescription.GetText())
+	t.executeCommitOp(commitOpRequest{
+		op:          opCommit,
+		subject:     subject,
+		description: description,
+		amend:       t.amendCheck.IsChecked(),
+	})
 }
 
 // openCommitInfo 弹窗显示当前 commit 的完整信息；j/k、PgUp/PgDn 可滚动。
@@ -2652,11 +2753,23 @@ func (t *TUI) showCommitOp(req commitOpRequest, _ string, err error) {
 			message = "merge continue failed: " + message
 		case opMergeAbort:
 			message = "merge abort failed: " + message
+		case opCommit:
+			message = "commit failed: " + message
 		default:
 			message = "rebase failed: " + message
 		}
 	}
 	t.statusDone("commit", message)
+
+	// 提交成功后清空表单，方便继续下一次提交。
+	if err == nil && req.op == opCommit {
+		t.commitSubject.SetText("", false)
+		t.commitDescription.SetText("", false)
+		t.amendCheck.SetChecked(false)
+		if t.activeTab == tabChange {
+			t.app.SetFocus(t.changeList)
+		}
+	}
 
 	// reset/rebase 会移动 HEAD，并可能改变索引和工作区；rebase 冲突时还会留下中间状态。
 	t.refreshTab(t.activeTab)
@@ -2695,6 +2808,17 @@ func (t *TUI) commitOpLabel(req commitOpRequest, done bool) string {
 			return "merge aborted"
 		}
 		return "aborting merge"
+	case opCommit:
+		if done {
+			if req.amend {
+				return "amended commit"
+			}
+			return "committed changes"
+		}
+		if req.amend {
+			return "amending commit"
+		}
+		return "committing changes"
 	default:
 		if done {
 			return "rebased onto " + req.commit.ShortHash()

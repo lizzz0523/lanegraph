@@ -149,6 +149,11 @@ func (s *State) MergeAbort(ctx context.Context) (string, error) {
 	return GitMergeAbort(ctx, s.Repo)
 }
 
+// Commit 用 subject 和可选的 description 提交暂存区改动；amend 为 true 时改写 HEAD 提交。
+func (s *State) Commit(ctx context.Context, subject, description string, amend bool) (string, error) {
+	return GitCommit(ctx, s.Repo, subject, description, amend)
+}
+
 // Files 返回某个 commit 相对 compare 的文件变更列表；compare 为 nil 时相对第一个 parent。
 func (s *State) Files(ctx context.Context, commit Commit, compare *Commit) ([]FileChange, error) {
 	return GitCommitFiles(ctx, s.Repo, commit, compare)
