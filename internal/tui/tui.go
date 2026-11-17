@@ -270,6 +270,10 @@ func (t *TUI) setupUI() tview.Primitive {
 	// 用默认色能让 UI 和窗口边缘保持一致。
 	tview.Styles.PrimitiveBackgroundColor = tcell.ColorDefault
 
+	// 应用没有双击语义；tview 默认按 500ms 判定双击，
+	// 快速点击两个不同的 commit 时第二次点击会被当成双击吞掉。
+	tview.DoubleClickInterval = 0
+
 	defaultStyle := tcell.StyleDefault.
 		Foreground(tcell.ColorGray).
 		Background(tview.Styles.PrimitiveBackgroundColor)
