@@ -209,10 +209,10 @@ func (t *TUI) Run() error {
 		}
 
 		filtering := t.filterText != nil && t.filterText.HasFocus()
-		// filter 和 commit 输入框里要能正常输入字母；Ctrl+Q 仍然随时可退出。
-		typing := filtering ||
-			(t.commitSubject != nil && t.commitSubject.HasFocus()) ||
+		committing := (t.commitSubject != nil && t.commitSubject.HasFocus()) ||
 			(t.commitDescription != nil && t.commitDescription.HasFocus())
+		// filter 和 commit 输入框里要能正常输入字母；Ctrl+Q 仍然随时可退出。
+		typing := filtering || committing
 		switch {
 		case event.Key() == tcell.KeyCtrlQ || (event.Key() == tcell.KeyRune && event.Rune() == 'q' && !typing && !t.promptVisible):
 			t.quit()
@@ -220,6 +220,10 @@ func (t *TUI) Run() error {
 		case event.Key() == tcell.KeyEscape && filtering:
 			t.filterText.SetText("", false)
 			app.SetFocus(t.branchList)
+			return nil
+		// commit 输入框里 Esc 回到 local changes 列表。
+		case event.Key() == tcell.KeyEscape && committing:
+			app.SetFocus(t.changeList)
 			return nil
 		case event.Key() == tcell.KeyTab && !t.promptVisible && !t.commitInfoVisible:
 			app.SetFocus(t.nextFocus(1))
