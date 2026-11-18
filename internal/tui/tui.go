@@ -1323,12 +1323,12 @@ func (t *TUI) resetCommit() {
 	}
 	commit := t.Commits[row]
 
-	message := fmt.Sprintf("Reset %s to %s?\n\n%s\n\n"+
-		"%s keeps index and working tree\n"+
-		"%s resets index, keeps working tree\n"+
-		"%s discards index and working tree changes",
-		tview.Escape(t.HeadRef), tview.Escape(commit.ShortHash()), tview.Escape(commit.Subject),
-		colorMuted.markup("Soft"), colorMuted.markup("Mixed"), colorDanger.markup("Hard"))
+	message := fmt.Sprintf("Reset %s to %s?\n\n%s\n\n",
+		tview.Escape(t.HeadRef), tview.Escape(commit.ShortHash()), tview.Escape(commit.Subject))
+
+	message += colorMuted.markup("Soft") + " keeps index and working tree\n"
+	message += colorMuted.markup("Mixed") + " resets index, keeps working tree\n"
+	message += colorDanger.markup("Hard") + " discards index and working tree changes"
 
 	prompt := tview.NewModal().
 		SetText(message).
@@ -1374,9 +1374,10 @@ func (t *TUI) rebaseCommit() {
 	}
 	commit := t.Commits[row]
 
-	message := fmt.Sprintf("Rebase %s onto %s?\n\n%s\n\n%s",
-		tview.Escape(t.HeadRef), tview.Escape(commit.ShortHash()), tview.Escape(commit.Subject),
-		colorMuted.markup("Local changes will be stashed and restored automatically."))
+	message := fmt.Sprintf("Rebase %s onto %s?\n\n%s\n\n",
+		tview.Escape(t.HeadRef), tview.Escape(commit.ShortHash()), tview.Escape(commit.Subject))
+
+	message += colorMuted.markup("Local changes will be stashed and restored automatically.")
 
 	prompt := tview.NewModal().
 		SetText(message).
@@ -1465,14 +1466,13 @@ func (t *TUI) mergeCommit() {
 	}
 	commit := t.Commits[row]
 
-	message := fmt.Sprintf("Merge %s into %s?\n\n%s\n\n"+
-		"%s fast-forwards when possible, otherwise creates a merge commit\n"+
-		"%s always creates a merge commit\n"+
-		"%s stages changes without creating a commit\n\n"+
-		"%s",
-		tview.Escape(commit.ShortHash()), tview.Escape(t.HeadRef), tview.Escape(commit.Subject),
-		colorMuted.markup("Merge"), colorMuted.markup("No FF"), colorMuted.markup("Squash"),
-		colorMuted.markup("Local changes will be stashed and restored automatically."))
+	message := fmt.Sprintf("Merge %s into %s?\n\n%s\n\n",
+		tview.Escape(commit.ShortHash()), tview.Escape(t.HeadRef), tview.Escape(commit.Subject))
+
+	message += colorMuted.markup("Merge") + " fast-forwards when possible, otherwise creates a merge commit\n"
+	message += colorMuted.markup("No FF") + " always creates a merge commit\n"
+	message += colorMuted.markup("Squash") + " stages changes without creating a commit\n\n"
+	message += colorMuted.markup("Local changes will be stashed and restored automatically.")
 
 	prompt := tview.NewModal().
 		SetText(message).
@@ -2707,8 +2707,10 @@ func (t *TUI) promptForcePush() {
 
 	previous := t.app.GetFocus()
 
-	message := fmt.Sprintf("The remote branch has commits that are not in your local branch.\n\nForce push %s to its upstream?\n\n%s",
-		tview.Escape(t.HeadRef), colorDanger.markup("This rewrites remote history and cannot be undone."))
+	message := fmt.Sprintf("The remote branch has commits that are not in your local branch.\n\nForce push %s to its upstream?\n\n",
+		tview.Escape(t.HeadRef))
+
+	message += colorDanger.markup("This rewrites remote history and cannot be undone.")
 
 	prompt := tview.NewModal().
 		SetText(message).
