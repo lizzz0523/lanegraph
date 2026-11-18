@@ -18,9 +18,10 @@ type listView struct {
 	starts []int // 每个 item 第一行的绝对行号
 	gap    int   // 相邻 item 之间的空行数
 
-	offset  int
-	marked  int
-	current int
+	offset         int
+	marked         int
+	current        int
+	pendingVisible bool
 
 	selected       func()
 	selectedStyle  tcell.Style
@@ -45,17 +46,11 @@ func (v *listView) Draw(screen tcell.Screen) {
 	if width <= 0 || height <= 0 {
 		return
 	}
-	v.clampOffset()
-
-	// 间距行不属于任何 item：先清空，避免残留上一帧内容，也避免被选中背景覆盖。
-	if v.gap > 0 {
-		for row := 0; row < height; row++ {
-			if line := v.offset + row; line < v.total && v.itemAtLine(line) < 0 {
-				for bx := 0; bx < width; bx++ {
-					screen.SetContent(x+bx, y+row, ' ', nil, tcell.StyleDefault)
-				}
-			}
-		}
+	// 布局前调用 setCurrentItem 时无法滚动，等首次绘制有了尺寸再补上。
+	if v.pendingVisible {
+		v.ensureVisible()
+	} else {
+		v.clampOffset()
 	}
 
 	first := sort.Search(len(v.items), func(i int) bool {
@@ -131,10 +126,7 @@ func (v *listView) MouseHandler() func(action tview.MouseAction, event *tcell.Ev
 							v.highlight(index)
 						}
 					} else {
-						v.current = index
-						if v.selected != nil {
-							v.selected()
-						}
+						v.setCurrentItem(index)
 					}
 				}
 			}
@@ -230,7 +222,12 @@ func (v *listView) currentItem() int {
 
 func (v *listView) ensureVisible() {
 	_, _, _, height := v.GetInnerRect()
-	if height <= 0 || v.current < 0 || v.current >= len(v.items) {
+	if height <= 0 {
+		v.pendingVisible = true
+		return
+	}
+	v.pendingVisible = false
+	if v.current < 0 || v.current >= len(v.items) {
 		return
 	}
 	start := v.starts[v.current]
