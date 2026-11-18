@@ -67,7 +67,7 @@ func (v *listView) Draw(screen tcell.Screen) {
 					screen.SetContent(x+bx, y+row, ' ', nil, style)
 				}
 			}
-			tview.Print(screen, line, x, y+row, width, tview.AlignLeft, tview.Styles.PrimaryTextColor)
+			tview.Print(screen, line, x, y+row, width, tview.AlignLeft, colorText.cell)
 		}
 	}
 }

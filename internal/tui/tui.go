@@ -286,45 +286,45 @@ func (t *TUI) setupUI() tview.Primitive {
 	// 背景跟随终端的默认背景色，而不是 ANSI 黑：
 	// 终端窗口在字符网格外可能露出自己的底色（例如底部圆角的留白），
 	// 用默认色能让 UI 和窗口边缘保持一致。
-	tview.Styles.PrimitiveBackgroundColor = tcell.ColorDefault
+	tview.Styles.PrimitiveBackgroundColor = colorBackground.cell
 
 	// 应用没有双击语义；tview 默认按 500ms 判定双击，
 	// 快速点击两个不同的 commit 时第二次点击会被当成双击吞掉。
 	tview.DoubleClickInterval = 0
 
 	defaultStyle := tcell.StyleDefault.
-		Foreground(tcell.ColorGray).
-		Background(tview.Styles.PrimitiveBackgroundColor)
+		Foreground(colorMuted.cell).
+		Background(colorBackground.cell)
 
 	// 选中态用灰底代替 tview 默认的白底反色；前景色与未选中行一致
 	selectedStyle := tcell.StyleDefault.
-		Foreground(tview.Styles.PrimaryTextColor).
-		Background(tcell.NewHexColor(0x4a4a4a))
+		Foreground(colorText.cell).
+		Background(colorSelection.cell)
 
 	// 对比基准行用深青色背景，和当前选中行的灰色区分。
 	highlightStyle := tcell.StyleDefault.
-		Foreground(tview.Styles.PrimaryTextColor).
-		Background(tcell.NewHexColor(0x2f4f4f))
+		Foreground(colorText.cell).
+		Background(colorHighlight.cell)
 
 	// 强调色用和边框高亮一致的 aqua 背景，配黑字保证对比度；
 	// 激活 tab 和 statusBar 上的主操作按钮共用。
 	accentStyle := tcell.StyleDefault.
-		Foreground(tcell.ColorBlack).
-		Background(tcell.ColorAqua)
+		Foreground(colorOnAccent.cell).
+		Background(colorAccent.cell)
 
 	// 危险操作用红字，配终端默认背景。
 	dangerStyle := tcell.StyleDefault.
-		Foreground(tcell.ColorIndianRed).
-		Background(tview.Styles.PrimitiveBackgroundColor)
+		Foreground(colorDanger.cell).
+		Background(colorBackground.cell)
 
 	headerStyle := tcell.StyleDefault.
-		Foreground(tcell.ColorGray).
-		Background(tcell.ColorNone).
+		Foreground(colorMuted.cell).
+		Background(colorTransparent.cell).
 		Bold(true)
 
 	headerSelectedStyle := tcell.StyleDefault.
-		Foreground(tcell.ColorGray).
-		Background(tcell.ColorNone).
+		Foreground(colorMuted.cell).
+		Background(colorTransparent.cell).
 		Bold(true)
 
 	commitList := newListView(selectedStyle, highlightStyle)
@@ -439,7 +439,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetDynamicColors(true).
 		SetScrollable(true).
 		SetWrap(false).
-		SetText("[gray]select a file[-]")
+		SetText(colorMuted.markup("select a file"))
 
 	fileDiff.SetTitle(" file diff ").
 		SetTitleAlign(tview.AlignLeft).
@@ -539,7 +539,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetDynamicColors(true).
 		SetScrollable(true).
 		SetWrap(false).
-		SetText("[gray]select a file[-]")
+		SetText(colorMuted.markup("select a file"))
 
 	changeDiff.SetTitle(" file diff ").
 		SetTitleAlign(tview.AlignLeft).
@@ -836,8 +836,8 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.headerStyle = headerStyle
 	t.headerSelectedStyle = headerSelectedStyle
 	// 边框和标题在未聚焦/聚焦时分别使用这两种颜色。
-	t.borderColor = tcell.ColorDarkGray
-	t.borderFocusColor = tcell.ColorAqua
+	t.borderColor = colorBorder.cell
+	t.borderFocusColor = colorAccent.cell
 
 	// SetRoot 只会对 commitList 触发 focus 回调，其余需手动初始化为未聚焦
 	t.setFocusBorder(filterText.Box, false)
@@ -1323,8 +1323,12 @@ func (t *TUI) resetCommit() {
 	}
 	commit := t.Commits[row]
 
-	message := fmt.Sprintf("Reset %s to %s?\n\n%s\n\n[gray]Soft[-] keeps index and working tree\n[gray]Mixed[-] resets index, keeps working tree\n[red]Hard[-] discards index and working tree changes",
-		tview.Escape(t.HeadRef), tview.Escape(commit.ShortHash()), tview.Escape(commit.Subject))
+	message := fmt.Sprintf("Reset %s to %s?\n\n%s\n\n"+
+		"%s keeps index and working tree\n"+
+		"%s resets index, keeps working tree\n"+
+		"%s discards index and working tree changes",
+		tview.Escape(t.HeadRef), tview.Escape(commit.ShortHash()), tview.Escape(commit.Subject),
+		colorMuted.markup("Soft"), colorMuted.markup("Mixed"), colorDanger.markup("Hard"))
 
 	prompt := tview.NewModal().
 		SetText(message).
@@ -1345,14 +1349,14 @@ func (t *TUI) resetCommit() {
 
 	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
 	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
-	prompt.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
-	prompt.Box.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+	prompt.SetBackgroundColor(colorBackground.cell)
+	prompt.Box.SetBackgroundColor(colorBackground.cell)
 
 	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
 	// 固定成白底黑字，保证按钮文字始终是深色。
 	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
-		Background(tview.Styles.PrimaryTextColor).
-		Foreground(tcell.ColorBlack))
+		Background(colorText.cell).
+		Foreground(colorOnAccent.cell))
 
 	t.promptVisible = true
 	t.root.AddPage("reset", prompt, true, true)
@@ -1370,8 +1374,9 @@ func (t *TUI) rebaseCommit() {
 	}
 	commit := t.Commits[row]
 
-	message := fmt.Sprintf("Rebase %s onto %s?\n\n%s\n\n[gray]Local changes will be stashed and restored automatically.",
-		tview.Escape(t.HeadRef), tview.Escape(commit.ShortHash()), tview.Escape(commit.Subject))
+	message := fmt.Sprintf("Rebase %s onto %s?\n\n%s\n\n%s",
+		tview.Escape(t.HeadRef), tview.Escape(commit.ShortHash()), tview.Escape(commit.Subject),
+		colorMuted.markup("Local changes will be stashed and restored automatically."))
 
 	prompt := tview.NewModal().
 		SetText(message).
@@ -1387,14 +1392,14 @@ func (t *TUI) rebaseCommit() {
 
 	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
 	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
-	prompt.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
-	prompt.Box.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+	prompt.SetBackgroundColor(colorBackground.cell)
+	prompt.Box.SetBackgroundColor(colorBackground.cell)
 
 	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
 	// 固定成白底黑字，保证按钮文字始终是深色。
 	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
-		Background(tview.Styles.PrimaryTextColor).
-		Foreground(tcell.ColorBlack))
+		Background(colorText.cell).
+		Foreground(colorOnAccent.cell))
 
 	t.promptVisible = true
 	t.root.AddPage("rebase", prompt, true, true)
@@ -1435,14 +1440,14 @@ func (t *TUI) abortRebase() {
 
 	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
 	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
-	prompt.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
-	prompt.Box.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+	prompt.SetBackgroundColor(colorBackground.cell)
+	prompt.Box.SetBackgroundColor(colorBackground.cell)
 
 	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
 	// 固定成白底黑字，保证按钮文字始终是深色。
 	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
-		Background(tview.Styles.PrimaryTextColor).
-		Foreground(tcell.ColorBlack))
+		Background(colorText.cell).
+		Foreground(colorOnAccent.cell))
 
 	t.promptVisible = true
 	t.root.AddPage("rebase-abort", prompt, true, true)
@@ -1460,8 +1465,14 @@ func (t *TUI) mergeCommit() {
 	}
 	commit := t.Commits[row]
 
-	message := fmt.Sprintf("Merge %s into %s?\n\n%s\n\n[gray]Merge[-] fast-forwards when possible, otherwise creates a merge commit\n[gray]No FF[-] always creates a merge commit\n[gray]Squash[-] stages changes without creating a commit\n\n[gray]Local changes will be stashed and restored automatically.",
-		tview.Escape(commit.ShortHash()), tview.Escape(t.HeadRef), tview.Escape(commit.Subject))
+	message := fmt.Sprintf("Merge %s into %s?\n\n%s\n\n"+
+		"%s fast-forwards when possible, otherwise creates a merge commit\n"+
+		"%s always creates a merge commit\n"+
+		"%s stages changes without creating a commit\n\n"+
+		"%s",
+		tview.Escape(commit.ShortHash()), tview.Escape(t.HeadRef), tview.Escape(commit.Subject),
+		colorMuted.markup("Merge"), colorMuted.markup("No FF"), colorMuted.markup("Squash"),
+		colorMuted.markup("Local changes will be stashed and restored automatically."))
 
 	prompt := tview.NewModal().
 		SetText(message).
@@ -1482,14 +1493,14 @@ func (t *TUI) mergeCommit() {
 
 	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
 	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
-	prompt.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
-	prompt.Box.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+	prompt.SetBackgroundColor(colorBackground.cell)
+	prompt.Box.SetBackgroundColor(colorBackground.cell)
 
 	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
 	// 固定成白底黑字，保证按钮文字始终是深色。
 	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
-		Background(tview.Styles.PrimaryTextColor).
-		Foreground(tcell.ColorBlack))
+		Background(colorText.cell).
+		Foreground(colorOnAccent.cell))
 
 	t.promptVisible = true
 	t.root.AddPage("merge", prompt, true, true)
@@ -1530,14 +1541,14 @@ func (t *TUI) abortMerge() {
 
 	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
 	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
-	prompt.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
-	prompt.Box.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+	prompt.SetBackgroundColor(colorBackground.cell)
+	prompt.Box.SetBackgroundColor(colorBackground.cell)
 
 	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
 	// 固定成白底黑字，保证按钮文字始终是深色。
 	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
-		Background(tview.Styles.PrimaryTextColor).
-		Foreground(tcell.ColorBlack))
+		Background(colorText.cell).
+		Foreground(colorOnAccent.cell))
 
 	t.promptVisible = true
 	t.root.AddPage("merge-abort", prompt, true, true)
@@ -1561,7 +1572,7 @@ func (t *TUI) abortSquash() {
 	previous := t.app.GetFocus()
 
 	prompt := tview.NewModal().
-		SetText("Abort squash?\n\nStaged squash changes and conflict resolutions will be lost.\n\n[gray]Local changes stashed before the merge will be restored.").
+		SetText("Abort squash?\n\nStaged squash changes and conflict resolutions will be lost.\n\n" + colorMuted.markup("Local changes stashed before the merge will be restored.")).
 		AddButtons([]string{"Cancel", "Abort"}).
 		SetDoneFunc(func(buttonIndex int, _ string) {
 			t.root.RemovePage("squash-abort")
@@ -1578,14 +1589,14 @@ func (t *TUI) abortSquash() {
 
 	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
 	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
-	prompt.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
-	prompt.Box.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+	prompt.SetBackgroundColor(colorBackground.cell)
+	prompt.Box.SetBackgroundColor(colorBackground.cell)
 
 	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
 	// 固定成白底黑字，保证按钮文字始终是深色。
 	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
-		Background(tview.Styles.PrimaryTextColor).
-		Foreground(tcell.ColorBlack))
+		Background(colorText.cell).
+		Foreground(colorOnAccent.cell))
 
 	t.promptVisible = true
 	t.root.AddPage("squash-abort", prompt, true, true)
@@ -1718,7 +1729,7 @@ func (t *TUI) openHistory(node *tview.TreeNode) {
 		SetDynamicColors(true).
 		SetScrollable(true).
 		SetWrap(false).
-		SetText("[gray]loading…[-]")
+		SetText(colorMuted.markup("loading…"))
 
 	historyDiff.SetTitle(" file diff: "+tview.Escape(change.Path)+" ").
 		SetTitleAlign(tview.AlignLeft).
@@ -1937,14 +1948,14 @@ func (t *TUI) discardLocalChange() {
 
 	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
 	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
-	prompt.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
-	prompt.Box.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+	prompt.SetBackgroundColor(colorBackground.cell)
+	prompt.Box.SetBackgroundColor(colorBackground.cell)
 
 	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
 	// 固定成白底黑字，保证按钮文字始终是深色。
 	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
-		Background(tview.Styles.PrimaryTextColor).
-		Foreground(tcell.ColorBlack))
+		Background(colorText.cell).
+		Foreground(colorOnAccent.cell))
 
 	t.promptVisible = true
 	t.root.AddPage("discard", prompt, true, true)
@@ -2220,11 +2231,11 @@ func (t *TUI) showFiles(_ filesRequest, changes []core.FileChange, err error) {
 	switch {
 	case err != nil:
 		fileRoot = tview.NewTreeNode("")
-		fileRoot.AddChild(tview.NewTreeNode("[red]error[-] " + tview.Escape(err.Error())))
+		fileRoot.AddChild(tview.NewTreeNode(colorDanger.markup("error") + " " + tview.Escape(err.Error())))
 	case len(changes) == 0:
 		title = " file changes (0) "
 		fileRoot = tview.NewTreeNode("")
-		fileRoot.AddChild(tview.NewTreeNode("[gray](no changes)[-]"))
+		fileRoot.AddChild(tview.NewTreeNode(colorMuted.markup("(no changes)")))
 	default:
 		title = fmt.Sprintf(" file changes (%d) ", len(changes))
 		fileRoot = buildFileTree(changes, t.selectedStyle)
@@ -2278,10 +2289,10 @@ func (t *TUI) showFileDiff(req diffRequest, text string, err error) {
 	message := "diff: " + req.change.Path
 	switch {
 	case err != nil:
-		text = "[red]error[-] " + tview.Escape(err.Error())
+		text = colorDanger.markup("error") + " " + tview.Escape(err.Error())
 		message = "diff failed: " + req.change.Path
 	case text == "":
-		text = "[gray](no diff)[-]"
+		text = colorMuted.markup("(no diff)")
 		message = "no diff: " + req.change.Path
 	}
 	t.setDiff(t.fileDiff, "diff", req.change, text, message)
@@ -2324,7 +2335,7 @@ func (t *TUI) showLocal(_ localFilesRequest, changes []core.FileChange, err erro
 	switch {
 	case err != nil:
 		changeRoot = tview.NewTreeNode("")
-		changeRoot.AddChild(tview.NewTreeNode("[red]error[-] " + tview.Escape(err.Error())))
+		changeRoot.AddChild(tview.NewTreeNode(colorDanger.markup("error") + " " + tview.Escape(err.Error())))
 	default:
 		// 即使没有变更也保留分组 header，和初始化时的占位树保持一致，
 		// 避免第一次切到本页时列表从两组 header 跳成一行占位文本。
@@ -2397,10 +2408,10 @@ func (t *TUI) showLocalDiff(req localDiffRequest, text string, err error) {
 	message := "diff: " + req.change.Path
 	switch {
 	case err != nil:
-		text = "[red]error[-] " + tview.Escape(err.Error())
+		text = colorDanger.markup("error") + " " + tview.Escape(err.Error())
 		message = "diff failed: " + req.change.Path
 	case text == "":
-		text = "[gray](no diff)[-]"
+		text = colorMuted.markup("(no diff)")
 		message = "no diff: " + req.change.Path
 	}
 	t.setDiff(t.changeDiff, "local-diff", req.change, text, message)
@@ -2431,21 +2442,23 @@ func (t *TUI) showHistory(_ historyRequest, commits []core.Commit, err error) {
 		t.historyList.SetTitle(" history ")
 		t.historyList.setItems(nil)
 		t.fileHistoryDiff.Cancel()
-		t.historyDiff.SetText("[red]failed to load history:[-] " + tview.Escape(err.Error()))
+		t.historyDiff.SetText(colorDanger.markup("failed to load history:") + " " + tview.Escape(err.Error()))
 		return
 	case len(commits) == 0:
 		t.historyList.SetTitle(" history (0) ")
 		t.historyList.setItems(nil)
 		t.fileHistoryDiff.Cancel()
-		t.historyDiff.SetText("[gray](no history)[-]")
+		t.historyDiff.SetText(colorMuted.markup("(no history)"))
 		return
 	}
 
 	t.historyList.SetTitle(fmt.Sprintf(" history (%d) ", len(commits)))
 	items := make([][]string, 0, len(commits))
 	for _, commit := range commits {
-		header := fmt.Sprintf("[aqua]%s[-] [gray]%s[-]", tview.Escape(commit.Author), commit.Date.Format("Jan _2, 2006 15:04:05"))
-		subject := " [::b]" + tview.Escape(commit.Subject) + "[-::-]"
+		header := fmt.Sprintf("%s %s",
+			colorAccent.markup(tview.Escape(commit.Author)),
+			colorMuted.markup(commit.Date.Format("Jan _2, 2006 15:04:05")))
+		subject := " " + colorText.markup(tview.Escape(commit.Subject), true)
 		items = append(items, []string{header, subject})
 	}
 	t.historyList.setItems(items)
@@ -2481,9 +2494,9 @@ func (t *TUI) showHistoryDiff(req historyDiffRequest, text string, err error) {
 	}
 	switch {
 	case err != nil:
-		text = "[red]error[-] " + tview.Escape(err.Error())
+		text = colorDanger.markup("error") + " " + tview.Escape(err.Error())
 	case text == "":
-		text = "[gray](no diff)[-]"
+		text = colorMuted.markup("(no diff)")
 	}
 	t.historyDiff.SetTitle(" file diff: " + tview.Escape(req.change.Path) + " ")
 	t.historyDiff.SetText(text)
@@ -2518,7 +2531,7 @@ func (t *TUI) clearDiff(view *tview.TextView, slot, message string) {
 	if message == "" {
 		view.SetText("")
 	} else {
-		view.SetText("[gray](" + tview.Escape(message) + ")[-]")
+		view.SetText(colorMuted.markup("(" + tview.Escape(message) + ")"))
 	}
 	view.ScrollToBeginning()
 }
@@ -2694,8 +2707,8 @@ func (t *TUI) promptForcePush() {
 
 	previous := t.app.GetFocus()
 
-	message := fmt.Sprintf("The remote branch has commits that are not in your local branch.\n\nForce push %s to its upstream?\n\n[red]This rewrites remote history and cannot be undone.[-]",
-		tview.Escape(t.HeadRef))
+	message := fmt.Sprintf("The remote branch has commits that are not in your local branch.\n\nForce push %s to its upstream?\n\n%s",
+		tview.Escape(t.HeadRef), colorDanger.markup("This rewrites remote history and cannot be undone."))
 
 	prompt := tview.NewModal().
 		SetText(message).
@@ -2715,14 +2728,14 @@ func (t *TUI) promptForcePush() {
 
 	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
 	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
-	prompt.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
-	prompt.Box.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
+	prompt.SetBackgroundColor(colorBackground.cell)
+	prompt.Box.SetBackgroundColor(colorBackground.cell)
 
 	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
 	// 固定成白底黑字，保证按钮文字始终是深色。
 	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
-		Background(tview.Styles.PrimaryTextColor).
-		Foreground(tcell.ColorBlack))
+		Background(colorText.cell).
+		Foreground(colorOnAccent.cell))
 
 	t.promptVisible = true
 	t.root.AddPage("force-push", prompt, true, true)
@@ -2991,7 +3004,7 @@ func (t *TUI) renderStatus() {
 			t.statusBar.SetText("")
 			return
 		}
-		t.statusBar.SetText("[gray]" + tview.Escape(t.statusMsg) + "[-]")
+		t.statusBar.SetText(colorMuted.markup(tview.Escape(t.statusMsg)))
 		return
 	}
 
@@ -3000,7 +3013,7 @@ func (t *TUI) renderStatus() {
 		messages = append(messages, tview.Escape(message))
 	}
 	sort.Strings(messages)
-	t.statusBar.SetText("[gray]loading " + strings.Join(messages, ", ") + "…[-]")
+	t.statusBar.SetText(colorMuted.markup("loading " + strings.Join(messages, ", ") + "…"))
 }
 
 // renderInProgressActions 按 rebase / merge / squash 状态切换 statusBar 右侧 Continue / Abort 的文案和动作。

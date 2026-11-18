@@ -23,10 +23,10 @@ func branchLabel(b core.Branch, headRef string, syncFrame int) string {
 		if syncFrame >= 0 {
 			mark = syncFrames[syncFrame%len(syncFrames)]
 		}
-		return "[green]" + mark + "[-] " + label
+		return colorSuccess.markup(mark) + " " + label
 	case !b.Remote:
 		// 其余本地分支用分支符号占位对齐。
-		return "[gray]↘[-] " + label
+		return colorMuted.markup("↘") + " " + label
 	}
 	return label
 }
