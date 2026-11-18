@@ -49,6 +49,7 @@ var (
 	colorText        = themeColor{cell: tview.Styles.PrimaryTextColor}
 	colorBackground  = themeColor{cell: tcell.ColorDefault}
 	colorBorder      = themeColor{cell: tcell.ColorDarkGray}
+	colorPopup       = themeColor{cell: tcell.NewHexColor(0x34373d)}
 	colorSelection   = themeColor{cell: tcell.NewHexColor(0x4a4a4a)}
 	colorHighlight   = themeColor{cell: tcell.NewHexColor(0x2f4f4f)}
 	colorOnAccent    = themeColor{cell: tcell.ColorBlack}

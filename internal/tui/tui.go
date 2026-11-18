@@ -854,6 +854,24 @@ func (t *TUI) setupUI() tview.Primitive {
 	return root
 }
 
+// setupPrompt 给确认弹窗铺上弹窗底色，并作为独立页面打开。
+// Modal 默认用蓝色 ContrastBackgroundColor，而且 Box、按钮、边框都需要单独覆盖。
+func (t *TUI) setupPrompt(name string, prompt *tview.Modal) {
+	prompt.SetBackgroundColor(colorPopup.cell)
+	prompt.Box.SetBackgroundColor(colorPopup.cell)
+	prompt.Box.SetBorderStyle(tcell.StyleDefault.
+		Foreground(tview.Styles.BorderColor).
+		Background(colorPopup.cell))
+	prompt.SetButtonBackgroundColor(colorPopup.cell)
+	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
+		Background(colorText.cell).
+		Foreground(colorOnAccent.cell))
+
+	t.promptVisible = true
+	t.root.AddPage(name, prompt, true, true)
+	t.app.SetFocus(prompt)
+}
+
 func (t *TUI) setupLoaders() {
 	post := func(f func()) { t.app.QueueUpdateDraw(f) }
 
@@ -1330,11 +1348,13 @@ func (t *TUI) resetCommit() {
 	message += colorMuted.markup("Mixed") + " resets index, keeps working tree\n"
 	message += colorDanger.markup("Hard") + " discards index and working tree changes"
 
+	const page = "reset"
+
 	prompt := tview.NewModal().
 		SetText(message).
 		AddButtons([]string{"Cancel", "Soft", "Mixed", "Hard"}).
 		SetDoneFunc(func(buttonIndex int, _ string) {
-			t.root.RemovePage("reset")
+			t.root.RemovePage(page)
 			t.promptVisible = false
 			t.app.SetFocus(t.commitList)
 			switch buttonIndex {
@@ -1347,20 +1367,7 @@ func (t *TUI) resetCommit() {
 			}
 		})
 
-	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
-	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
-	prompt.SetBackgroundColor(colorBackground.cell)
-	prompt.Box.SetBackgroundColor(colorBackground.cell)
-
-	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
-	// 固定成白底黑字，保证按钮文字始终是深色。
-	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
-		Background(colorText.cell).
-		Foreground(colorOnAccent.cell))
-
-	t.promptVisible = true
-	t.root.AddPage("reset", prompt, true, true)
-	t.app.SetFocus(prompt)
+	t.setupPrompt(page, prompt)
 }
 
 // rebaseCommit 先弹窗确认，再把当前分支 rebase 到选中的 commit。
@@ -1379,11 +1386,13 @@ func (t *TUI) rebaseCommit() {
 
 	message += colorMuted.markup("Local changes will be stashed and restored automatically.")
 
+	const page = "rebase"
+
 	prompt := tview.NewModal().
 		SetText(message).
 		AddButtons([]string{"Cancel", "Rebase"}).
 		SetDoneFunc(func(buttonIndex int, _ string) {
-			t.root.RemovePage("rebase")
+			t.root.RemovePage(page)
 			t.promptVisible = false
 			t.app.SetFocus(t.commitList)
 			if buttonIndex == 1 {
@@ -1391,20 +1400,7 @@ func (t *TUI) rebaseCommit() {
 			}
 		})
 
-	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
-	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
-	prompt.SetBackgroundColor(colorBackground.cell)
-	prompt.Box.SetBackgroundColor(colorBackground.cell)
-
-	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
-	// 固定成白底黑字，保证按钮文字始终是深色。
-	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
-		Background(colorText.cell).
-		Foreground(colorOnAccent.cell))
-
-	t.promptVisible = true
-	t.root.AddPage("rebase", prompt, true, true)
-	t.app.SetFocus(prompt)
+	t.setupPrompt(page, prompt)
 }
 
 // continueRebase 在冲突解决并暂存后继续 rebase。
@@ -1423,11 +1419,13 @@ func (t *TUI) abortRebase() {
 
 	previous := t.app.GetFocus()
 
+	const page = "rebase-abort"
+
 	prompt := tview.NewModal().
 		SetText("Abort rebase?\n\nAll conflict resolutions will be lost.").
 		AddButtons([]string{"Cancel", "Abort"}).
 		SetDoneFunc(func(buttonIndex int, _ string) {
-			t.root.RemovePage("rebase-abort")
+			t.root.RemovePage(page)
 			t.promptVisible = false
 			if previous != nil {
 				t.app.SetFocus(previous)
@@ -1439,20 +1437,7 @@ func (t *TUI) abortRebase() {
 			}
 		})
 
-	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
-	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
-	prompt.SetBackgroundColor(colorBackground.cell)
-	prompt.Box.SetBackgroundColor(colorBackground.cell)
-
-	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
-	// 固定成白底黑字，保证按钮文字始终是深色。
-	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
-		Background(colorText.cell).
-		Foreground(colorOnAccent.cell))
-
-	t.promptVisible = true
-	t.root.AddPage("rebase-abort", prompt, true, true)
-	t.app.SetFocus(prompt)
+	t.setupPrompt(page, prompt)
 }
 
 // mergeCommit 先弹窗确认，再把选中的 commit merge 到当前分支。
@@ -1474,11 +1459,13 @@ func (t *TUI) mergeCommit() {
 	message += colorMuted.markup("Squash") + " stages changes without creating a commit\n\n"
 	message += colorMuted.markup("Local changes will be stashed and restored automatically.")
 
+	const page = "merge"
+
 	prompt := tview.NewModal().
 		SetText(message).
 		AddButtons([]string{"Cancel", "Merge", "No FF", "Squash"}).
 		SetDoneFunc(func(buttonIndex int, _ string) {
-			t.root.RemovePage("merge")
+			t.root.RemovePage(page)
 			t.promptVisible = false
 			t.app.SetFocus(t.commitList)
 			switch buttonIndex {
@@ -1491,20 +1478,7 @@ func (t *TUI) mergeCommit() {
 			}
 		})
 
-	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
-	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
-	prompt.SetBackgroundColor(colorBackground.cell)
-	prompt.Box.SetBackgroundColor(colorBackground.cell)
-
-	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
-	// 固定成白底黑字，保证按钮文字始终是深色。
-	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
-		Background(colorText.cell).
-		Foreground(colorOnAccent.cell))
-
-	t.promptVisible = true
-	t.root.AddPage("merge", prompt, true, true)
-	t.app.SetFocus(prompt)
+	t.setupPrompt(page, prompt)
 }
 
 // continueMerge 在冲突解决并暂存后继续 merge。
@@ -1523,11 +1497,13 @@ func (t *TUI) abortMerge() {
 
 	previous := t.app.GetFocus()
 
+	const page = "merge-abort"
+
 	prompt := tview.NewModal().
 		SetText("Abort merge?\n\nAll conflict resolutions will be lost.").
 		AddButtons([]string{"Cancel", "Abort"}).
 		SetDoneFunc(func(buttonIndex int, _ string) {
-			t.root.RemovePage("merge-abort")
+			t.root.RemovePage(page)
 			t.promptVisible = false
 			if previous != nil {
 				t.app.SetFocus(previous)
@@ -1539,20 +1515,7 @@ func (t *TUI) abortMerge() {
 			}
 		})
 
-	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
-	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
-	prompt.SetBackgroundColor(colorBackground.cell)
-	prompt.Box.SetBackgroundColor(colorBackground.cell)
-
-	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
-	// 固定成白底黑字，保证按钮文字始终是深色。
-	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
-		Background(colorText.cell).
-		Foreground(colorOnAccent.cell))
-
-	t.promptVisible = true
-	t.root.AddPage("merge-abort", prompt, true, true)
-	t.app.SetFocus(prompt)
+	t.setupPrompt(page, prompt)
 }
 
 // continueSquash 提交待完成的 squash；冲突未解决时 git 会报错。
@@ -1571,11 +1534,13 @@ func (t *TUI) abortSquash() {
 
 	previous := t.app.GetFocus()
 
+	const page = "squash-abort"
+
 	prompt := tview.NewModal().
 		SetText("Abort squash?\n\nStaged squash changes and conflict resolutions will be lost.\n\n" + colorMuted.markup("Local changes stashed before the merge will be restored.")).
 		AddButtons([]string{"Cancel", "Abort"}).
 		SetDoneFunc(func(buttonIndex int, _ string) {
-			t.root.RemovePage("squash-abort")
+			t.root.RemovePage(page)
 			t.promptVisible = false
 			if previous != nil {
 				t.app.SetFocus(previous)
@@ -1587,20 +1552,7 @@ func (t *TUI) abortSquash() {
 			}
 		})
 
-	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
-	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
-	prompt.SetBackgroundColor(colorBackground.cell)
-	prompt.Box.SetBackgroundColor(colorBackground.cell)
-
-	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
-	// 固定成白底黑字，保证按钮文字始终是深色。
-	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
-		Background(colorText.cell).
-		Foreground(colorOnAccent.cell))
-
-	t.promptVisible = true
-	t.root.AddPage("squash-abort", prompt, true, true)
-	t.app.SetFocus(prompt)
+	t.setupPrompt(page, prompt)
 }
 
 // commitChanges 用表单内容提交暂存区改动；Amend 勾选时改写 HEAD。
@@ -1644,6 +1596,12 @@ func (t *TUI) openCommitInfo() {
 		SetBorderPadding(0, 0, 1, 1).
 		SetFocusFunc(func() { t.setFocusBorder(commitInfo.Box, true) }).
 		SetBlurFunc(func() { t.setFocusBorder(commitInfo.Box, false) })
+
+	// TextView 会用自己的背景色重刷内容区，边框也要单独设底色。
+	commitInfo.SetBackgroundColor(colorPopup.cell)
+	commitInfo.SetBorderStyle(tcell.StyleDefault.
+		Foreground(t.borderFocusColor).
+		Background(colorPopup.cell))
 
 	// 弹窗铺满 mainPage 所在区域，左右各留 15 列、上下各留 3 行，
 	// 和 history 弹窗保持一致的留白。
@@ -1720,6 +1678,11 @@ func (t *TUI) openHistory(node *tview.TreeNode) {
 		SetFocusFunc(func() { t.setFocusBorder(historyList.Box, true) }).
 		SetBlurFunc(func() { t.setFocusBorder(historyList.Box, false) })
 
+	historyList.SetBackgroundColor(colorPopup.cell)
+	historyList.SetBorderStyle(tcell.StyleDefault.
+		Foreground(t.borderColor).
+		Background(colorPopup.cell))
+
 	historyList.setSelectedFunc(func() {
 		t.selectHistory()
 	})
@@ -1739,6 +1702,11 @@ func (t *TUI) openHistory(node *tview.TreeNode) {
 		SetBorderPadding(0, 0, 1, 1).
 		SetFocusFunc(func() { t.setFocusBorder(historyDiff.Box, true) }).
 		SetBlurFunc(func() { t.setFocusBorder(historyDiff.Box, false) })
+
+	historyDiff.SetBackgroundColor(colorPopup.cell)
+	historyDiff.SetBorderStyle(tcell.StyleDefault.
+		Foreground(t.borderColor).
+		Background(colorPopup.cell))
 
 	historyDiff.SetDrawFunc(func(_ tcell.Screen, _, _, _, _ int) (int, int, int, int) {
 		t.syncHistoryDiffWidth(historyDiff)
@@ -1936,11 +1904,13 @@ func (t *TUI) discardLocalChange() {
 		message = fmt.Sprintf("Discard changes to %s?\n\nThis cannot be undone.", tview.Escape(change.Path))
 	}
 
+	const page = "discard"
+
 	prompt := tview.NewModal().
 		SetText(message).
 		AddButtons([]string{"Cancel", "Discard"}).
 		SetDoneFunc(func(buttonIndex int, _ string) {
-			t.root.RemovePage("discard")
+			t.root.RemovePage(page)
 			t.promptVisible = false
 			t.app.SetFocus(t.changeList)
 			if buttonIndex == 1 {
@@ -1948,20 +1918,7 @@ func (t *TUI) discardLocalChange() {
 			}
 		})
 
-	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
-	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
-	prompt.SetBackgroundColor(colorBackground.cell)
-	prompt.Box.SetBackgroundColor(colorBackground.cell)
-
-	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
-	// 固定成白底黑字，保证按钮文字始终是深色。
-	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
-		Background(colorText.cell).
-		Foreground(colorOnAccent.cell))
-
-	t.promptVisible = true
-	t.root.AddPage("discard", prompt, true, true)
-	t.app.SetFocus(prompt)
+	t.setupPrompt(page, prompt)
 }
 
 // toggleWhitespace 切换 diff 是否忽略纯空白改动，并重新加载当前 diff。
@@ -2714,11 +2671,13 @@ func (t *TUI) promptForcePush() {
 
 	message += colorDanger.markup("This rewrites remote history and cannot be undone.")
 
+	const page = "force-push"
+
 	prompt := tview.NewModal().
 		SetText(message).
 		AddButtons([]string{"Cancel", "Force Push"}).
 		SetDoneFunc(func(buttonIndex int, _ string) {
-			t.root.RemovePage("force-push")
+			t.root.RemovePage(page)
 			t.promptVisible = false
 			if previous != nil {
 				t.app.SetFocus(previous)
@@ -2730,20 +2689,7 @@ func (t *TUI) promptForcePush() {
 			}
 		})
 
-	// Modal 默认用 ContrastBackgroundColor（蓝色）填充；跟随终端背景色。
-	// Modal.SetBackgroundColor 只改内部的 frame/form，外层的 Box 需要单独设置。
-	prompt.SetBackgroundColor(colorBackground.cell)
-	prompt.Box.SetBackgroundColor(colorBackground.cell)
-
-	// 高亮按钮默认是白底 + 终端默认前景色，在深色终端上文字会发白；
-	// 固定成白底黑字，保证按钮文字始终是深色。
-	prompt.SetButtonActivatedStyle(tcell.StyleDefault.
-		Background(colorText.cell).
-		Foreground(colorOnAccent.cell))
-
-	t.promptVisible = true
-	t.root.AddPage("force-push", prompt, true, true)
-	t.app.SetFocus(prompt)
+	t.setupPrompt(page, prompt)
 }
 
 // startSyncSpinner 启动当前分支前的点阵动画；已有动画时不重复启动。
