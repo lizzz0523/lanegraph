@@ -12,23 +12,23 @@ import (
 	"github.com/rivo/tview"
 )
 
-var changeStatusColors = map[byte]string{
-	'A': "[green]",
-	'M': "[yellow]",
-	'D': "[red]",
-	'R': "[fuchsia]",
-	'C': "[aqua]",
-	'T': "[blue]",
+var changeStatusColors = map[byte]themeColor{
+	'A': colorSuccess,
+	'M': colorSecondary,
+	'D': colorDanger,
+	'R': colorSpecial,
+	'C': colorAccent,
+	'T': colorInfo,
 }
 
-func changeColor(status string) string {
+func changeColor(status string) themeColor {
 	if status == "" {
-		return "[gray]"
+		return colorMuted
 	}
 	if color, ok := changeStatusColors[status[0]]; ok {
 		return color
 	}
-	return "[gray]"
+	return colorMuted
 }
 
 // changeLabel 只显示状态的首字母，避免 R100 这类相似度后缀占用空间。
@@ -47,7 +47,7 @@ func folderLabel(name string, expanded bool) string {
 }
 
 func fileLabel(name string, status string) string {
-	return fmt.Sprintf("%s%s[-] %s", changeColor(status), changeLabel(status), tview.Escape(name))
+	return fmt.Sprintf("%s %s", changeColor(status).markup(changeLabel(status)), tview.Escape(name))
 }
 
 func buildFileTree(changes []core.FileChange, selectedStyle tcell.Style) *tview.TreeNode {
@@ -349,16 +349,16 @@ func renderPlainDiff(diff string) string {
 
 	for line := range strings.Lines(diff) {
 		line = strings.TrimRight(line, "\n")
-		color := ""
+		var color themeColor
 		switch {
 		case strings.HasPrefix(line, "+++"), strings.HasPrefix(line, "---"):
-			color = "[gray]"
+			color = colorMuted
 		case strings.HasPrefix(line, "+"):
-			color = "[green]"
+			color = colorSuccess
 		case strings.HasPrefix(line, "-"):
-			color = "[red]"
+			color = colorDanger
 		case strings.HasPrefix(line, "@@"):
-			color = "[aqua]"
+			color = colorAccent
 		case strings.HasPrefix(line, "diff "),
 			strings.HasPrefix(line, "index "),
 			strings.HasPrefix(line, "new file"),
@@ -367,14 +367,12 @@ func renderPlainDiff(diff string) string {
 			strings.HasPrefix(line, "rename"),
 			strings.HasPrefix(line, "Binary files"),
 			strings.HasPrefix(line, "\\"):
-			color = "[gray]"
+			color = colorMuted
 		}
-		if color != "" {
-			out.WriteString(color)
-		}
-		out.WriteString(tview.Escape(line))
-		if color != "" {
-			out.WriteString("[-:-:-]")
+		if color.tag != "" {
+			out.WriteString(color.markup(tview.Escape(line)))
+		} else {
+			out.WriteString(tview.Escape(line))
 		}
 		out.WriteByte('\n')
 	}

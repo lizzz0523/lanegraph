@@ -12,42 +12,41 @@ import (
 	"github.com/rivo/tview"
 )
 
-const (
-	colorReset = "[-::-]" // 重置前景色、背景色和属性，否则 refs 的粗体会延续到 subject
-	colorHash  = "[yellow]"
-	colorDate  = "[gray]"
-	colorRefs  = "[aqua::b]"
+var (
+	colorHash = colorSecondary
+	colorDate = colorMuted
+	colorRefs = colorAccent
 )
 
-var laneColors = []string{
-	"[green]",
-	"[yellow]",
-	"[blue]",
-	"[fuchsia]",
-	"[aqua]",
-	"[red]",
+var laneColors = []themeColor{
+	colorSuccess,
+	colorSecondary,
+	colorInfo,
+	colorSpecial,
+	colorAccent,
+	colorDanger,
 }
 
-func laneColor(lane int) string {
+func laneColor(lane int) themeColor {
 	return laneColors[lane%len(laneColors)]
 }
 
 // 作者色板与 lane 色板分开，避免作者的字母颜色和左侧 graph 线条混淆。
-var authorColors = []string{
-	"[#ff8700::b]",
-	"[#5fd7ff::b]",
-	"[#d787ff::b]",
-	"[#5faf5f::b]",
-	"[#ff87d7::b]",
-	"[#ffd75f::b]",
-	"[#87afff::b]",
-	"[#d7af87::b]",
+var authorColors = []themeColor{
+	hexColor(0xff8700),
+	hexColor(0x5fd7ff),
+	hexColor(0xd787ff),
+	hexColor(0x5faf5f),
+	hexColor(0xff87d7),
+	hexColor(0xffd75f),
+	hexColor(0x87afff),
+	hexColor(0xd7af87),
 }
 
 // authorColorMap 按 commit 列表中作者首次出现的顺序分配颜色，
 // 保证同一作者在整个列表里颜色一致。
-func authorColorMap(commits []core.Commit) map[string]string {
-	colors := make(map[string]string, len(commits))
+func authorColorMap(commits []core.Commit) map[string]themeColor {
+	colors := make(map[string]themeColor, len(commits))
 	for _, commit := range commits {
 		if _, ok := colors[commit.Author]; ok {
 			continue
@@ -75,7 +74,7 @@ func commitDate(date, now time.Time) string {
 
 type cell struct {
 	up, down, left, right bool
-	vColor, hColor        string
+	vColor, hColor        themeColor
 }
 
 // glyphs 返回 cell 的线条字符和其右侧的连接字符，规则参考 lazygit：横线穿过竖线时竖线优先；
@@ -187,14 +186,14 @@ func renderGraph(commits []core.Commit, graph core.Graph) []string {
 					charColor = c.hColor
 				}
 			}
-			fmt.Fprintf(&out, "%s%s%s%s%s", charColor, char, c.hColor, conn, colorReset)
+			fmt.Fprintf(&out, "%s%s", charColor.markup(char), c.hColor.markup(conn))
 		}
 
-		fmt.Fprintf(&out, " %s%s%s", colorHash, commit.ShortHash(), colorReset)
-		fmt.Fprintf(&out, " %s%s%s", colorOf[commit.Author], tview.Escape(authorInitial(commit.Author)), colorReset)
-		fmt.Fprintf(&out, " %s%s%s", colorDate, tview.Escape(commitDate(commit.Date, now)), colorReset)
+		fmt.Fprintf(&out, " %s", colorHash.markup(commit.ShortHash()))
+		fmt.Fprintf(&out, " %s", colorOf[commit.Author].markup(tview.Escape(authorInitial(commit.Author)), true))
+		fmt.Fprintf(&out, " %s", colorDate.markup(tview.Escape(commitDate(commit.Date, now))))
 		if commit.Refs != "" {
-			fmt.Fprintf(&out, " %s(%s)%s", colorRefs, tview.Escape(commit.Refs), colorReset)
+			fmt.Fprintf(&out, " %s", colorRefs.markup("("+tview.Escape(commit.Refs)+")", true))
 		}
 		fmt.Fprintf(&out, " %s", tview.Escape(commit.Subject))
 
@@ -210,7 +209,10 @@ func renderCommit(commit core.Commit, width int) string {
 		return ""
 	}
 
-	text := fmt.Sprintf("[aqua]%v[-] [gray]%v[-]  [::b]%v[-::-]", tview.Escape(commit.Author), commit.Date.Format("Jan _2, 2006 15:04:05 -0700"), tview.Escape(commit.Subject))
+	text := fmt.Sprintf("%s %s  %s",
+		colorAccent.markup(tview.Escape(commit.Author)),
+		colorMuted.markup(commit.Date.Format("Jan _2, 2006 15:04:05 -0700")),
+		colorText.markup(tview.Escape(commit.Subject), true))
 	if body := strings.TrimLeft(commit.Body, "\r\n"); body != "" {
 		first, _, more := strings.Cut(body, "\n")
 		if width > 4 {
@@ -220,7 +222,7 @@ func renderCommit(commit core.Commit, width int) string {
 		}
 		text += "\n" + tview.Escape(first)
 		if more {
-			text += " [gray]...[-]"
+			text += " " + colorMuted.markup("...")
 		}
 	}
 	return text
@@ -232,8 +234,11 @@ func renderCommitFull(commit core.Commit) string {
 		return ""
 	}
 
-	text := fmt.Sprintf("[aqua]%v[-] [gray]%v[-]  %s%v%s", tview.Escape(commit.Author), commit.Date.Format("Jan _2, 2006 15:04:05 -0700"), colorHash, commit.Hash, colorReset)
-	text += "\n\n[::b]" + tview.Escape(commit.Subject) + "[-::-]"
+	text := fmt.Sprintf("%s %s  %s",
+		colorAccent.markup(tview.Escape(commit.Author)),
+		colorMuted.markup(commit.Date.Format("Jan _2, 2006 15:04:05 -0700")),
+		colorHash.markup(commit.Hash))
+	text += "\n\n" + colorText.markup(tview.Escape(commit.Subject), true)
 	if body := strings.Trim(commit.Body, "\r\n"); body != "" {
 		text += "\n\n" + tview.Escape(body)
 	}
