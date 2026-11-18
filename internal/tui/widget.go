@@ -101,6 +101,18 @@ func (v *listView) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 			if v.activated != nil {
 				v.activated()
 			}
+		case tcell.KeyRune:
+			// 与 tview.TreeView 保持一致：j/k 移动，g/G 跳到首尾。
+			switch event.Rune() {
+			case 'j':
+				v.move(1)
+			case 'k':
+				v.move(-1)
+			case 'g':
+				v.setCurrentItem(0)
+			case 'G':
+				v.setCurrentItem(len(v.items) - 1)
+			}
 		}
 	})
 }
