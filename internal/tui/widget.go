@@ -14,8 +14,9 @@ type listView struct {
 	*tview.Box
 
 	items  [][]string
-	total  int   // 所有 item 的总行数
+	total  int   // 所有 item 和间距的总行数
 	starts []int // 每个 item 第一行的绝对行号
+	gap    int   // 相邻 item 之间的空行数
 
 	offset  int
 	marked  int
@@ -45,6 +46,17 @@ func (v *listView) Draw(screen tcell.Screen) {
 		return
 	}
 	v.clampOffset()
+
+	// 间距行不属于任何 item：先清空，避免残留上一帧内容，也避免被选中背景覆盖。
+	if v.gap > 0 {
+		for row := 0; row < height; row++ {
+			if line := v.offset + row; line < v.total && v.itemAtLine(line) < 0 {
+				for bx := 0; bx < width; bx++ {
+					screen.SetContent(x+bx, y+row, ' ', nil, tcell.StyleDefault)
+				}
+			}
+		}
+	}
 
 	first := sort.Search(len(v.items), func(i int) bool {
 		return v.starts[i]+len(v.items[i]) > v.offset
@@ -147,6 +159,9 @@ func (v *listView) setItems(items [][]string) {
 	for i, item := range items {
 		v.starts[i] = v.total
 		v.total += len(item)
+		if i < len(items)-1 {
+			v.total += v.gap
+		}
 	}
 
 	v.current = min(max(v.current, 0), max(0, len(items)-1))
@@ -163,6 +178,15 @@ func (v *listView) setLines(lines []string) {
 		items[i] = []string{line}
 	}
 	v.setItems(items)
+}
+
+// setGap 设置相邻 item 之间的空行数；已有 item 会按新间距重新布局。
+func (v *listView) setGap(gap int) {
+	if v.gap == gap {
+		return
+	}
+	v.gap = gap
+	v.setItems(v.items)
 }
 
 // setMarkedItem 标记对比基准所在 item；index 越界时清除标记。
@@ -237,6 +261,9 @@ func (v *listView) pageItems() int {
 			break
 		}
 		count++
+		if i < len(v.items)-1 {
+			lines += v.gap
+		}
 	}
 	return max(1, count)
 }

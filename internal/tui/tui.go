@@ -1710,6 +1710,8 @@ func (t *TUI) openHistory(node *tview.TreeNode) {
 	}
 
 	historyList := newListView(t.selectedStyle, tcell.StyleDefault)
+	// item 之间留一个空行，选中背景只覆盖 item 自身。
+	historyList.setGap(1)
 
 	historyList.SetTitle(" history ").
 		SetTitleAlign(tview.AlignLeft).
