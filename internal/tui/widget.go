@@ -116,6 +116,9 @@ func (v *listView) MouseHandler() func(action tview.MouseAction, event *tcell.Ev
 			return false, nil
 		}
 		switch action {
+		case tview.MouseLeftDown:
+			setFocus(v)
+			consumed = true
 		case tview.MouseLeftClick:
 			setFocus(v)
 			x, y, width, height := v.GetInnerRect()
