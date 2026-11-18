@@ -39,6 +39,7 @@ type State struct {
 }
 
 func NewState(ctx context.Context, repo string) (State, error) {
+	repo = GitRoot(ctx, repo)
 	s := State{Repo: repo, IgnoreWhitespace: true}
 
 	refs, err := s.Refs(ctx)
@@ -51,7 +52,7 @@ func NewState(ctx context.Context, repo string) (State, error) {
 		return State{}, err
 	}
 
-	s.RepoName = GitRepoName(ctx, repo)
+	s.RepoName = filepath.Base(repo)
 	s.HeadRef = refs.HeadRef
 	s.HeadHash = refs.HeadHash
 	s.Rebasing = refs.Rebasing

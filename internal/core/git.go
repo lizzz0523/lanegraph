@@ -11,12 +11,14 @@ import (
 	"time"
 )
 
-func GitRepoName(ctx context.Context, repo string) string {
+// GitRoot 返回仓库根目录；repo 不在 git 仓库内时返回原路径。
+// 路径类 git 命令都以仓库根目录为基准，从子目录启动时也要统一到根目录。
+func GitRoot(ctx context.Context, repo string) string {
 	root, err := gitOutputTrimmed(ctx, repo, "rev-parse", "--show-toplevel")
 	if err != nil || root == "" {
-		return filepath.Base(repo)
+		return repo
 	}
-	return filepath.Base(root)
+	return root
 }
 
 func GitRepoHead(ctx context.Context, repo string) (string, string) {
