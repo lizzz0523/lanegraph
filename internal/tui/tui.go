@@ -32,7 +32,7 @@ type TUI struct {
 	changeTab  *tview.Button
 	commitTab  *tview.Button
 	filterText *tview.TextArea
-	branchList *tview.TreeView
+	refList    *tview.TreeView
 	mainPanels *tview.Pages
 	statusBar  *tview.TextView
 	statusRow  *tview.Flex
@@ -64,7 +64,7 @@ type TUI struct {
 	historyWidth      int               // history 弹窗内 diff 的渲染宽度
 	statusMsg         string            // 最近一次操作结果，loading 结束后保留
 	statusBusy        map[string]string // statusBar 当前展示的 loading 项，key 为槽位
-	pendingBranch     string            // checkout 后等待 refs 刷新完成再选中的分支
+	pendingRef        string            // checkout 后等待 refs 刷新完成再选中的引用
 	pendingCommit     string            // history 跳转后等待 commits 刷新完成再选中的提交
 	promptVisible     bool              // 确认弹窗是否正在显示
 	historyVisible    bool              // 文件历史弹窗是否正在显示
@@ -135,6 +135,15 @@ type historyDiffRequest struct {
 
 type checkoutRequest struct {
 	branch core.Branch
+	tag    core.Tag
+}
+
+// name 返回 loader key 和 loading 文案使用的名字。
+func (r checkoutRequest) name() string {
+	if r.tag.Name != "" {
+		return r.tag.Name
+	}
+	return r.branch.Name
 }
 
 // syncOp 是当前分支的远程同步操作类型。
@@ -228,7 +237,7 @@ func (t *TUI) Run() error {
 			return nil
 		case event.Key() == tcell.KeyEscape && filtering:
 			t.filterText.SetText("", false)
-			app.SetFocus(t.branchList)
+			app.SetFocus(t.refList)
 			return nil
 		// commit 输入框里 Esc 回到 local changes 列表。
 		case event.Key() == tcell.KeyEscape && committing:
@@ -267,7 +276,7 @@ func (t *TUI) Run() error {
 	defer t.closeLoaders()
 
 	t.refreshTabStyles()
-	t.refreshBranches("")
+	t.refreshRefs("")
 	t.refreshCommit(true)
 
 	return app.Run()
@@ -643,29 +652,29 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetBlurFunc(func() { t.setFocusBorder(filterText.Box, false) })
 
 	filterText.SetChangedFunc(func() {
-		t.refreshBranches(t.branchName())
+		t.refreshRefs(t.refName())
 	})
 
-	branchList := tview.NewTreeView().
+	refList := tview.NewTreeView().
 		SetTopLevel(1).
 		SetGraphics(false)
 
-	branchList.SetTitle(" branches ").
+	refList.SetTitle(" refs ").
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
-		SetFocusFunc(func() { t.setFocusBorder(branchList.Box, true) }).
-		SetBlurFunc(func() { t.setFocusBorder(branchList.Box, false) })
+		SetFocusFunc(func() { t.setFocusBorder(refList.Box, true) }).
+		SetBlurFunc(func() { t.setFocusBorder(refList.Box, false) })
 
-	// 空格 checkout 当前分支；remote 目录则切换展开状态。
+	// 空格 checkout 当前分支或标签，remote 目录切换展开状态。
 	// TreeView 默认把空格当选中，必须在这里先截获。
-	branchList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+	refList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyRune && event.Rune() == ' ' {
-			node := branchList.GetCurrentNode()
+			node := refList.GetCurrentNode()
 			if node != nil {
 				if _, isFolder := node.GetReference().(string); isFolder {
 					t.toggleRemoteFolder(node)
 				} else {
-					t.checkoutBranch()
+					t.checkoutRef(node)
 				}
 			}
 			return nil
@@ -673,21 +682,19 @@ func (t *TUI) setupUI() tview.Primitive {
 		return event
 	})
 
-	// 回车或鼠标点击 remote 目录时切换展开状态，点击分支时跳转到对应 commit。
-	branchList.SetSelectedFunc(func(node *tview.TreeNode) {
+	// 回车或鼠标点击 remote 目录时切换展开状态，点击引用时跳转到对应 commit。
+	refList.SetSelectedFunc(func(node *tview.TreeNode) {
 		if _, isFolder := node.GetReference().(string); isFolder {
 			t.toggleRemoteFolder(node)
 			return
 		}
-		if branch, ok := node.GetReference().(core.Branch); ok {
-			// commits 刷新后行号会变化，每次跳转都按当前列表查询。
-			if row := t.commitRow(branch.Hash); row >= 0 {
-				t.commitList.setCurrentItem(row)
-			}
+		// commits 刷新后行号会变化，每次跳转都按当前列表查询。
+		if row := t.commitRow(refHash(node)); row >= 0 {
+			t.commitList.setCurrentItem(row)
 		}
 	})
 
-	t.focusOnScrollTree(branchList, nil)
+	t.focusOnScrollTree(refList, nil)
 
 	repoHead := tview.NewTextView().
 		SetText(t.HeadRef).
@@ -704,10 +711,10 @@ func (t *TUI) setupUI() tview.Primitive {
 		if row := t.commitRow(t.HeadHash); row >= 0 {
 			commitList.setCurrentItem(row)
 		}
-		if node := t.branchNode(t.HeadRef); node != nil {
-			branchList.SetCurrentNode(node)
+		if node := t.refNode(t.HeadRef); node != nil {
+			refList.SetCurrentNode(node)
 		}
-		t.app.SetFocus(branchList)
+		t.app.SetFocus(refList)
 		return tview.MouseConsumed, nil
 	})
 
@@ -751,7 +758,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		AddItem(mainTabs, 2, 0, false).
 		AddItem(nil, 1, 0, false).
 		AddItem(filterText, 3, 0, false).
-		AddItem(branchList, 0, 1, false)
+		AddItem(refList, 0, 1, false)
 
 	content := tview.NewFlex().
 		AddItem(sidebar, 30, 0, false).
@@ -805,7 +812,7 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.changeTab = changeTab
 	t.commitTab = commitTab
 	t.filterText = filterText
-	t.branchList = branchList
+	t.refList = refList
 	t.mainPanels = mainPanels
 	t.statusBar = statusBar
 	t.statusRow = statusRow
@@ -841,7 +848,7 @@ func (t *TUI) setupUI() tview.Primitive {
 
 	// SetRoot 只会对 commitList 触发 focus 回调，其余需手动初始化为未聚焦
 	t.setFocusBorder(filterText.Box, false)
-	t.setFocusBorder(branchList.Box, false)
+	t.setFocusBorder(refList.Box, false)
 	t.setFocusBorder(commitList.Box, true)
 	t.setFocusBorder(commitInfo.Box, false)
 	t.setFocusBorder(fileList.Box, false)
@@ -970,9 +977,12 @@ func (t *TUI) setupLoaders() {
 	})
 
 	t.checkout = loader.New(loader.Config[string, checkoutRequest]{
-		Key: func(req checkoutRequest) string { return req.branch.Name },
+		Key: func(req checkoutRequest) string { return req.name() },
 		Load: func(ctx context.Context, req checkoutRequest) (string, error) {
-			return t.Checkout(ctx, req.branch)
+			if req.tag.Name != "" {
+				return t.Checkout(ctx, req.tag)
+			}
+			return t.CheckoutBranch(ctx, req.branch)
 		},
 		Post:      post,
 		OnLoading: t.showCheckoutLoading,
@@ -1178,9 +1188,9 @@ func (t *TUI) focusChain() []tview.Primitive {
 		return []tview.Primitive{t.historyList, t.historyDiff}
 	}
 	if t.activeTab == tabChange {
-		return []tview.Primitive{t.filterText, t.branchList, t.changeList, t.changeDiff, t.commitSubject, t.commitDescription, t.commitButton}
+		return []tview.Primitive{t.filterText, t.refList, t.changeList, t.changeDiff, t.commitSubject, t.commitDescription, t.commitButton}
 	}
-	return []tview.Primitive{t.filterText, t.branchList, t.commitList, t.commitInfo, t.fileList, t.fileDiff}
+	return []tview.Primitive{t.filterText, t.refList, t.commitList, t.commitInfo, t.fileList, t.fileDiff}
 }
 
 // setFocusBorder 按焦点状态切换边框和标题颜色。
@@ -1214,7 +1224,7 @@ func (t *TUI) switchTab(tag string) {
 	t.refreshTab(tag)
 
 	// 焦点原本在内容区时，切页后交给新页的列表，避免焦点留在被隐藏的页面上；
-	// 焦点在左侧分支列表时 hiddenFocused 为 false，保持不动。
+	// 焦点在左侧引用列表时 hiddenFocused 为 false，保持不动。
 	if hiddenFocused {
 		if tag == tabChange {
 			t.app.SetFocus(t.changeList)
@@ -1251,10 +1261,10 @@ func (t *TUI) setTabStyle(button *tview.Button, active bool) {
 	button.SetStyle(style).SetActivatedStyle(style)
 }
 
-// refreshBranches 按当前 Branches 重建分支树；selected 为要选中的分支名，
-// 为空或找不到时默认选中第一个分支。
-func (t *TUI) refreshBranches(selected string) {
-	if t.branchList == nil {
+// refreshRefs 按当前 Branches / Tags 重建引用树；selected 为要选中的引用名，
+// 为空或找不到时默认选中第一个引用。
+func (t *TUI) refreshRefs(selected string) {
+	if t.refList == nil {
 		return
 	}
 
@@ -1263,20 +1273,20 @@ func (t *TUI) refreshBranches(selected string) {
 		filter = strings.ToLower(strings.TrimSpace(t.filterText.GetText()))
 	}
 
-	branchRoot := buildBranchTree(t.Branches, filter, t.HeadRef, t.syncFrame, t.remoteExpanded, t.headerStyle, t.headerSelectedStyle, t.selectedStyle)
-	t.branchList.SetRoot(branchRoot)
+	refRoot := buildRefTree(t.Branches, t.Tags, filter, t.HeadRef, t.syncFrame, t.remoteExpanded, t.headerStyle, t.headerSelectedStyle, t.selectedStyle)
+	t.refList.SetRoot(refRoot)
 
-	if node := t.branchNode(selected); node != nil {
-		t.branchList.SetCurrentNode(node)
+	if node := t.refNode(selected); node != nil {
+		t.refList.SetCurrentNode(node)
 		return
 	}
-	// 默认选中第一个分支，而不是分组标题或 remote 目录。
-	if node := firstBranchNode(branchRoot); node != nil {
-		t.branchList.SetCurrentNode(node)
+	// 默认选中第一个引用，而不是分组标题或 remote 目录。
+	if node := firstRefNode(refRoot); node != nil {
+		t.refList.SetCurrentNode(node)
 	}
 }
 
-// toggleRemoteFolder 切换 remote 目录的展开状态，并记住用户的选择以便重建分支树时恢复。
+// toggleRemoteFolder 切换 remote 目录的展开状态，并记住用户的选择以便重建引用树时恢复。
 func (t *TUI) toggleRemoteFolder(node *tview.TreeNode) {
 	expanded := !node.IsExpanded()
 	setRemoteExpanded(node, expanded)
@@ -1974,14 +1984,10 @@ func (t *TUI) refreshHistoryDiff() {
 	}
 }
 
-// checkoutBranch 对当前选中的分支执行 checkout：
-// 本地分支直接切换；远端分支切换到同名本地分支，不存在时创建跟踪分支。
-func (t *TUI) checkoutBranch() {
+// checkoutRef 对选中的分支或标签执行 checkout：
+// 本地分支直接切换；远端分支切换到同名本地分支，不存在时创建跟踪分支；标签进入 detached HEAD。
+func (t *TUI) checkoutRef(node *tview.TreeNode) {
 	if t.checkout == nil || t.checkout.Loading() {
-		return
-	}
-	node := t.branchList.GetCurrentNode()
-	if node == nil {
 		return
 	}
 	t.executeCheckout(node)
@@ -1997,29 +2003,30 @@ func (t *TUI) syncBranch(op syncOp) {
 
 /** REFS */
 
-// reloadRefs 重新读取仓库级 refs（分支和 HEAD）。
+// reloadRefs 重新读取仓库级 refs（分支、标签和 HEAD）。
 func (t *TUI) reloadRefs() {
 	t.refs.Reload(refsRequest{})
 }
 
 func (t *TUI) showRefsLoading(_ refsRequest) {
-	t.statusStart("branches", "branches")
+	t.statusStart("refs", "refs")
 }
 
 func (t *TUI) showRefs(_ refsRequest, refs core.Refs, err error) {
-	selected := t.pendingBranch
-	t.pendingBranch = ""
+	selected := t.pendingRef
+	t.pendingRef = ""
 	if selected == "" {
-		selected = t.branchName()
+		selected = t.refName()
 	}
 
 	if err != nil {
-		t.statusDone("branches", "branches: "+err.Error())
+		t.statusDone("refs", "refs: "+err.Error())
 		return
 	}
-	t.statusDone("branches", "")
+	t.statusDone("refs", "")
 
 	t.Branches = refs.Branches
+	t.Tags = refs.Tags
 	t.HeadRef = refs.HeadRef
 	t.HeadHash = refs.HeadHash
 	t.Rebasing = refs.Rebasing
@@ -2029,28 +2036,27 @@ func (t *TUI) showRefs(_ refsRequest, refs core.Refs, err error) {
 	if t.repoHead != nil {
 		t.repoHead.SetText(t.HeadRef)
 	}
-	t.refreshBranches(selected)
+	t.refreshRefs(selected)
 }
 
-// branchNode 返回分支 name 对应的节点，本地和远端都会匹配；name 为空或不存在时返回 nil。
-func (t *TUI) branchNode(name string) *tview.TreeNode {
-	if t.branchList == nil {
+// refNode 返回引用 name 对应的节点，分支和标签都会匹配；name 为空或不存在时返回 nil。
+func (t *TUI) refNode(name string) *tview.TreeNode {
+	if t.refList == nil {
 		return nil
 	}
-	return findBranchNode(t.branchList.GetRoot(), name)
+	return findRefNode(t.refList.GetRoot(), name)
 }
 
-// branchName 返回分支列表当前选中的分支名；分组标题返回空。
-func (t *TUI) branchName() string {
-	if t.branchList == nil {
+// refName 返回引用列表当前选中节点的名字；分组标题和 remote 目录返回空。
+func (t *TUI) refName() string {
+	if t.refList == nil {
 		return ""
 	}
-	node := t.branchList.GetCurrentNode()
+	node := t.refList.GetCurrentNode()
 	if node == nil {
 		return ""
 	}
-	branch, _ := node.GetReference().(core.Branch)
-	return branch.Name
+	return refName(node)
 }
 
 /** COMMIT */
@@ -2144,7 +2150,7 @@ func (t *TUI) setCompare(commit *core.Commit) {
 }
 
 // commitRow 返回 hash 在提交列表中的行号；hash 为空或不存在时返回 -1。
-// 刷新 commits 后行号会整体移动，分支跳转必须按当前列表重新查询。
+// 刷新 commits 后行号会整体移动，引用跳转必须按当前列表重新查询。
 func (t *TUI) commitRow(hash string) int {
 	if hash == "" {
 		return -1
@@ -2569,30 +2575,31 @@ func (t *TUI) syncDiffViewWidth(view *tview.TextView) {
 
 /** CHECKOUT */
 
-// executeCheckout 通过节点引用取分支并绕过缓存，保证每次按空格都真正执行 git checkout。
+// executeCheckout 通过节点引用取分支或标签并绕过缓存，保证每次按空格都真正执行 git checkout。
 func (t *TUI) executeCheckout(node *tview.TreeNode) {
-	branch, ok := node.GetReference().(core.Branch)
-	if !ok {
-		return // Local / Remote 分组标题
+	switch ref := node.GetReference().(type) {
+	case core.Branch:
+		t.checkout.Reload(checkoutRequest{branch: ref})
+	case core.Tag:
+		t.checkout.Reload(checkoutRequest{tag: ref})
 	}
-	t.checkout.Reload(checkoutRequest{branch: branch})
 }
 
 func (t *TUI) showCheckoutLoading(req checkoutRequest) {
-	t.statusStart("checkout", "checkout "+req.branch.Name)
+	t.statusStart("checkout", "checkout "+req.name())
 }
 
-func (t *TUI) showCheckout(_ checkoutRequest, branch string, err error) {
+func (t *TUI) showCheckout(_ checkoutRequest, ref string, err error) {
 	if err != nil {
 		// git 的错误可能是多行，压成一行避免撑坏单行 statusBar。
 		message := strings.Join(strings.Fields(err.Error()), " ")
 		t.statusDone("checkout", "checkout failed: "+message)
 		return
 	}
-	t.statusDone("checkout", "checkout "+branch)
+	t.statusDone("checkout", "checkout "+ref)
 
-	// refs 刷新后选中刚检出的分支；commit 列表里的 HEAD 标记也随 checkout 变化。
-	t.pendingBranch = branch
+	// refs 刷新后选中刚检出的引用；commit 列表里的 HEAD 标记也随 checkout 变化。
+	t.pendingRef = ref
 	t.reloadRefs()
 	t.reloadCommits()
 }
@@ -2682,7 +2689,7 @@ func (t *TUI) promptForcePush() {
 			if previous != nil {
 				t.app.SetFocus(previous)
 			} else {
-				t.app.SetFocus(t.branchList)
+				t.app.SetFocus(t.refList)
 			}
 			if buttonIndex == 1 {
 				t.executeSync(opPushForce)
@@ -2735,9 +2742,10 @@ func (t *TUI) stopSyncSpinner() {
 	t.renderSyncIndicator()
 }
 
-// renderSyncIndicator 按当前动画帧更新 HEAD 指向的本地分支节点。
+// renderSyncIndicator 按当前动画帧更新 HEAD 所在的本地分支节点标记；
+// HEAD 对应标签或其他 ref 时没有可更新的分支节点。
 func (t *TUI) renderSyncIndicator() {
-	node := t.branchNode(t.HeadRef)
+	node := t.refNode(t.HeadRef)
 	if node == nil {
 		return
 	}

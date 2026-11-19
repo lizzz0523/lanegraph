@@ -22,6 +22,7 @@ type State struct {
 	Squashing bool
 
 	Branches []Branch
+	Tags     []Tag
 
 	Commits       []Commit
 	CurrentCommit Commit
@@ -59,14 +60,15 @@ func NewState(ctx context.Context, repo string) (State, error) {
 	s.Merging = refs.Merging
 	s.Squashing = refs.Squashing
 	s.Branches = refs.Branches
+	s.Tags = refs.Tags
 	s.Commits = commits
 	return s, nil
 }
 
-// History 返回仓库的提交历史。
-// Refs 是仓库的分支与 HEAD 快照。
+// Refs 是仓库的分支、标签与 HEAD 快照。
 type Refs struct {
 	Branches  []Branch
+	Tags      []Tag
 	HeadRef   string
 	HeadHash  string
 	Rebasing  bool
@@ -74,15 +76,20 @@ type Refs struct {
 	Squashing bool
 }
 
-// Refs 返回仓库的分支与 HEAD 快照。
+// Refs 返回仓库的分支、标签与 HEAD 快照。
 func (s *State) Refs(ctx context.Context) (Refs, error) {
 	branches, err := GitBranches(ctx, s.Repo)
+	if err != nil {
+		return Refs{}, err
+	}
+	tags, err := GitTags(ctx, s.Repo)
 	if err != nil {
 		return Refs{}, err
 	}
 	headRef, headHash := GitRepoHead(ctx, s.Repo)
 	return Refs{
 		Branches:  branches,
+		Tags:      tags,
 		HeadRef:   headRef,
 		HeadHash:  headHash,
 		Rebasing:  GitRebaseInProgress(ctx, s.Repo),
@@ -91,11 +98,17 @@ func (s *State) Refs(ctx context.Context) (Refs, error) {
 	}, nil
 }
 
-// Checkout 切换分支并返回实际检出的本地分支名。
-func (s *State) Checkout(ctx context.Context, branch Branch) (string, error) {
-	return GitCheckout(ctx, s.Repo, branch)
+// CheckoutBranch 切换分支并返回实际检出的本地分支名。
+func (s *State) CheckoutBranch(ctx context.Context, branch Branch) (string, error) {
+	return GitCheckoutBranch(ctx, s.Repo, branch)
 }
 
+// Checkout 检出标签，HEAD 进入 detached 状态。
+func (s *State) Checkout(ctx context.Context, tag Tag) (string, error) {
+	return GitCheckout(ctx, s.Repo, tag.Name)
+}
+
+// History 返回仓库的提交历史。
 func (s *State) History(ctx context.Context) ([]Commit, error) {
 	return GitCommits(ctx, s.Repo)
 }

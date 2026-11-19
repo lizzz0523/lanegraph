@@ -21,6 +21,8 @@ func GitRoot(ctx context.Context, repo string) string {
 	return root
 }
 
+// GitRepoHead 返回 HEAD 的显示名和 hash。
+// HEAD 在分支上时用分支名；detached 时优先用指向该提交的 tag，没有 tag 则用短 hash。
 func GitRepoHead(ctx context.Context, repo string) (string, string) {
 	hash, _ := gitOutputTrimmed(ctx, repo, "rev-parse", "HEAD")
 
@@ -28,13 +30,15 @@ func GitRepoHead(ctx context.Context, repo string) (string, string) {
 	if ref, err := gitOutputTrimmed(ctx, repo, "symbolic-ref", "--short", "-q", "HEAD"); err == nil && ref != "" {
 		return ref, hash
 	}
-	// detached HEAD：优先显示指向该提交的 tag，其次本地分支
-	for _, pattern := range []string{"refs/tags", "refs/heads"} {
-		if ref, err := gitOutputTrimmed(ctx, repo, "for-each-ref", "--points-at", "HEAD", "--count=1", "--format=%(refname:short)", pattern); err == nil && ref != "" {
+	// detached HEAD：优先显示指向该提交的 tag。
+	// for-each-ref --points-at 不会解引用 annotated tag，改用 git tag 才能匹配。
+	// 这里不能回退到指向同一提交的本地分支，否则 UI 会把它当成已检出的分支。
+	if tags, err := gitOutputTrimmed(ctx, repo, "tag", "--points-at", "HEAD"); err == nil && tags != "" {
+		if ref, _, _ := strings.Cut(tags, "\n"); ref != "" {
 			return ref, hash
 		}
 	}
-	// 没有 ref 可显示时回退到 7 位短 hash
+	// 没有 tag 可显示时回退到 7 位短 hash
 	if hash != "" {
 		return shortHash(hash), hash
 	}
@@ -104,10 +108,10 @@ func GitBranches(ctx context.Context, repo string) ([]Branch, error) {
 	return branches, nil
 }
 
-// GitCheckout 切换到 branch 对应的本地分支。
+// GitCheckoutBranch 切换到 branch 对应的本地分支。
 // 本地分支直接 checkout；远端分支切换到同名本地分支，
 // 本地分支不存在时从该远端分支创建跟踪分支。返回实际检出的本地分支名。
-func GitCheckout(ctx context.Context, repo string, branch Branch) (string, error) {
+func GitCheckoutBranch(ctx context.Context, repo string, branch Branch) (string, error) {
 	local := branch.LocalName()
 
 	// 远端分支对应的本地分支已存在时直接切换，不重置、不改 upstream。
@@ -118,15 +122,52 @@ func GitCheckout(ctx context.Context, repo string, branch Branch) (string, error
 		return local, nil
 	}
 
-	if _, err := gitOutput(ctx, repo, nil, "checkout", local); err != nil {
-		return "", fmt.Errorf("git checkout error: %w", gitStderr(err))
-	}
-	return local, nil
+	return GitCheckout(ctx, repo, local)
 }
 
-func gitRefExists(ctx context.Context, repo, ref string) bool {
-	_, err := gitOutputTrimmed(ctx, repo, "show-ref", "--verify", "--quiet", ref)
-	return err == nil
+// Tag 是仓库中的一个标签，Hash 是它指向的对象（通常是提交）。
+type Tag struct {
+	Name string
+	Hash string
+}
+
+func GitTags(ctx context.Context, repo string) ([]Tag, error) {
+	// 按 creatordate 倒序，新打的标签排在前面；
+	// annotated tag 用 tag 创建时间，轻量标签回退到提交时间。
+	refs, err := gitOutputTrimmed(ctx, repo, "for-each-ref", "--sort=-creatordate",
+		"--format=%(refname:short)%00%(objectname)%00%(*objectname)",
+		"refs/tags")
+	if err != nil {
+		return nil, fmt.Errorf("git for-each-ref error: %w", err)
+	}
+
+	var tags []Tag
+	for line := range strings.Lines(refs) {
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "\x00")
+		if len(parts) != 3 {
+			continue
+		}
+		// annotated tag 的 objectname 是 tag 对象本身，*objectname 才是它指向的对象；
+		// 轻量标签没有 tag 对象，*objectname 为空。
+		hash := parts[1]
+		if parts[2] != "" {
+			hash = parts[2]
+		}
+		tags = append(tags, Tag{Name: parts[0], Hash: hash})
+	}
+	return tags, nil
+}
+
+// GitCheckout 检出 ref；标签、提交或远端分支会让 HEAD 进入 detached 状态。返回 ref 名。
+func GitCheckout(ctx context.Context, repo, ref string) (string, error) {
+	if _, err := gitOutput(ctx, repo, nil, "checkout", ref); err != nil {
+		return "", fmt.Errorf("git checkout error: %w", gitStderr(err))
+	}
+	return ref, nil
 }
 
 type Commit struct {
@@ -165,7 +206,7 @@ func (c Commit) diffBase(compare *Commit) string {
 }
 
 func GitCommits(ctx context.Context, repo string) ([]Commit, error) {
-	// 起点为 HEAD + 本地分支 + 远端分支 + 标签（不含 stash），未合并的分支也会被画出来
+	// 起点为 HEAD + 本地分支 + 远端分支 + 标签，未合并的分支也会被画出来
 	// topo-order 让同一分支的提交连续输出，减少 lane 交错；它和 date-order 一样保证父提交在子提交之后
 	// -z 用 NUL 分隔记录，body 里的换行才不会把一条记录拆成多行
 	log, err := gitOutputTrimmed(ctx, repo, "log", "-z", "--topo-order", "--branches",
@@ -819,6 +860,11 @@ func removeWorktree(repo, path string) error {
 		return fmt.Errorf("remove file error: %w", err)
 	}
 	return nil
+}
+
+func gitRefExists(ctx context.Context, repo, ref string) bool {
+	_, err := gitOutputTrimmed(ctx, repo, "show-ref", "--verify", "--quiet", ref)
+	return err == nil
 }
 
 // gitStderr 取出 git 写进 stderr 的原文（如未提交改动冲突），
