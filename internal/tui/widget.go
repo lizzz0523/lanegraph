@@ -2,6 +2,7 @@ package tui
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -29,22 +30,163 @@ func setFolderExpanded(node *tview.TreeNode, expanded bool) {
 	}
 }
 
-// modalForm 让 Form 像 tview.Modal 一样居中显示，而不是铺满整页。
+// modalForm 是居中的输入弹窗，布局和交互方式类似 tview.Modal。
+// SetText 需要先于 SetLabel 调用，保证提示文字在输入框上方。
 type modalForm struct {
 	*tview.Form
 
-	width      int
-	formHeight int
+	width   int
+	text    *formText
+	input   *tview.InputField
+	buttons []string
+	done    func(buttonIndex int, buttonLabel string)
+}
+
+func newModalForm(width int) *modalForm {
+	f := &modalForm{width: width}
+	f.Form = tview.NewForm().
+		SetButtonsAlign(tview.AlignCenter)
+	f.SetLabelColor(colorMuted.cell).
+		SetFieldTextColor(tview.Styles.PrimaryTextColor).
+		SetFieldBackgroundColor(colorPopup.cell).
+		SetButtonBackgroundColor(colorPopup.cell).
+		SetButtonActivatedStyle(tcell.StyleDefault.
+			Background(colorText.cell).
+			Foreground(colorOnAccent.cell)).
+		SetBackgroundColor(colorPopup.cell).
+		SetBorder(true).
+		SetBorderPadding(1, 1, 2, 2).
+		SetBorderStyle(tcell.StyleDefault.
+			Foreground(tview.Styles.BorderColor).
+			Background(colorPopup.cell))
+
+	// 焦点在按钮上时 Esc 也要能关闭弹窗。
+	f.SetCancelFunc(func() {
+		f.finish(-1, "")
+	})
+	return f
 }
 
 func (f *modalForm) Draw(screen tcell.Screen) {
 	screenWidth, screenHeight := screen.Size()
 	width := min(f.width, screenWidth)
-	height := f.formHeight
+	height := f.height()
 	x := (screenWidth - width) / 2
 	y := (screenHeight - height) / 2
 	f.SetRect(x, y, width, height)
 	f.Form.Draw(screen)
+}
+
+// SetText 设置输入框上方的提示文字；text 中的 tview 标签会被转义。
+func (f *modalForm) SetText(text string) *modalForm {
+	// 可用宽度 = 弹窗宽度 - 左右边框各 1 列 - 左右 border padding 各 2 列。
+	lines := tview.WordWrap(tview.Escape(text), f.width-6)
+	if f.text == nil {
+		f.text = &formText{TextView: tview.NewTextView().
+			SetDynamicColors(true).
+			SetScrollable(false).
+			SetTextAlign(tview.AlignCenter)}
+		f.AddFormItem(f.text)
+	}
+	f.text.SetText(strings.Join(lines, "\n"))
+	f.text.SetSize(len(lines), 0)
+	return f
+}
+
+func (f *modalForm) SetLabel(label string) *modalForm {
+	f.input = tview.NewInputField().
+		SetLabel(label).
+		SetFieldWidth(30)
+	f.input.SetBackgroundColor(colorPopup.cell)
+	f.input.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEnter:
+			f.accept()
+			return nil
+		case tcell.KeyEscape:
+			f.finish(-1, "")
+			return nil
+		}
+		return event
+	})
+	f.AddFormItem(f.input)
+	return f
+}
+
+func (f *modalForm) SetButtons(labels []string) *modalForm {
+	f.ClearButtons()
+	f.buttons = labels
+	for index, label := range labels {
+		f.AddButton(label, func() {
+			f.finish(index, label)
+		})
+		// 和 tview.Modal 一样，方向键在按钮之间移动。
+		button := f.GetButton(f.GetButtonCount() - 1)
+		button.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+			switch event.Key() {
+			case tcell.KeyDown, tcell.KeyRight:
+				return tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone)
+			case tcell.KeyUp, tcell.KeyLeft:
+				return tcell.NewEventKey(tcell.KeyBacktab, 0, tcell.ModNone)
+			}
+			return event
+		})
+	}
+	return f
+}
+
+func (f *modalForm) SetDoneFunc(handler func(buttonIndex int, buttonLabel string)) *modalForm {
+	f.done = handler
+	return f
+}
+
+// GetInputText 返回输入框当前内容。
+func (f *modalForm) GetInputText() string {
+	if f.input == nil {
+		return ""
+	}
+	return f.input.GetText()
+}
+
+// accept 触发最后一个按钮，作为输入框回车时的默认操作。
+func (f *modalForm) accept() {
+	if len(f.buttons) > 0 {
+		f.finish(len(f.buttons)-1, f.buttons[len(f.buttons)-1])
+	}
+}
+
+func (f *modalForm) finish(buttonIndex int, buttonLabel string) {
+	if f.done != nil {
+		f.done(buttonIndex, buttonLabel)
+	}
+}
+
+// height 按 Form 的垂直布局计算弹窗高度：边框和 padding、各表单项及间距、按钮行。
+func (f *modalForm) height() int {
+	height := 4
+	items := 0
+	if f.text != nil {
+		height += f.text.GetFieldHeight()
+		items++
+	}
+	if f.input != nil {
+		height++
+		items++
+	}
+	height += items
+	if len(f.buttons) > 0 {
+		height++
+	}
+	return height
+}
+
+// formText 是表单里的多行只读文本，忽略表单的 label 列，按整行宽度显示。
+type formText struct {
+	*tview.TextView
+}
+
+func (m *formText) SetFormAttributes(_ int, labelColor, bgColor, fieldTextColor, fieldBgColor tcell.Color) tview.FormItem {
+	return m.TextView.SetFormAttributes(0, labelColor, bgColor, fieldTextColor, fieldBgColor)
 }
 
 // listView 把视口偏移和选中项分开，使滚轮只滚动内容。
@@ -86,7 +228,7 @@ func (v *listView) Draw(screen tcell.Screen) {
 	if width <= 0 || height <= 0 {
 		return
 	}
-	// 布局前调用 setCurrentItem 时无法滚动，等首次绘制有了尺寸再补上。
+	// 布局前调用 SetCurrentItem 时无法滚动，等首次绘制有了尺寸再补上。
 	if v.pendingVisible {
 		v.ensureVisible()
 	} else {
@@ -134,9 +276,9 @@ func (v *listView) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 		case tcell.KeyPgDn:
 			v.move(v.pageItems())
 		case tcell.KeyHome:
-			v.setCurrentItem(0)
+			v.SetCurrentItem(0)
 		case tcell.KeyEnd:
-			v.setCurrentItem(len(v.items) - 1)
+			v.SetCurrentItem(len(v.items) - 1)
 		case tcell.KeyEnter:
 			if v.activated != nil {
 				v.activated()
@@ -149,9 +291,9 @@ func (v *listView) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 			case 'k':
 				v.move(-1)
 			case 'g':
-				v.setCurrentItem(0)
+				v.SetCurrentItem(0)
 			case 'G':
-				v.setCurrentItem(len(v.items) - 1)
+				v.SetCurrentItem(len(v.items) - 1)
 			}
 		}
 	})
@@ -178,7 +320,7 @@ func (v *listView) MouseHandler() func(action tview.MouseAction, event *tcell.Ev
 							v.highlight(index)
 						}
 					} else {
-						v.setCurrentItem(index)
+						v.SetCurrentItem(index)
 					}
 				}
 			}
@@ -198,8 +340,8 @@ func (v *listView) MouseHandler() func(action tview.MouseAction, event *tcell.Ev
 	})
 }
 
-// setItems 替换全部 item，并重新计算每个 item 的起始行号。
-func (v *listView) setItems(items [][]string) {
+// SetItems 替换全部 item，并重新计算每个 item 的起始行号。
+func (v *listView) SetItems(items [][]string) {
 	v.items = items
 	v.starts = make([]int, len(items))
 	v.total = 0
@@ -218,26 +360,26 @@ func (v *listView) setItems(items [][]string) {
 	v.clampOffset()
 }
 
-// setLines 是单行 item 的快捷方式，供 commit 列表使用。
-func (v *listView) setLines(lines []string) {
+// SetLines 是单行 item 的快捷方式，供 commit 列表使用。
+func (v *listView) SetLines(lines []string) {
 	items := make([][]string, len(lines))
 	for i, line := range lines {
 		items[i] = []string{line}
 	}
-	v.setItems(items)
+	v.SetItems(items)
 }
 
-// setGap 设置相邻 item 之间的空行数；已有 item 会按新间距重新布局。
-func (v *listView) setGap(gap int) {
+// SetGap 设置相邻 item 之间的空行数；已有 item 会按新间距重新布局。
+func (v *listView) SetGap(gap int) {
 	if v.gap == gap {
 		return
 	}
 	v.gap = gap
-	v.setItems(v.items)
+	v.SetItems(v.items)
 }
 
-// setMarkedItem 标记对比基准所在 item；index 越界时清除标记。
-func (v *listView) setMarkedItem(index int) {
+// SetMarkedItem 标记对比基准所在 item；index 越界时清除标记。
+func (v *listView) SetMarkedItem(index int) {
 	if index < 0 || index >= len(v.items) {
 		v.marked = -1
 		return
@@ -245,7 +387,7 @@ func (v *listView) setMarkedItem(index int) {
 	v.marked = index
 }
 
-func (v *listView) setCurrentItem(index int) {
+func (v *listView) SetCurrentItem(index int) {
 	if len(v.items) == 0 {
 		return
 	}
@@ -256,19 +398,19 @@ func (v *listView) setCurrentItem(index int) {
 	}
 }
 
-func (v *listView) setSelectedFunc(handler func()) {
+func (v *listView) SetSelectedFunc(handler func()) {
 	v.selected = handler
 }
 
-func (v *listView) setHighlightFunc(handler func(index int)) {
+func (v *listView) SetHighlightFunc(handler func(index int)) {
 	v.highlight = handler
 }
 
-func (v *listView) setActivatedFunc(handler func()) {
+func (v *listView) SetActivatedFunc(handler func()) {
 	v.activated = handler
 }
 
-func (v *listView) currentItem() int {
+func (v *listView) CurrentItem() int {
 	return v.current
 }
 
@@ -341,5 +483,5 @@ func (v *listView) move(delta int) {
 	} else if delta == -1 && index < 0 {
 		index = len(v.items) - 1
 	}
-	v.setCurrentItem(index)
+	v.SetCurrentItem(index)
 }

@@ -392,12 +392,12 @@ func (t *TUI) setupUI() tview.Primitive {
 		return event
 	})
 
-	commitList.setLines(renderGraph(t.Commits, core.ComputeGraph(t.Commits)))
+	commitList.SetLines(renderGraph(t.Commits, core.ComputeGraph(t.Commits)))
 
-	commitList.setSelectedFunc(func() {
+	commitList.SetSelectedFunc(func() {
 		t.refreshCommit(false)
 	})
-	commitList.setHighlightFunc(func(index int) {
+	commitList.SetHighlightFunc(func(index int) {
 		t.compareCommit(index)
 	})
 
@@ -718,7 +718,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		}
 		// commits 刷新后行号会变化，每次跳转都按当前列表查询。
 		if row := t.commitRow(refHash(node)); row >= 0 {
-			t.commitList.setCurrentItem(row)
+			t.commitList.SetCurrentItem(row)
 		}
 	})
 
@@ -737,7 +737,7 @@ func (t *TUI) setupUI() tview.Primitive {
 			return action, event
 		}
 		if row := t.commitRow(t.HeadHash); row >= 0 {
-			commitList.setCurrentItem(row)
+			commitList.SetCurrentItem(row)
 		}
 		if node := t.refNode(t.HeadRef); node != nil {
 			refList.SetCurrentNode(node)
@@ -1356,7 +1356,7 @@ func (t *TUI) toggleRefFolder(node *tview.TreeNode) {
 // refreshCommit 刷新选中 commit 的信息，并异步请求文件列表。
 // force 为 true 时无论选中项是否变化都重绘 commitInfo。
 func (t *TUI) refreshCommit(force bool) {
-	row := t.commitList.currentItem()
+	row := t.commitList.CurrentItem()
 	if row >= len(t.Commits) {
 		return
 	}
@@ -1400,7 +1400,7 @@ func (t *TUI) resetCommit() {
 	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Loading() {
 		return
 	}
-	row := t.commitList.currentItem()
+	row := t.commitList.CurrentItem()
 	if row < 0 || row >= len(t.Commits) {
 		return
 	}
@@ -1440,7 +1440,7 @@ func (t *TUI) rebaseCommit() {
 	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Loading() {
 		return
 	}
-	row := t.commitList.currentItem()
+	row := t.commitList.CurrentItem()
 	if row < 0 || row >= len(t.Commits) {
 		return
 	}
@@ -1510,7 +1510,7 @@ func (t *TUI) mergeCommit() {
 	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Loading() {
 		return
 	}
-	row := t.commitList.currentItem()
+	row := t.commitList.CurrentItem()
 	if row < 0 || row >= len(t.Commits) {
 		return
 	}
@@ -1729,7 +1729,7 @@ func (t *TUI) openHistory(node *tview.TreeNode) {
 
 	historyList := newListView(t.selectedStyle, tcell.StyleDefault)
 	// item 之间留一个空行，选中背景只覆盖 item 自身。
-	historyList.setGap(1)
+	historyList.SetGap(1)
 
 	historyList.SetTitle(" history ").
 		SetTitleAlign(tview.AlignLeft).
@@ -1743,10 +1743,10 @@ func (t *TUI) openHistory(node *tview.TreeNode) {
 		Foreground(t.borderColor).
 		Background(colorPopup.cell))
 
-	historyList.setSelectedFunc(func() {
+	historyList.SetSelectedFunc(func() {
 		t.selectHistory()
 	})
-	historyList.setActivatedFunc(func() {
+	historyList.SetActivatedFunc(func() {
 		t.locateHistory()
 	})
 
@@ -1856,7 +1856,7 @@ func (t *TUI) selectHistory() {
 	if !t.historyVisible {
 		return
 	}
-	row := t.historyList.currentItem()
+	row := t.historyList.CurrentItem()
 	if row < 0 || row >= len(t.HistoryCommits) {
 		return
 	}
@@ -1868,7 +1868,7 @@ func (t *TUI) locateHistory() {
 	if !t.historyVisible {
 		return
 	}
-	row := t.historyList.currentItem()
+	row := t.historyList.CurrentItem()
 	if row < 0 || row >= len(t.HistoryCommits) {
 		return
 	}
@@ -1880,7 +1880,7 @@ func (t *TUI) locateHistory() {
 		t.switchTab(tabCommit)
 	} else if row := t.commitRow(hash); row >= 0 {
 		t.pendingCommit = ""
-		t.commitList.setCurrentItem(row)
+		t.commitList.SetCurrentItem(row)
 	} else {
 		t.reloadCommits()
 	}
@@ -2028,7 +2028,7 @@ func (t *TUI) refreshActiveDiff() {
 
 // refreshHistoryDiff 按当前选中的历史 commit 重新请求 diff。
 func (t *TUI) refreshHistoryDiff() {
-	index := t.historyList.currentItem()
+	index := t.historyList.CurrentItem()
 	if index >= 0 && index < len(t.HistoryCommits) {
 		t.requestHistoryDiff(t.HistoryCommits[index])
 	}
@@ -2053,7 +2053,7 @@ func (t *TUI) syncBranch(op syncOp) {
 
 // createRefFromCommit 从选中的 commit 创建引用。
 func (t *TUI) createRefFromCommit(op createOp) {
-	row := t.commitList.currentItem()
+	row := t.commitList.CurrentItem()
 	if row < 0 || row >= len(t.Commits) {
 		return
 	}
@@ -2071,18 +2071,36 @@ func (t *TUI) createRef(op createOp, commit *core.Commit) {
 	previous := t.app.GetFocus()
 
 	page := "new-branch"
-	label := "Branch name: "
+	label := "Branch name "
+	action := "Create and checkout a new branch"
 	if op == opCreateTag {
 		page = "new-tag"
-		label = "Tag name: "
+		label = "Tag name "
+		action = "Create a new tag"
 	}
 
-	input := tview.NewInputField().
-		SetLabel(label).
-		SetFieldWidth(30)
-	input.SetBackgroundColor(colorPopup.cell)
+	message := action + " from HEAD"
+	if commit != nil {
+		message = action + " from " + commit.ShortHash()
+		if commit.Subject != "" {
+			message += "\n\n" + commit.Subject
+		}
+	}
 
-	close := func() {
+	prompt := newModalForm(52).
+		SetText(message).
+		SetLabel(label).
+		SetButtons([]string{"Cancel", "Create"})
+
+	prompt.SetDoneFunc(func(buttonIndex int, _ string) {
+		name := ""
+		if buttonIndex == 1 {
+			name = strings.TrimSpace(prompt.GetInputText())
+			if name == "" {
+				return
+			}
+		}
+
 		t.root.RemovePage(page)
 		t.promptVisible = false
 		if previous != nil {
@@ -2090,61 +2108,11 @@ func (t *TUI) createRef(op createOp, commit *core.Commit) {
 		} else {
 			t.app.SetFocus(t.commitList)
 		}
-	}
 
-	create := func() {
-		name := strings.TrimSpace(input.GetText())
-		if name == "" {
-			return
+		if buttonIndex == 1 {
+			t.executeCreate(op, name, commit)
 		}
-		close()
-		t.executeCreate(op, name, commit)
-	}
-
-	input.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		switch event.Key() {
-		case tcell.KeyEnter:
-			create()
-			return nil
-		case tcell.KeyEscape:
-			close()
-			return nil
-		}
-		return event
 	})
-
-	form := tview.NewForm().
-		AddFormItem(input).
-		AddButton("Cancel", close).
-		AddButton("Create", create).
-		SetButtonsAlign(tview.AlignCenter)
-
-	// 焦点在按钮上时 Esc 也要能关闭弹窗。
-	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
-			close()
-			return nil
-		}
-		return event
-	})
-
-	form.SetLabelColor(tview.Styles.PrimaryTextColor).
-		SetFieldTextColor(tview.Styles.PrimaryTextColor).
-		SetFieldBackgroundColor(colorPopup.cell).
-		SetButtonBackgroundColor(colorPopup.cell).
-		SetButtonActivatedStyle(tcell.StyleDefault.
-			Background(colorText.cell).
-			Foreground(colorOnAccent.cell)).
-		SetBackgroundColor(colorPopup.cell)
-
-	form.SetBorder(true).
-		SetBorderPadding(1, 1, 2, 2)
-
-	form.SetBorderStyle(tcell.StyleDefault.
-		Foreground(tview.Styles.BorderColor).
-		Background(colorPopup.cell))
-
-	prompt := &modalForm{Form: form, width: 50, formHeight: 7}
 
 	t.openPrompt(page, prompt)
 }
@@ -2227,7 +2195,7 @@ func (t *TUI) showCommits(_ commitsRequest, commits []core.Commit, err error) {
 	t.statusDone("commits", "")
 
 	// 按 hash 恢复选中项：topo-order 下刷新可能重排已有提交，不能依赖行号不变。
-	row := t.commitList.currentItem()
+	row := t.commitList.CurrentItem()
 	previous := ""
 	if row < len(t.Commits) {
 		previous = t.Commits[row].Hash
@@ -2240,7 +2208,7 @@ func (t *TUI) showCommits(_ commitsRequest, commits []core.Commit, err error) {
 	}
 
 	t.Commits = commits
-	t.commitList.setLines(renderGraph(commits, core.ComputeGraph(commits)))
+	t.commitList.SetLines(renderGraph(commits, core.ComputeGraph(commits)))
 	// 刷新后 compare 可能已不存在（rebase/切分支），按 hash 重新确认。
 	t.syncCompare()
 
@@ -2260,8 +2228,8 @@ func (t *TUI) showCommits(_ commitsRequest, commits []core.Commit, err error) {
 	} else if found := t.commitRow(previous); found >= 0 {
 		row = found
 	}
-	// setCurrentItem 会像用户选中一样触发 refreshCommit，这里不再额外请求。
-	t.commitList.setCurrentItem(row)
+	// SetCurrentItem 会像用户选中一样触发 refreshCommit，这里不再额外请求。
+	t.commitList.SetCurrentItem(row)
 }
 
 // applyCompare 设置对比基准并重新加载当前 commit 的文件列表。
@@ -2293,7 +2261,7 @@ func (t *TUI) setCompare(commit *core.Commit) {
 		row = t.commitRow(commit.Hash)
 	}
 	if t.commitList != nil {
-		t.commitList.setMarkedItem(row)
+		t.commitList.SetMarkedItem(row)
 	}
 }
 
@@ -2553,13 +2521,13 @@ func (t *TUI) showHistory(_ historyRequest, commits []core.Commit, err error) {
 	switch {
 	case err != nil:
 		t.historyList.SetTitle(" history ")
-		t.historyList.setItems(nil)
+		t.historyList.SetItems(nil)
 		t.fileHistoryDiff.Cancel()
 		t.historyDiff.SetText(colorDanger.markup("failed to load history:") + " " + tview.Escape(err.Error()))
 		return
 	case len(commits) == 0:
 		t.historyList.SetTitle(" history (0) ")
-		t.historyList.setItems(nil)
+		t.historyList.SetItems(nil)
 		t.fileHistoryDiff.Cancel()
 		t.historyDiff.SetText(colorMuted.markup("(no history)"))
 		return
@@ -2574,8 +2542,8 @@ func (t *TUI) showHistory(_ historyRequest, commits []core.Commit, err error) {
 		subject := " " + colorText.markup(tview.Escape(commit.Subject), true)
 		items = append(items, []string{header, subject})
 	}
-	t.historyList.setItems(items)
-	t.historyList.setCurrentItem(0)
+	t.historyList.SetItems(items)
+	t.historyList.SetCurrentItem(0)
 }
 
 /** HISTORY DIFF */
