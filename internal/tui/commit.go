@@ -74,17 +74,20 @@ func commitDate(date, now time.Time) string {
 
 type cell struct {
 	up, down, left, right bool
+	joined                bool
 	vColor, hColor        themeColor
 }
 
 // glyphs 返回 cell 的线条字符和其右侧的连接字符，规则参考 lazygit：横线穿过竖线时竖线优先；
-// 边汇入一条已存在的 lane 时用 ┤/├ 表示汇合点
+// 边汇入一条已存在的 lane 时用 ┤/├ 表示汇合点，汇合点同时被横线穿过时用 ┼
 func (c cell) glyphs() (line, conn string) {
 	conn = " "
 	if c.right {
 		conn = "─"
 	}
 	switch {
+	case c.up && c.down && c.left && c.right && c.joined:
+		return "┼", conn
 	case c.up && c.down && c.left && !c.right:
 		return "┤", conn
 	case c.up && c.down && c.right && !c.left:
@@ -141,6 +144,9 @@ func renderGraph(commits []core.Commit, graph core.Graph) []string {
 			}
 			if end == node {
 				return
+			}
+			if inRange(end) {
+				cells[end].joined = true
 			}
 			lo, hi := min(end, node), max(end, node)
 			for k := lo; k <= hi; k++ {
