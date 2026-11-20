@@ -95,6 +95,7 @@ type TUI struct {
 	fileHistoryDiff *loader.Loader[string, historyDiffRequest]
 
 	checkout *loader.Loader[string, checkoutRequest]
+	createOp *loader.Loader[string, createRequest]
 	syncOp   *loader.Loader[string, syncOpRequest]
 	commitOp *loader.Loader[string, commitOpRequest]
 	changeOp *loader.Loader[string, changeOpRequest]
@@ -144,6 +145,19 @@ func (r checkoutRequest) name() string {
 		return r.tag.Name
 	}
 	return r.branch.Name
+}
+
+// createOp 是新建引用操作类型。
+type createOp uint8
+
+const (
+	opCreateBranch createOp = iota
+)
+
+type createRequest struct {
+	op     createOp
+	name   string
+	commit *core.Commit // nil 表示从 HEAD 创建
 }
 
 // syncOp 是当前分支的远程同步操作类型。
@@ -249,7 +263,8 @@ func (t *TUI) Run() error {
 		case event.Key() == tcell.KeyBacktab && !t.promptVisible && !t.commitInfoVisible:
 			app.SetFocus(t.nextFocus(-1))
 			return nil
-		// p / P / f 全局触发当前分支的 pull / push / fetch；输入框输入时不拦截。
+		// p / P / f 全局触发当前分支的 pull / push / fetch；
+		// B 全局从当前 HEAD 创建并检出分支；输入框输入时不拦截。
 		case event.Key() == tcell.KeyRune && !typing && !t.promptVisible:
 			switch event.Rune() {
 			case 'p':
@@ -260,6 +275,9 @@ func (t *TUI) Run() error {
 				return nil
 			case 'f':
 				t.syncBranch(opFetch)
+				return nil
+			case 'B':
+				t.createBranch(nil)
 				return nil
 			}
 		}
@@ -346,7 +364,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetBlurFunc(func() { t.setFocusBorder(commitList.Box, false) })
 
 	// r 把当前分支 rebase 到选中的 commit；R 把当前分支 reset 到选中的 commit；
-	// m 把选中的 commit merge 到当前分支。
+	// m 把选中的 commit merge 到当前分支；b 从选中的 commit 创建并检出分支。
 	commitList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyRune {
 			switch event.Rune() {
@@ -358,6 +376,9 @@ func (t *TUI) setupUI() tview.Primitive {
 				return nil
 			case 'm':
 				t.mergeCommit()
+				return nil
+			case 'b':
+				t.createBranchFromCommit()
 				return nil
 			}
 		}
@@ -989,6 +1010,23 @@ func (t *TUI) setupLoaders() {
 		OnResult:  t.showCheckout,
 	})
 
+	t.createOp = loader.New(loader.Config[string, createRequest]{
+		Key: func(req createRequest) string {
+			return fmt.Sprintf("%d\x00%s", req.op, req.name)
+		},
+		Load: func(ctx context.Context, req createRequest) (string, error) {
+			switch req.op {
+			case opCreateBranch:
+				return t.CreateBranch(ctx, req.name, req.commit)
+			default:
+				return "", fmt.Errorf("unknown create operation")
+			}
+		},
+		Post:      post,
+		OnLoading: t.showCreateLoading,
+		OnResult:  t.showCreate,
+	})
+
 	t.syncOp = loader.New(loader.Config[string, syncOpRequest]{
 		Key: func(req syncOpRequest) string { return fmt.Sprintf("%d", req.op) },
 		Load: func(ctx context.Context, req syncOpRequest) (string, error) {
@@ -1075,6 +1113,7 @@ func (t *TUI) loaders() []loader.Lifecycle {
 		t.fileHistory,
 		t.fileHistoryDiff,
 		t.checkout,
+		t.createOp,
 		t.syncOp,
 		t.commitOp,
 		t.changeOp,
@@ -1371,11 +1410,11 @@ func (t *TUI) resetCommit() {
 			t.app.SetFocus(t.commitList)
 			switch buttonIndex {
 			case 1:
-				t.executeCommitOp(commitOpRequest{op: opReset, commit: commit, resetMode: core.ResetSoft})
+				t.executeReset(commit, core.ResetSoft)
 			case 2:
-				t.executeCommitOp(commitOpRequest{op: opReset, commit: commit, resetMode: core.ResetMixed})
+				t.executeReset(commit, core.ResetMixed)
 			case 3:
-				t.executeCommitOp(commitOpRequest{op: opReset, commit: commit, resetMode: core.ResetHard})
+				t.executeReset(commit, core.ResetHard)
 			}
 		})
 
@@ -1408,7 +1447,7 @@ func (t *TUI) rebaseCommit() {
 			t.promptVisible = false
 			t.app.SetFocus(t.commitList)
 			if buttonIndex == 1 {
-				t.executeCommitOp(commitOpRequest{op: opRebase, commit: commit})
+				t.executeRebase(commit)
 			}
 		})
 
@@ -1420,7 +1459,7 @@ func (t *TUI) continueRebase() {
 	if t.commitOp == nil || t.commitOp.Loading() {
 		return
 	}
-	t.executeCommitOp(commitOpRequest{op: opRebaseContinue})
+	t.executeCommitOp(opRebaseContinue)
 }
 
 // abortRebase 先弹窗确认，再取消未完成的 rebase。
@@ -1445,7 +1484,7 @@ func (t *TUI) abortRebase() {
 				t.app.SetFocus(t.commitList)
 			}
 			if buttonIndex == 1 {
-				t.executeCommitOp(commitOpRequest{op: opRebaseAbort})
+				t.executeCommitOp(opRebaseAbort)
 			}
 		})
 
@@ -1482,11 +1521,11 @@ func (t *TUI) mergeCommit() {
 			t.app.SetFocus(t.commitList)
 			switch buttonIndex {
 			case 1:
-				t.executeCommitOp(commitOpRequest{op: opMerge, commit: commit, mergeMode: core.MergeFF})
+				t.executeMerge(commit, core.MergeFF)
 			case 2:
-				t.executeCommitOp(commitOpRequest{op: opMerge, commit: commit, mergeMode: core.MergeNoFF})
+				t.executeMerge(commit, core.MergeNoFF)
 			case 3:
-				t.executeCommitOp(commitOpRequest{op: opMerge, commit: commit, mergeMode: core.MergeSquash})
+				t.executeMerge(commit, core.MergeSquash)
 			}
 		})
 
@@ -1498,7 +1537,7 @@ func (t *TUI) continueMerge() {
 	if t.commitOp == nil || t.commitOp.Loading() {
 		return
 	}
-	t.executeCommitOp(commitOpRequest{op: opMergeContinue})
+	t.executeCommitOp(opMergeContinue)
 }
 
 // abortMerge 先弹窗确认，再取消未完成的 merge。
@@ -1523,7 +1562,7 @@ func (t *TUI) abortMerge() {
 				t.app.SetFocus(t.commitList)
 			}
 			if buttonIndex == 1 {
-				t.executeCommitOp(commitOpRequest{op: opMergeAbort})
+				t.executeCommitOp(opMergeAbort)
 			}
 		})
 
@@ -1535,7 +1574,7 @@ func (t *TUI) continueSquash() {
 	if t.commitOp == nil || t.commitOp.Loading() {
 		return
 	}
-	t.executeCommitOp(commitOpRequest{op: opSquashContinue})
+	t.executeCommitOp(opSquashContinue)
 }
 
 // abortSquash 先弹窗确认，再取消待完成的 squash。
@@ -1560,7 +1599,7 @@ func (t *TUI) abortSquash() {
 				t.app.SetFocus(t.commitList)
 			}
 			if buttonIndex == 1 {
-				t.executeCommitOp(commitOpRequest{op: opSquashAbort})
+				t.executeCommitOp(opSquashAbort)
 			}
 		})
 
@@ -1578,12 +1617,7 @@ func (t *TUI) commitChanges() {
 		return
 	}
 	description := strings.TrimSpace(t.commitDescription.GetText())
-	t.executeCommitOp(commitOpRequest{
-		op:          opCommit,
-		subject:     subject,
-		description: description,
-		amend:       t.amendCheck.IsChecked(),
-	})
+	t.executeCommit(subject, description, t.amendCheck.IsChecked())
 }
 
 // openCommitInfo 弹窗显示当前 commit 的完整信息；j/k、PgUp/PgDn 可滚动。
@@ -2001,6 +2035,109 @@ func (t *TUI) syncBranch(op syncOp) {
 		return
 	}
 	t.executeSync(op)
+}
+
+// createBranchFromCommit 从选中的 commit 创建并检出分支。
+func (t *TUI) createBranchFromCommit() {
+	row := t.commitList.currentItem()
+	if row < 0 || row >= len(t.Commits) {
+		return
+	}
+	commit := t.Commits[row]
+	t.createBranch(&commit)
+}
+
+// createBranch 弹出输入框，创建并检出以输入名字命名的新分支。
+// commit 为 nil 时从 HEAD 创建，否则从该 commit 创建。
+func (t *TUI) createBranch(commit *core.Commit) {
+	if t.createOp == nil || t.root == nil || t.promptVisible || t.createOp.Loading() {
+		return
+	}
+
+	previous := t.app.GetFocus()
+
+	const page = "new-branch"
+
+	input := tview.NewInputField().
+		SetLabel("Branch name: ").
+		SetFieldWidth(30)
+
+	close := func() {
+		t.root.RemovePage(page)
+		t.promptVisible = false
+		if previous != nil {
+			t.app.SetFocus(previous)
+		} else {
+			t.app.SetFocus(t.commitList)
+		}
+	}
+
+	create := func() {
+		name := strings.TrimSpace(input.GetText())
+		if name == "" {
+			return
+		}
+		close()
+		t.executeCreate(opCreateBranch, name, commit)
+	}
+
+	input.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEnter:
+			create()
+			return nil
+		case tcell.KeyEscape:
+			close()
+			return nil
+		}
+		return event
+	})
+
+	form := tview.NewForm().
+		AddFormItem(input).
+		AddButton("Cancel", close).
+		AddButton("Create", create)
+
+	// 焦点在按钮上时 Esc 也要能关闭弹窗。
+	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			close()
+			return nil
+		}
+		return event
+	})
+
+	form.SetLabelColor(tview.Styles.PrimaryTextColor).
+		SetFieldTextColor(tview.Styles.PrimaryTextColor).
+		SetFieldBackgroundColor(colorPopup.cell).
+		SetButtonBackgroundColor(colorPopup.cell).
+		SetButtonActivatedStyle(tcell.StyleDefault.
+			Background(colorText.cell).
+			Foreground(colorOnAccent.cell)).
+		SetBackgroundColor(colorPopup.cell)
+
+	form.SetBorder(true).
+		SetTitle(" new branch ").
+		SetTitleAlign(tview.AlignLeft).
+		SetBorderPadding(1, 1, 2, 2)
+
+	form.SetBorderStyle(tcell.StyleDefault.
+		Foreground(tview.Styles.BorderColor).
+		Background(colorPopup.cell))
+
+	prompt := tview.NewFlex().
+		AddItem(nil, 0, 1, false).
+		AddItem(tview.NewFlex().
+			SetDirection(tview.FlexRow).
+			AddItem(nil, 0, 1, false).
+			AddItem(form, 7, 0, true).
+			AddItem(nil, 0, 1, false), 50, 0, true).
+		AddItem(nil, 0, 1, false)
+	prompt.SetBackgroundColor(colorPopup.cell)
+
+	t.promptVisible = true
+	t.root.AddPage(page, prompt, true, true)
+	t.app.SetFocus(form)
 }
 
 /** REFS */
@@ -2606,6 +2743,36 @@ func (t *TUI) showCheckout(_ checkoutRequest, ref string, err error) {
 	t.reloadCommits()
 }
 
+/** CREATE */
+
+// executeCreate 通过 Reload 绕过缓存，保证每次创建都真正执行 git 命令。
+func (t *TUI) executeCreate(op createOp, name string, commit *core.Commit) {
+	t.createOp.Reload(createRequest{op: op, name: name, commit: commit})
+}
+
+func (t *TUI) showCreateLoading(req createRequest) {
+	t.statusStart("create", "create branch "+req.name)
+}
+
+func (t *TUI) showCreate(req createRequest, ref string, err error) {
+	if err != nil {
+		// git 的错误可能是多行，压成一行避免撑坏单行 statusBar。
+		message := strings.Join(strings.Fields(err.Error()), " ")
+		t.statusDone("create", "create branch failed: "+message)
+		return
+	}
+
+	switch req.op {
+	case opCreateBranch:
+		t.statusDone("create", "created branch "+ref)
+
+		// refs 刷新后选中刚创建的分支；commit 列表里的 HEAD 标记也随 checkout 变化。
+		t.pendingRef = ref
+		t.reloadRefs()
+		t.reloadCommits()
+	}
+}
+
 /** SYNC OP */
 
 // executeSync 通过 Reload 绕过缓存，保证每次按键都真正执行 git 命令。
@@ -2760,9 +2927,34 @@ func (t *TUI) renderSyncIndicator() {
 
 /** COMMIT OP */
 
-// executeCommitOp 通过 Reload 绕过缓存，保证每次选择都真正执行 git 操作。
-func (t *TUI) executeCommitOp(req commitOpRequest) {
-	t.commitOp.Reload(req)
+// executeReset 通过 Reload 绕过缓存，把当前分支重置到 commit。
+func (t *TUI) executeReset(commit core.Commit, mode core.ResetMode) {
+	t.commitOp.Reload(commitOpRequest{op: opReset, commit: commit, resetMode: mode})
+}
+
+// executeRebase 通过 Reload 绕过缓存，把当前分支 rebase 到 commit。
+func (t *TUI) executeRebase(commit core.Commit) {
+	t.commitOp.Reload(commitOpRequest{op: opRebase, commit: commit})
+}
+
+// executeMerge 通过 Reload 绕过缓存，把 commit 合入当前分支。
+func (t *TUI) executeMerge(commit core.Commit, mode core.MergeMode) {
+	t.commitOp.Reload(commitOpRequest{op: opMerge, commit: commit, mergeMode: mode})
+}
+
+// executeCommit 通过 Reload 绕过缓存，用表单内容提交暂存区改动。
+func (t *TUI) executeCommit(subject, description string, amend bool) {
+	t.commitOp.Reload(commitOpRequest{
+		op:          opCommit,
+		subject:     subject,
+		description: description,
+		amend:       amend,
+	})
+}
+
+// executeCommitOp 执行只带操作类型的 continue / abort。
+func (t *TUI) executeCommitOp(op commitOp) {
+	t.commitOp.Reload(commitOpRequest{op: op})
 }
 
 func (t *TUI) showCommitOpLoading(req commitOpRequest) {

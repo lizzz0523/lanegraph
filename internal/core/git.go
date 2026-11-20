@@ -125,6 +125,19 @@ func GitCheckoutBranch(ctx context.Context, repo string, branch Branch) (string,
 	return GitCheckout(ctx, repo, local)
 }
 
+// GitCreateBranch 从 startPoint 创建并检出分支；startPoint 为空时从 HEAD 创建。
+// 返回新建的分支名。
+func GitCreateBranch(ctx context.Context, repo, name, startPoint string) (string, error) {
+	args := []string{"checkout", "-b", name}
+	if startPoint != "" {
+		args = append(args, startPoint)
+	}
+	if _, err := gitOutput(ctx, repo, nil, args...); err != nil {
+		return "", fmt.Errorf("git checkout error: %w", gitStderr(err))
+	}
+	return name, nil
+}
+
 // Tag 是仓库中的一个标签，Hash 是它指向的对象（通常是提交）。
 type Tag struct {
 	Name string

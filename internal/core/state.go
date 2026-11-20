@@ -108,6 +108,15 @@ func (s *State) Checkout(ctx context.Context, tag Tag) (string, error) {
 	return GitCheckout(ctx, s.Repo, tag.Name)
 }
 
+// CreateBranch 从 commit 创建并检出分支；commit 为 nil 时从 HEAD 创建。
+func (s *State) CreateBranch(ctx context.Context, name string, commit *Commit) (string, error) {
+	startPoint := ""
+	if commit != nil {
+		startPoint = commit.Hash
+	}
+	return GitCreateBranch(ctx, s.Repo, name, startPoint)
+}
+
 // History 返回仓库的提交历史。
 func (s *State) History(ctx context.Context) ([]Commit, error) {
 	return GitCommits(ctx, s.Repo)
