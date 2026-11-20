@@ -1520,15 +1520,15 @@ func (t *TUI) mergeCommit() {
 		tview.Escape(commit.ShortHash()), tview.Escape(t.HeadRef), tview.Escape(commit.Subject))
 
 	message += colorMuted.markup("Merge") + " fast-forwards when possible, otherwise creates a merge commit\n"
-	message += colorMuted.markup("No FF") + " always creates a merge commit\n"
-	message += colorMuted.markup("Squash") + " stages changes without creating a commit\n\n"
+	message += colorMuted.markup("Squash") + " stages changes without creating a commit\n"
+	message += colorMuted.markup("No FF") + " always creates a merge commit\n\n"
 	message += colorMuted.markup("Local changes will be stashed and restored automatically.")
 
 	const page = "merge"
 
 	prompt := tview.NewModal().
 		SetText(message).
-		AddButtons([]string{"Cancel", "Merge", "No FF", "Squash"}).
+		AddButtons([]string{"Cancel", "Merge", "Squash", "No FF"}).
 		SetDoneFunc(func(buttonIndex int, _ string) {
 			t.root.RemovePage(page)
 			t.promptVisible = false
@@ -1537,9 +1537,9 @@ func (t *TUI) mergeCommit() {
 			case 1:
 				t.executeMerge(commit, core.MergeFF)
 			case 2:
-				t.executeMerge(commit, core.MergeNoFF)
-			case 3:
 				t.executeMerge(commit, core.MergeSquash)
+			case 3:
+				t.executeMerge(commit, core.MergeNoFF)
 			}
 		})
 
