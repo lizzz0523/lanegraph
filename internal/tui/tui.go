@@ -895,9 +895,7 @@ func (t *TUI) setupPrompt(name string, prompt *tview.Modal) {
 		Background(colorText.cell).
 		Foreground(colorOnAccent.cell))
 
-	t.promptVisible = true
-	t.root.AddPage(name, prompt, true, true)
-	t.app.SetFocus(prompt)
+	t.openPrompt(name, prompt)
 }
 
 func (t *TUI) setupLoaders() {
@@ -1239,6 +1237,13 @@ func (t *TUI) setFocusBorder(box *tview.Box, focused bool) {
 		color = t.borderFocusColor
 	}
 	box.SetBorderColor(color).SetTitleColor(color)
+}
+
+// openPrompt 把弹窗作为独立页面打开并设置焦点。
+func (t *TUI) openPrompt(name string, page tview.Primitive) {
+	t.promptVisible = true
+	t.root.AddPage(name, page, true, true)
+	t.app.SetFocus(page)
 }
 
 func (t *TUI) switchTab(tag string) {
@@ -2127,9 +2132,7 @@ func (t *TUI) createBranch(commit *core.Commit) {
 
 	prompt := &modalForm{Form: form, width: 50, formHeight: 7}
 
-	t.promptVisible = true
-	t.root.AddPage(page, prompt, true, true)
-	t.app.SetFocus(prompt)
+	t.openPrompt(page, prompt)
 }
 
 /** REFS */
