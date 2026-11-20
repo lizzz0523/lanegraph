@@ -29,6 +29,24 @@ func setFolderExpanded(node *tview.TreeNode, expanded bool) {
 	}
 }
 
+// modalForm 让 Form 像 tview.Modal 一样居中显示，而不是铺满整页。
+type modalForm struct {
+	*tview.Form
+
+	width      int
+	formHeight int
+}
+
+func (f *modalForm) Draw(screen tcell.Screen) {
+	screenWidth, screenHeight := screen.Size()
+	width := min(f.width, screenWidth)
+	height := f.formHeight
+	x := (screenWidth - width) / 2
+	y := (screenHeight - height) / 2
+	f.SetRect(x, y, width, height)
+	f.Form.Draw(screen)
+}
+
 // listView 把视口偏移和选中项分开，使滚轮只滚动内容。
 // tview.List 的 Draw 会强制让选中项保持可见，无法做到这一点。
 // 每个 item 可以包含多行，选中和高亮按 item 生效。

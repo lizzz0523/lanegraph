@@ -2061,6 +2061,7 @@ func (t *TUI) createBranch(commit *core.Commit) {
 	input := tview.NewInputField().
 		SetLabel("Branch name: ").
 		SetFieldWidth(30)
+	input.SetBackgroundColor(colorPopup.cell)
 
 	close := func() {
 		t.root.RemovePage(page)
@@ -2096,7 +2097,8 @@ func (t *TUI) createBranch(commit *core.Commit) {
 	form := tview.NewForm().
 		AddFormItem(input).
 		AddButton("Cancel", close).
-		AddButton("Create", create)
+		AddButton("Create", create).
+		SetButtonsAlign(tview.AlignCenter)
 
 	// 焦点在按钮上时 Esc 也要能关闭弹窗。
 	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -2117,27 +2119,17 @@ func (t *TUI) createBranch(commit *core.Commit) {
 		SetBackgroundColor(colorPopup.cell)
 
 	form.SetBorder(true).
-		SetTitle(" new branch ").
-		SetTitleAlign(tview.AlignLeft).
 		SetBorderPadding(1, 1, 2, 2)
 
 	form.SetBorderStyle(tcell.StyleDefault.
 		Foreground(tview.Styles.BorderColor).
 		Background(colorPopup.cell))
 
-	prompt := tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().
-			SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(form, 7, 0, true).
-			AddItem(nil, 0, 1, false), 50, 0, true).
-		AddItem(nil, 0, 1, false)
-	prompt.SetBackgroundColor(colorPopup.cell)
+	prompt := &modalForm{Form: form, width: 50, formHeight: 7}
 
 	t.promptVisible = true
 	t.root.AddPage(page, prompt, true, true)
-	t.app.SetFocus(form)
+	t.app.SetFocus(prompt)
 }
 
 /** REFS */
