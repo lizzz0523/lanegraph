@@ -31,20 +31,6 @@ func branchLabel(b core.Branch, headRef string, syncFrame int) string {
 	return label
 }
 
-// refFolder 是引用树中的可折叠目录；key 用于记录展开状态，name 是显示名。
-type refFolder struct {
-	key  string
-	name string
-}
-
-// refFolderLabel 返回引用树目录节点的显示文本。
-func refFolderLabel(folder refFolder, expanded bool) string {
-	if expanded {
-		return "▼ " + tview.Escape(folder.name)
-	}
-	return "▶ " + tview.Escape(folder.name)
-}
-
 // buildRefTree 根据分支和标签列表构建引用树。
 // remote 目录和 tags 目录默认折叠，refFolderExpanded 记录用户手动展开过的目录；
 // 过滤激活时临时展开所有目录，让匹配的引用可见。
@@ -80,9 +66,9 @@ func buildRefTree(branches []core.Branch, tags []core.Tag, filter, headRef strin
 			if branch.RemoteName != "" {
 				folderNode, ok := remoteFolders[branch.RemoteName]
 				if !ok {
-					folder := refFolder{key: "remote/" + branch.RemoteName, name: branch.RemoteName}
+					folder := folder{key: "remote/" + branch.RemoteName, name: branch.RemoteName}
 					expanded := filter != "" || refFolderExpanded[folder.key]
-					folderNode = tview.NewTreeNode(refFolderLabel(folder, expanded)).
+					folderNode = tview.NewTreeNode(folderLabel(folder, expanded)).
 						SetReference(folder).
 						SetExpanded(expanded).
 						SetSelectedTextStyle(selectedStyle)
@@ -100,9 +86,9 @@ func buildRefTree(branches []core.Branch, tags []core.Tag, filter, headRef strin
 	}
 
 	// 标签放在 Refs 下的 tags 目录中，默认折叠。
-	tagsFolder := refFolder{key: "tags", name: "tags"}
+	tagsFolder := folder{key: "tags", name: "tags"}
 	tagsExpanded := filter != "" || refFolderExpanded[tagsFolder.key]
-	tagNode := tview.NewTreeNode(refFolderLabel(tagsFolder, tagsExpanded)).
+	tagNode := tview.NewTreeNode(folderLabel(tagsFolder, tagsExpanded)).
 		SetReference(tagsFolder).
 		SetExpanded(tagsExpanded).
 		SetSelectedTextStyle(selectedStyle)
@@ -186,12 +172,4 @@ func findRefNode(root *tview.TreeNode, name string) *tview.TreeNode {
 		return true
 	})
 	return found
-}
-
-// setRefFolderExpanded 同步引用树目录节点的展开状态和箭头图标。
-func setRefFolderExpanded(node *tview.TreeNode, expanded bool) {
-	node.SetExpanded(expanded)
-	if folder, ok := node.GetReference().(refFolder); ok {
-		node.SetText(refFolderLabel(folder, expanded))
-	}
 }

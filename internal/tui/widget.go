@@ -7,6 +7,28 @@ import (
 	"github.com/rivo/tview"
 )
 
+// folder 是树中的可折叠目录节点；key 是目录标识，name 是显示名。
+type folder struct {
+	key  string
+	name string
+}
+
+// folderLabel 返回目录节点的显示文本。
+func folderLabel(folder folder, expanded bool) string {
+	if expanded {
+		return "▼ " + tview.Escape(folder.name)
+	}
+	return "▶ " + tview.Escape(folder.name)
+}
+
+// setFolderExpanded 同步目录节点的展开状态和箭头图标。
+func setFolderExpanded(node *tview.TreeNode, expanded bool) {
+	node.SetExpanded(expanded)
+	if folder, ok := node.GetReference().(folder); ok {
+		node.SetText(folderLabel(folder, expanded))
+	}
+}
+
 // listView 把视口偏移和选中项分开，使滚轮只滚动内容。
 // tview.List 的 Draw 会强制让选中项保持可见，无法做到这一点。
 // 每个 item 可以包含多行，选中和高亮按 item 生效。

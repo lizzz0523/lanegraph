@@ -39,13 +39,6 @@ func changeLabel(status string) string {
 	return status[:1]
 }
 
-func folderLabel(name string, expanded bool) string {
-	if expanded {
-		return "▼ " + tview.Escape(name)
-	}
-	return "▶ " + tview.Escape(name)
-}
-
 func fileLabel(name string, status string) string {
 	return fmt.Sprintf("%s %s", changeColor(status).markup(changeLabel(status)), tview.Escape(name))
 }
@@ -68,8 +61,9 @@ func buildFileTree(changes []core.FileChange, selectedStyle tcell.Style) *tview.
 
 			folderNode, ok := folders[prefix]
 			if !ok {
-				folderNode = tview.NewTreeNode(folderLabel(name, true)).
-					SetReference(name).
+				folder := folder{key: name, name: name}
+				folderNode = tview.NewTreeNode(folderLabel(folder, true)).
+					SetReference(folder).
 					SetExpanded(true).
 					SetSelectedTextStyle(selectedStyle)
 				parent.AddChild(folderNode)
@@ -133,7 +127,8 @@ func buildLocalTree(changes []core.FileChange, selectedStyle, headerStyle tcell.
 // 例如 a > b > c 显示为 a/b/c，类似 IDE 的紧凑中间目录。
 func compactFolders(node *tview.TreeNode) {
 	for _, child := range node.GetChildren() {
-		if _, ok := child.GetReference().(string); !ok {
+		current, ok := child.GetReference().(folder)
+		if !ok {
 			continue
 		}
 
@@ -142,14 +137,17 @@ func compactFolders(node *tview.TreeNode) {
 			if len(children) != 1 {
 				break
 			}
-			sub, ok := children[0].GetReference().(string)
+			sub, ok := children[0].GetReference().(folder)
 			if !ok {
 				break
 			}
 
-			name := child.GetReference().(string) + "/" + sub
-			child.SetReference(name).
-				SetText(folderLabel(name, child.IsExpanded())).
+			current = folder{
+				key:  current.key + "/" + sub.key,
+				name: current.name + "/" + sub.name,
+			}
+			child.SetReference(current).
+				SetText(folderLabel(current, child.IsExpanded())).
 				SetChildren(children[0].GetChildren())
 		}
 
@@ -229,13 +227,13 @@ func findLocalFolder(root *tview.TreeNode, target string) *tview.TreeNode {
 
 func findLocalFolderBy(node *tview.TreeNode, prefix, target string) *tview.TreeNode {
 	for _, child := range node.GetChildren() {
-		name, ok := child.GetReference().(string)
+		folder, ok := child.GetReference().(folder)
 		if !ok {
 			continue
 		}
-		full := name
+		full := folder.name
 		if prefix != "" {
-			full = prefix + "/" + name
+			full = prefix + "/" + folder.name
 		}
 		if full == target {
 			return child
@@ -261,26 +259,18 @@ func folderChanges(node *tview.TreeNode) []core.FileChange {
 }
 
 // folderPath 把目录层级拼成完整路径，跳过 root 和分组标题。
-// compactFolders 合并后的节点引用已经是 a/b/c，未合并时引用只是单段名，两种都能拼对。
+// compactFolders 合并后的目录节点 name 已经是 a/b/c，未合并时只是单段名，两种都能拼对。
 func folderPath(path []*tview.TreeNode) string {
 	if len(path) < 3 {
 		return ""
 	}
 	parts := make([]string, 0, len(path)-2)
 	for _, node := range path[2:] {
-		if name, ok := node.GetReference().(string); ok {
-			parts = append(parts, name)
+		if folder, ok := node.GetReference().(folder); ok {
+			parts = append(parts, folder.name)
 		}
 	}
 	return strings.Join(parts, "/")
-}
-
-// setFolderExpanded 同步目录节点的展开状态和箭头图标。
-func setFolderExpanded(node *tview.TreeNode, expanded bool) {
-	node.SetExpanded(expanded)
-	if name, ok := node.GetReference().(string); ok {
-		node.SetText(folderLabel(name, expanded))
-	}
 }
 
 // renderDiff 统一处理 git-delta 的输出；delta 不可用时退回到原始 diff。

@@ -671,7 +671,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		if event.Key() == tcell.KeyRune && event.Rune() == ' ' {
 			node := refList.GetCurrentNode()
 			if node != nil {
-				if _, isFolder := node.GetReference().(refFolder); isFolder {
+				if _, isFolder := node.GetReference().(folder); isFolder {
 					t.toggleRefFolder(node)
 				} else {
 					t.checkoutRef(node)
@@ -684,7 +684,7 @@ func (t *TUI) setupUI() tview.Primitive {
 
 	// 回车或鼠标点击目录时切换展开状态，点击引用时跳转到对应 commit。
 	refList.SetSelectedFunc(func(node *tview.TreeNode) {
-		if _, isFolder := node.GetReference().(refFolder); isFolder {
+		if _, isFolder := node.GetReference().(folder); isFolder {
 			t.toggleRefFolder(node)
 			return
 		}
@@ -1288,12 +1288,12 @@ func (t *TUI) refreshRefs(selected string) {
 
 // toggleRefFolder 切换引用树目录的展开状态，并记住用户的选择以便重建引用树时恢复。
 func (t *TUI) toggleRefFolder(node *tview.TreeNode) {
-	folder, ok := node.GetReference().(refFolder)
+	folder, ok := node.GetReference().(folder)
 	if !ok {
 		return
 	}
 	expanded := !node.IsExpanded()
-	setRefFolderExpanded(node, expanded)
+	setFolderExpanded(node, expanded)
 	if t.refFolderExpanded == nil {
 		t.refFolderExpanded = make(map[string]bool)
 	}
@@ -1874,7 +1874,7 @@ func (t *TUI) toggleLocalChange() {
 		return
 	}
 
-	if _, isFolder := node.GetReference().(string); !isFolder {
+	if _, isFolder := node.GetReference().(folder); !isFolder {
 		return
 	}
 	changes := folderChanges(node)
@@ -2234,7 +2234,7 @@ func (t *TUI) requestFileDiff(commit core.Commit, compare *core.Commit, node *tv
 	change, ok := node.GetReference().(core.FileChange)
 	if !ok {
 		// 目录节点提示选择文件；错误/无变更占位节点保留当前内容
-		if _, isFolder := node.GetReference().(string); isFolder {
+		if _, isFolder := node.GetReference().(folder); isFolder {
 			t.clearFileDiff("select a file")
 		}
 		return
@@ -2292,9 +2292,9 @@ func (t *TUI) showLocal(_ localFilesRequest, changes []core.FileChange, err erro
 	// 刷新后尽量恢复原来的选中项，避免每次切 tab 都跳回第一项。
 	// 目录节点按完整路径恢复，这样 stage/unstage 目录后光标会跟到另一组。
 	previous := t.localChange()
-	folder := ""
+	target := ""
 	if previous.Path == "" {
-		folder = folderPath(t.changeList.GetPath(t.changeList.GetCurrentNode()))
+		target = folderPath(t.changeList.GetPath(t.changeList.GetCurrentNode()))
 	}
 
 	title := " local changes "
@@ -2320,8 +2320,8 @@ func (t *TUI) showLocal(_ localFilesRequest, changes []core.FileChange, err erro
 		t.clearLocalDiff("no changes")
 	default:
 		node := findLocalNode(changeRoot, previous)
-		if node == nil && folder != "" {
-			node = findLocalFolder(changeRoot, folder)
+		if node == nil && target != "" {
+			node = findLocalFolder(changeRoot, target)
 		}
 		if node == nil {
 			node = firstFileNode(changeRoot)
@@ -2354,8 +2354,8 @@ func (t *TUI) localChange() core.FileChange {
 func (t *TUI) requestLocalDiff(node *tview.TreeNode) {
 	change, ok := node.GetReference().(core.FileChange)
 	if !ok {
-		// 目录/分组节点提示选择文件；错误/无变更占位节点保留当前内容
-		if _, isFolder := node.GetReference().(string); isFolder {
+		// 目录节点提示选择文件；错误/无变更占位节点保留当前内容
+		if _, isFolder := node.GetReference().(folder); isFolder {
 			t.clearLocalDiff("select a file")
 		}
 		return
