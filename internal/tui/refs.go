@@ -31,32 +31,38 @@ func branchLabel(b core.Branch, headRef string, syncFrame int) string {
 	return label
 }
 
-// remoteLabel 返回 remote 目录节点的显示文本。
-func remoteLabel(name string, expanded bool) string {
+// refFolder 是引用树中的可折叠目录；key 用于记录展开状态，name 是显示名。
+type refFolder struct {
+	key  string
+	name string
+}
+
+// refFolderLabel 返回引用树目录节点的显示文本。
+func refFolderLabel(folder refFolder, expanded bool) string {
 	if expanded {
-		return "▼ " + tview.Escape(name)
+		return "▼ " + tview.Escape(folder.name)
 	}
-	return "▶ " + tview.Escape(name)
+	return "▶ " + tview.Escape(folder.name)
 }
 
 // buildRefTree 根据分支和标签列表构建引用树。
-// remote 目录默认折叠，remoteExpanded 记录用户手动展开过的 remote；
-// 过滤激活时临时展开所有 remote 目录，让匹配的远端分支可见。
-func buildRefTree(branches []core.Branch, tags []core.Tag, filter, headRef string, syncFrame int, remoteExpanded map[string]bool, headerStyle, headerSelectedStyle, selectedStyle tcell.Style) *tview.TreeNode {
-	// 隐藏 root，用 Local / Remote / Tags 作为分组标题。
+// remote 目录和 tags 目录默认折叠，refFolderExpanded 记录用户手动展开过的目录；
+// 过滤激活时临时展开所有目录，让匹配的引用可见。
+func buildRefTree(branches []core.Branch, tags []core.Tag, filter, headRef string, syncFrame int, refFolderExpanded map[string]bool, headerStyle, headerSelectedStyle, selectedStyle tcell.Style) *tview.TreeNode {
+	// 隐藏 root，用 Local / Remote / Refs 作为分组标题。
 	localNode := tview.NewTreeNode("Local").
 		SetTextStyle(headerStyle).
 		SetSelectedTextStyle(headerSelectedStyle)
 	remoteNode := tview.NewTreeNode("Remote").
 		SetTextStyle(headerStyle).
 		SetSelectedTextStyle(headerSelectedStyle)
-	tagNode := tview.NewTreeNode("Tags").
+	refsNode := tview.NewTreeNode("Refs").
 		SetTextStyle(headerStyle).
 		SetSelectedTextStyle(headerSelectedStyle)
 	refRoot := tview.NewTreeNode("").
 		AddChild(localNode).
 		AddChild(remoteNode).
-		AddChild(tagNode)
+		AddChild(refsNode)
 
 	// remote 名作为 Remote 下的目录节点，按分支原有顺序首次出现时创建。
 	remoteFolders := make(map[string]*tview.TreeNode)
@@ -74,9 +80,10 @@ func buildRefTree(branches []core.Branch, tags []core.Tag, filter, headRef strin
 			if branch.RemoteName != "" {
 				folderNode, ok := remoteFolders[branch.RemoteName]
 				if !ok {
-					expanded := filter != "" || remoteExpanded[branch.RemoteName]
-					folderNode = tview.NewTreeNode(remoteLabel(branch.RemoteName, expanded)).
-						SetReference(branch.RemoteName).
+					folder := refFolder{key: "remote/" + branch.RemoteName, name: branch.RemoteName}
+					expanded := filter != "" || refFolderExpanded[folder.key]
+					folderNode = tview.NewTreeNode(refFolderLabel(folder, expanded)).
+						SetReference(folder).
 						SetExpanded(expanded).
 						SetSelectedTextStyle(selectedStyle)
 					remoteNode.AddChild(folderNode)
@@ -92,6 +99,15 @@ func buildRefTree(branches []core.Branch, tags []core.Tag, filter, headRef strin
 		parent.AddChild(child)
 	}
 
+	// 标签放在 Refs 下的 tags 目录中，默认折叠。
+	tagsFolder := refFolder{key: "tags", name: "tags"}
+	tagsExpanded := filter != "" || refFolderExpanded[tagsFolder.key]
+	tagNode := tview.NewTreeNode(refFolderLabel(tagsFolder, tagsExpanded)).
+		SetReference(tagsFolder).
+		SetExpanded(tagsExpanded).
+		SetSelectedTextStyle(selectedStyle)
+	refsNode.AddChild(tagNode)
+
 	for _, tag := range tags {
 		if filter != "" && !strings.Contains(strings.ToLower(tag.Name), filter) {
 			continue
@@ -101,7 +117,11 @@ func buildRefTree(branches []core.Branch, tags []core.Tag, filter, headRef strin
 			SetSelectedTextStyle(selectedStyle))
 	}
 
-	for _, node := range []*tview.TreeNode{localNode, remoteNode, tagNode} {
+	if len(tagNode.GetChildren()) == 0 {
+		refsNode.RemoveChild(tagNode)
+	}
+
+	for _, node := range []*tview.TreeNode{localNode, remoteNode, refsNode} {
 		if len(node.GetChildren()) == 0 {
 			refRoot.RemoveChild(node)
 		}
@@ -111,7 +131,7 @@ func buildRefTree(branches []core.Branch, tags []core.Tag, filter, headRef strin
 }
 
 // refName 返回节点对应引用的名字（本地/远端分支名或标签名）；
-// 分组标题和 remote 目录返回空。
+// 分组标题和目录返回空。
 func refName(node *tview.TreeNode) string {
 	switch ref := node.GetReference().(type) {
 	case core.Branch:
@@ -122,7 +142,7 @@ func refName(node *tview.TreeNode) string {
 	return ""
 }
 
-// refHash 返回节点对应提交的 hash；分组标题和 remote 目录返回空。
+// refHash 返回节点对应提交的 hash；分组标题和目录返回空。
 func refHash(node *tview.TreeNode) string {
 	switch ref := node.GetReference().(type) {
 	case core.Branch:
@@ -133,7 +153,7 @@ func refHash(node *tview.TreeNode) string {
 	return ""
 }
 
-// firstRefNode 返回树中第一个引用节点，跳过分组标题和 remote 目录。
+// firstRefNode 返回树中第一个引用节点，跳过分组标题和目录。
 func firstRefNode(root *tview.TreeNode) *tview.TreeNode {
 	var first *tview.TreeNode
 	root.Walk(func(node, _ *tview.TreeNode) bool {
@@ -168,10 +188,10 @@ func findRefNode(root *tview.TreeNode, name string) *tview.TreeNode {
 	return found
 }
 
-// setRemoteExpanded 同步 remote 目录节点的展开状态和箭头图标。
-func setRemoteExpanded(node *tview.TreeNode, expanded bool) {
+// setRefFolderExpanded 同步引用树目录节点的展开状态和箭头图标。
+func setRefFolderExpanded(node *tview.TreeNode, expanded bool) {
 	node.SetExpanded(expanded)
-	if name, ok := node.GetReference().(string); ok {
-		node.SetText(remoteLabel(name, expanded))
+	if folder, ok := node.GetReference().(refFolder); ok {
+		node.SetText(refFolderLabel(folder, expanded))
 	}
 }

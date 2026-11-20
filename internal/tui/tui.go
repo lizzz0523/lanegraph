@@ -69,7 +69,7 @@ type TUI struct {
 	promptVisible     bool              // 确认弹窗是否正在显示
 	historyVisible    bool              // 文件历史弹窗是否正在显示
 	commitInfoVisible bool              // commit 详情弹窗是否正在显示
-	remoteExpanded    map[string]bool   // 用户手动展开过的 remote 目录，按 remote 名记录
+	refFolderExpanded map[string]bool   // 用户手动展开过的引用树目录，按目录 key 记录
 	syncFrame         int               // 分支同步动画当前帧；-1 表示没有在执行同步操作
 	syncStop          chan struct{}     // 关闭后停止分支同步动画
 	quitting          bool              // 退出流程已启动，忽略重复退出
@@ -659,20 +659,20 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetTopLevel(1).
 		SetGraphics(false)
 
-	refList.SetTitle(" refs ").
+	refList.SetTitle(" branches ").
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
 		SetFocusFunc(func() { t.setFocusBorder(refList.Box, true) }).
 		SetBlurFunc(func() { t.setFocusBorder(refList.Box, false) })
 
-	// 空格 checkout 当前分支或标签，remote 目录切换展开状态。
+	// 空格 checkout 当前分支或标签，目录切换展开状态。
 	// TreeView 默认把空格当选中，必须在这里先截获。
 	refList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyRune && event.Rune() == ' ' {
 			node := refList.GetCurrentNode()
 			if node != nil {
-				if _, isFolder := node.GetReference().(string); isFolder {
-					t.toggleRemoteFolder(node)
+				if _, isFolder := node.GetReference().(refFolder); isFolder {
+					t.toggleRefFolder(node)
 				} else {
 					t.checkoutRef(node)
 				}
@@ -682,10 +682,10 @@ func (t *TUI) setupUI() tview.Primitive {
 		return event
 	})
 
-	// 回车或鼠标点击 remote 目录时切换展开状态，点击引用时跳转到对应 commit。
+	// 回车或鼠标点击目录时切换展开状态，点击引用时跳转到对应 commit。
 	refList.SetSelectedFunc(func(node *tview.TreeNode) {
-		if _, isFolder := node.GetReference().(string); isFolder {
-			t.toggleRemoteFolder(node)
+		if _, isFolder := node.GetReference().(refFolder); isFolder {
+			t.toggleRefFolder(node)
 			return
 		}
 		// commits 刷新后行号会变化，每次跳转都按当前列表查询。
@@ -1273,29 +1273,31 @@ func (t *TUI) refreshRefs(selected string) {
 		filter = strings.ToLower(strings.TrimSpace(t.filterText.GetText()))
 	}
 
-	refRoot := buildRefTree(t.Branches, t.Tags, filter, t.HeadRef, t.syncFrame, t.remoteExpanded, t.headerStyle, t.headerSelectedStyle, t.selectedStyle)
+	refRoot := buildRefTree(t.Branches, t.Tags, filter, t.HeadRef, t.syncFrame, t.refFolderExpanded, t.headerStyle, t.headerSelectedStyle, t.selectedStyle)
 	t.refList.SetRoot(refRoot)
 
 	if node := t.refNode(selected); node != nil {
 		t.refList.SetCurrentNode(node)
 		return
 	}
-	// 默认选中第一个引用，而不是分组标题或 remote 目录。
+	// 默认选中第一个引用，而不是分组标题或目录。
 	if node := firstRefNode(refRoot); node != nil {
 		t.refList.SetCurrentNode(node)
 	}
 }
 
-// toggleRemoteFolder 切换 remote 目录的展开状态，并记住用户的选择以便重建引用树时恢复。
-func (t *TUI) toggleRemoteFolder(node *tview.TreeNode) {
-	expanded := !node.IsExpanded()
-	setRemoteExpanded(node, expanded)
-	if name, ok := node.GetReference().(string); ok {
-		if t.remoteExpanded == nil {
-			t.remoteExpanded = make(map[string]bool)
-		}
-		t.remoteExpanded[name] = expanded
+// toggleRefFolder 切换引用树目录的展开状态，并记住用户的选择以便重建引用树时恢复。
+func (t *TUI) toggleRefFolder(node *tview.TreeNode) {
+	folder, ok := node.GetReference().(refFolder)
+	if !ok {
+		return
 	}
+	expanded := !node.IsExpanded()
+	setRefFolderExpanded(node, expanded)
+	if t.refFolderExpanded == nil {
+		t.refFolderExpanded = make(map[string]bool)
+	}
+	t.refFolderExpanded[folder.key] = expanded
 }
 
 // refreshCommit 刷新选中 commit 的信息，并异步请求文件列表。
@@ -2047,7 +2049,7 @@ func (t *TUI) refNode(name string) *tview.TreeNode {
 	return findRefNode(t.refList.GetRoot(), name)
 }
 
-// refName 返回引用列表当前选中节点的名字；分组标题和 remote 目录返回空。
+// refName 返回引用列表当前选中节点的名字；分组标题和目录返回空。
 func (t *TUI) refName() string {
 	if t.refList == nil {
 		return ""
