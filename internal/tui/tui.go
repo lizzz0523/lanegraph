@@ -152,6 +152,7 @@ type createOp uint8
 
 const (
 	opCreateBranch createOp = iota
+	opCreateTag
 )
 
 type createRequest struct {
@@ -264,7 +265,7 @@ func (t *TUI) Run() error {
 			app.SetFocus(t.nextFocus(-1))
 			return nil
 		// p / P / f 全局触发当前分支的 pull / push / fetch；
-		// B 全局从当前 HEAD 创建并检出分支；输入框输入时不拦截。
+		// B / T 全局从当前 HEAD 创建并检出分支 / 创建标签；输入框输入时不拦截。
 		case event.Key() == tcell.KeyRune && !typing && !t.promptVisible:
 			switch event.Rune() {
 			case 'p':
@@ -277,7 +278,10 @@ func (t *TUI) Run() error {
 				t.syncBranch(opFetch)
 				return nil
 			case 'B':
-				t.createBranch(nil)
+				t.createRef(opCreateBranch, nil)
+				return nil
+			case 'T':
+				t.createRef(opCreateTag, nil)
 				return nil
 			}
 		}
@@ -364,7 +368,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetBlurFunc(func() { t.setFocusBorder(commitList.Box, false) })
 
 	// r 把当前分支 rebase 到选中的 commit；R 把当前分支 reset 到选中的 commit；
-	// m 把选中的 commit merge 到当前分支；b 从选中的 commit 创建并检出分支。
+	// m 把选中的 commit merge 到当前分支；b / t 从选中的 commit 创建分支 / 标签。
 	commitList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyRune {
 			switch event.Rune() {
@@ -378,7 +382,10 @@ func (t *TUI) setupUI() tview.Primitive {
 				t.mergeCommit()
 				return nil
 			case 'b':
-				t.createBranchFromCommit()
+				t.createRefFromCommit(opCreateBranch)
+				return nil
+			case 't':
+				t.createRefFromCommit(opCreateTag)
 				return nil
 			}
 		}
@@ -1016,6 +1023,8 @@ func (t *TUI) setupLoaders() {
 			switch req.op {
 			case opCreateBranch:
 				return t.CreateBranch(ctx, req.name, req.commit)
+			case opCreateTag:
+				return t.CreateTag(ctx, req.name, req.commit)
 			default:
 				return "", fmt.Errorf("unknown create operation")
 			}
@@ -2042,29 +2051,34 @@ func (t *TUI) syncBranch(op syncOp) {
 	t.executeSync(op)
 }
 
-// createBranchFromCommit 从选中的 commit 创建并检出分支。
-func (t *TUI) createBranchFromCommit() {
+// createRefFromCommit 从选中的 commit 创建引用。
+func (t *TUI) createRefFromCommit(op createOp) {
 	row := t.commitList.currentItem()
 	if row < 0 || row >= len(t.Commits) {
 		return
 	}
 	commit := t.Commits[row]
-	t.createBranch(&commit)
+	t.createRef(op, &commit)
 }
 
-// createBranch 弹出输入框，创建并检出以输入名字命名的新分支。
+// createRef 弹出输入框，创建分支或标签。
 // commit 为 nil 时从 HEAD 创建，否则从该 commit 创建。
-func (t *TUI) createBranch(commit *core.Commit) {
+func (t *TUI) createRef(op createOp, commit *core.Commit) {
 	if t.createOp == nil || t.root == nil || t.promptVisible || t.createOp.Loading() {
 		return
 	}
 
 	previous := t.app.GetFocus()
 
-	const page = "new-branch"
+	page := "new-branch"
+	label := "Branch name: "
+	if op == opCreateTag {
+		page = "new-tag"
+		label = "Tag name: "
+	}
 
 	input := tview.NewInputField().
-		SetLabel("Branch name: ").
+		SetLabel(label).
 		SetFieldWidth(30)
 	input.SetBackgroundColor(colorPopup.cell)
 
@@ -2084,7 +2098,7 @@ func (t *TUI) createBranch(commit *core.Commit) {
 			return
 		}
 		close()
-		t.executeCreate(opCreateBranch, name, commit)
+		t.executeCreate(op, name, commit)
 	}
 
 	input.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -2746,26 +2760,39 @@ func (t *TUI) executeCreate(op createOp, name string, commit *core.Commit) {
 }
 
 func (t *TUI) showCreateLoading(req createRequest) {
-	t.statusStart("create", "create branch "+req.name)
+	t.statusStart("create", t.createOpLabel(req, false))
 }
 
 func (t *TUI) showCreate(req createRequest, ref string, err error) {
 	if err != nil {
 		// git 的错误可能是多行，压成一行避免撑坏单行 statusBar。
 		message := strings.Join(strings.Fields(err.Error()), " ")
-		t.statusDone("create", "create branch failed: "+message)
+		prefix := "create branch failed: "
+		if req.op == opCreateTag {
+			prefix = "create tag failed: "
+		}
+		t.statusDone("create", prefix+message)
 		return
 	}
 
-	switch req.op {
-	case opCreateBranch:
-		t.statusDone("create", "created branch "+ref)
+	t.statusDone("create", t.createOpLabel(req, true))
 
-		// refs 刷新后选中刚创建的分支；commit 列表里的 HEAD 标记也随 checkout 变化。
-		t.pendingRef = ref
-		t.reloadRefs()
-		t.reloadCommits()
+	// refs 刷新后选中刚创建的引用；commit 列表里的 HEAD 标记也随 checkout 变化。
+	t.pendingRef = ref
+	t.reloadRefs()
+	t.reloadCommits()
+}
+
+// createOpLabel 返回创建操作的 loading/完成文案。
+func (t *TUI) createOpLabel(req createRequest, done bool) string {
+	noun := "branch"
+	if req.op == opCreateTag {
+		noun = "tag"
 	}
+	if done {
+		return "created " + noun + " " + req.name
+	}
+	return "create " + noun + " " + req.name
 }
 
 /** SYNC OP */

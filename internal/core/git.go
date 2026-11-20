@@ -108,6 +108,19 @@ func GitBranches(ctx context.Context, repo string) ([]Branch, error) {
 	return branches, nil
 }
 
+// GitCreateBranch 从 startPoint 创建并检出分支；startPoint 为空时从 HEAD 创建。
+// 返回新建的分支名。
+func GitCreateBranch(ctx context.Context, repo, name, startPoint string) (string, error) {
+	args := []string{"checkout", "-b", name}
+	if startPoint != "" {
+		args = append(args, startPoint)
+	}
+	if _, err := gitOutput(ctx, repo, nil, args...); err != nil {
+		return "", fmt.Errorf("git checkout error: %w", gitStderr(err))
+	}
+	return name, nil
+}
+
 // GitCheckoutBranch 切换到 branch 对应的本地分支。
 // 本地分支直接 checkout；远端分支切换到同名本地分支，
 // 本地分支不存在时从该远端分支创建跟踪分支。返回实际检出的本地分支名。
@@ -123,19 +136,6 @@ func GitCheckoutBranch(ctx context.Context, repo string, branch Branch) (string,
 	}
 
 	return GitCheckout(ctx, repo, local)
-}
-
-// GitCreateBranch 从 startPoint 创建并检出分支；startPoint 为空时从 HEAD 创建。
-// 返回新建的分支名。
-func GitCreateBranch(ctx context.Context, repo, name, startPoint string) (string, error) {
-	args := []string{"checkout", "-b", name}
-	if startPoint != "" {
-		args = append(args, startPoint)
-	}
-	if _, err := gitOutput(ctx, repo, nil, args...); err != nil {
-		return "", fmt.Errorf("git checkout error: %w", gitStderr(err))
-	}
-	return name, nil
 }
 
 // Tag 是仓库中的一个标签，Hash 是它指向的对象（通常是提交）。
@@ -173,6 +173,19 @@ func GitTags(ctx context.Context, repo string) ([]Tag, error) {
 		tags = append(tags, Tag{Name: parts[0], Hash: hash})
 	}
 	return tags, nil
+}
+
+// GitCreateTag 在 startPoint 创建轻量标签；startPoint 为空时从 HEAD 创建。
+// 返回新建的标签名。
+func GitCreateTag(ctx context.Context, repo, name, startPoint string) (string, error) {
+	args := []string{"tag", name}
+	if startPoint != "" {
+		args = append(args, startPoint)
+	}
+	if _, err := gitOutput(ctx, repo, nil, args...); err != nil {
+		return "", fmt.Errorf("git tag error: %w", gitStderr(err))
+	}
+	return name, nil
 }
 
 // GitCheckout 检出 ref；标签、提交或远端分支会让 HEAD 进入 detached 状态。返回 ref 名。
