@@ -121,6 +121,29 @@ func GitCreateBranch(ctx context.Context, repo, name, startPoint string) (string
 	return name, nil
 }
 
+// GitDeleteBranch 删除本地分支；force 为 true 时用 -D 删除未合并的分支。
+func GitDeleteBranch(ctx context.Context, repo, name string, force bool) error {
+	flag := "-d"
+	if force {
+		flag = "-D"
+	}
+	if _, err := gitOutput(ctx, repo, nil, "branch", flag, name); err != nil {
+		return fmt.Errorf("git branch delete error: %w", gitStderr(err))
+	}
+	return nil
+}
+
+// GitDeleteRemoteBranch 在远端删除 branch 对应的分支。
+func GitDeleteRemoteBranch(ctx context.Context, repo string, branch Branch) error {
+	if branch.RemoteName == "" {
+		return fmt.Errorf("unknown remote for branch: %s", branch.Name)
+	}
+	if _, err := gitOutput(ctx, repo, gitRemoteEnv(), "push", branch.RemoteName, "--delete", branch.LocalName()); err != nil {
+		return fmt.Errorf("git push error: %w", gitStderr(err))
+	}
+	return nil
+}
+
 // GitCheckoutBranch 切换到 branch 对应的本地分支。
 // 本地分支直接 checkout；远端分支切换到同名本地分支，
 // 本地分支不存在时从该远端分支创建跟踪分支。返回实际检出的本地分支名。
@@ -186,6 +209,14 @@ func GitCreateTag(ctx context.Context, repo, name, startPoint string) (string, e
 		return "", fmt.Errorf("git tag error: %w", gitStderr(err))
 	}
 	return name, nil
+}
+
+// GitDeleteTag 删除标签。
+func GitDeleteTag(ctx context.Context, repo, name string) error {
+	if _, err := gitOutput(ctx, repo, nil, "tag", "-d", name); err != nil {
+		return fmt.Errorf("git tag delete error: %w", gitStderr(err))
+	}
+	return nil
 }
 
 // GitCheckout 检出 ref；标签、提交或远端分支会让 HEAD 进入 detached 状态。返回 ref 名。

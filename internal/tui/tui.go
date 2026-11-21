@@ -96,6 +96,7 @@ type TUI struct {
 
 	checkout *loader.Loader[string, checkoutRequest]
 	createOp *loader.Loader[string, createRequest]
+	deleteOp *loader.Loader[string, deleteRequest]
 	syncOp   *loader.Loader[string, syncOpRequest]
 	commitOp *loader.Loader[string, commitOpRequest]
 	changeOp *loader.Loader[string, changeOpRequest]
@@ -159,6 +160,21 @@ type createRequest struct {
 	op     createOp
 	name   string
 	commit *core.Commit // nil 表示从 HEAD 创建
+}
+
+// deleteRequest 是一次删除引用操作；force 仅对本地分支生效。
+type deleteRequest struct {
+	branch core.Branch
+	tag    core.Tag
+	force  bool
+}
+
+// name 返回 loader key 和状态栏文案使用的名字。
+func (r deleteRequest) name() string {
+	if r.tag.Name != "" {
+		return r.tag.Name
+	}
+	return r.branch.Name
 }
 
 // syncOp 是当前分支的远程同步操作类型。
@@ -693,18 +709,26 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetFocusFunc(func() { t.setFocusBorder(refList.Box, true) }).
 		SetBlurFunc(func() { t.setFocusBorder(refList.Box, false) })
 
-	// 空格 checkout 当前分支或标签，目录切换展开状态。
+	// 空格 checkout 当前分支或标签，d 删除引用，目录切换展开状态。
 	// TreeView 默认把空格当选中，必须在这里先截获。
 	refList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyRune && event.Rune() == ' ' {
-			node := refList.GetCurrentNode()
-			if node != nil {
-				if _, isFolder := node.GetReference().(folder); isFolder {
-					t.toggleRefFolder(node)
-				} else {
-					t.checkoutRef(node)
-				}
+		if event.Key() != tcell.KeyRune {
+			return event
+		}
+		node := refList.GetCurrentNode()
+		if node == nil {
+			return event
+		}
+		switch event.Rune() {
+		case ' ':
+			if _, isFolder := node.GetReference().(folder); isFolder {
+				t.toggleRefFolder(node)
+			} else {
+				t.checkoutRef(node)
 			}
+			return nil
+		case 'd':
+			t.deleteRef(node)
 			return nil
 		}
 		return event
@@ -1034,6 +1058,25 @@ func (t *TUI) setupLoaders() {
 		OnResult:  t.showCreate,
 	})
 
+	t.deleteOp = loader.New(loader.Config[string, deleteRequest]{
+		Key: func(req deleteRequest) string {
+			return fmt.Sprintf("%t\x00%s", req.force, req.name())
+		},
+		Load: func(ctx context.Context, req deleteRequest) (string, error) {
+			switch {
+			case req.tag.Name != "":
+				return req.name(), t.DeleteTag(ctx, req.tag.Name)
+			case req.branch.Remote:
+				return req.name(), t.DeleteRemoteBranch(ctx, req.branch)
+			default:
+				return req.name(), t.DeleteBranch(ctx, req.branch.Name, req.force)
+			}
+		},
+		Post:      post,
+		OnLoading: t.showDeleteLoading,
+		OnResult:  t.showDelete,
+	})
+
 	t.syncOp = loader.New(loader.Config[string, syncOpRequest]{
 		Key: func(req syncOpRequest) string { return fmt.Sprintf("%d", req.op) },
 		Load: func(ctx context.Context, req syncOpRequest) (string, error) {
@@ -1121,6 +1164,7 @@ func (t *TUI) loaders() []loader.Lifecycle {
 		t.fileHistoryDiff,
 		t.checkout,
 		t.createOp,
+		t.deleteOp,
 		t.syncOp,
 		t.commitOp,
 		t.changeOp,
@@ -2070,11 +2114,9 @@ func (t *TUI) createRef(op createOp, commit *core.Commit) {
 
 	previous := t.app.GetFocus()
 
-	page := "new-branch"
 	label := "Branch name "
 	action := "Create and checkout a new branch"
 	if op == opCreateTag {
-		page = "new-tag"
 		label = "Tag name "
 		action = "Create a new tag"
 	}
@@ -2086,6 +2128,8 @@ func (t *TUI) createRef(op createOp, commit *core.Commit) {
 			message += "\n\n" + commit.Subject
 		}
 	}
+
+	const page = "create-ref"
 
 	prompt := newModalForm(52).
 		SetText(message).
@@ -2115,6 +2159,66 @@ func (t *TUI) createRef(op createOp, commit *core.Commit) {
 	})
 
 	t.openPrompt(page, prompt)
+}
+
+// deleteRef 先弹窗确认，再删除选中的本地分支、远端分支或标签。
+func (t *TUI) deleteRef(node *tview.TreeNode) {
+	if t.deleteOp == nil || t.root == nil || t.promptVisible || t.deleteOp.Loading() {
+		return
+	}
+
+	var req deleteRequest
+	switch ref := node.GetReference().(type) {
+	case core.Branch:
+		req.branch = ref
+	case core.Tag:
+		req.tag = ref
+	default:
+		return
+	}
+
+	previous := t.app.GetFocus()
+
+	buttons := []string{"Cancel", "Delete"}
+	var message string
+	switch {
+	case req.tag.Name != "":
+		message = fmt.Sprintf("Delete tag %s?\n\n%s", tview.Escape(req.tag.Name),
+			colorDanger.markup("This cannot be undone."))
+	case req.branch.Remote:
+		message = fmt.Sprintf("Delete remote branch %s on %s?\n\n%s",
+			tview.Escape(req.branch.LocalName()), tview.Escape(req.branch.RemoteName),
+			colorDanger.markup("This cannot be undone."))
+	default:
+		buttons = []string{"Cancel", "Delete", "Force"}
+		message = fmt.Sprintf("Delete branch %s?\n\n%s\n\n", tview.Escape(req.branch.Name),
+			colorDanger.markup("This cannot be undone."))
+		message += colorMuted.markup("Force") + " deletes the branch even if it has unmerged commits"
+	}
+
+	const page = "delete-ref"
+
+	prompt := tview.NewModal().
+		SetText(message).
+		AddButtons(buttons).
+		SetDoneFunc(func(buttonIndex int, _ string) {
+			t.root.RemovePage(page)
+			t.promptVisible = false
+			if previous != nil {
+				t.app.SetFocus(previous)
+			} else {
+				t.app.SetFocus(t.refList)
+			}
+			switch buttonIndex {
+			case 1:
+				t.executeDelete(req)
+			case 2:
+				req.force = true
+				t.executeDelete(req)
+			}
+		})
+
+	t.setupPrompt(page, prompt)
 }
 
 /** REFS */
@@ -2761,6 +2865,46 @@ func (t *TUI) createOpLabel(req createRequest, done bool) string {
 		return "created " + noun + " " + req.name
 	}
 	return "create " + noun + " " + req.name
+}
+
+/** DELETE */
+
+// executeDelete 通过 Reload 绕过缓存，保证每次删除都真正执行 git 命令。
+func (t *TUI) executeDelete(req deleteRequest) {
+	t.deleteOp.Reload(req)
+}
+
+func (t *TUI) showDeleteLoading(req deleteRequest) {
+	t.statusStart("delete", t.deleteOpLabel(req, false))
+}
+
+func (t *TUI) showDelete(req deleteRequest, _ string, err error) {
+	if err != nil {
+		// git 的错误可能是多行，压成一行避免撑坏单行 statusBar。
+		message := strings.Join(strings.Fields(err.Error()), " ")
+		t.statusDone("delete", "delete failed: "+message)
+		return
+	}
+	t.statusDone("delete", t.deleteOpLabel(req, true))
+
+	// 删除引用后分支/标签列表和 commit 图都可能变化。
+	t.reloadRefs()
+	t.reloadCommits()
+}
+
+// deleteOpLabel 返回删除操作的 loading/完成文案。
+func (t *TUI) deleteOpLabel(req deleteRequest, done bool) string {
+	noun := "branch "
+	switch {
+	case req.tag.Name != "":
+		noun = "tag "
+	case req.branch.Remote:
+		noun = "remote branch "
+	}
+	if done {
+		return "deleted " + noun + req.name()
+	}
+	return "deleting " + noun + req.name()
 }
 
 /** SYNC OP */

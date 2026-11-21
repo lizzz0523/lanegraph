@@ -126,6 +126,21 @@ func (s *State) CreateTag(ctx context.Context, name string, commit *Commit) (str
 	return GitCreateTag(ctx, s.Repo, name, startPoint)
 }
 
+// DeleteBranch 删除本地分支；force 为 true 时删除未合并的分支。
+func (s *State) DeleteBranch(ctx context.Context, name string, force bool) error {
+	return GitDeleteBranch(ctx, s.Repo, name, force)
+}
+
+// DeleteRemoteBranch 在远端删除分支。
+func (s *State) DeleteRemoteBranch(ctx context.Context, branch Branch) error {
+	return GitDeleteRemoteBranch(ctx, s.Repo, branch)
+}
+
+// DeleteTag 删除标签。
+func (s *State) DeleteTag(ctx context.Context, name string) error {
+	return GitDeleteTag(ctx, s.Repo, name)
+}
+
 // History 返回仓库的提交历史。
 func (s *State) History(ctx context.Context) ([]Commit, error) {
 	return GitCommits(ctx, s.Repo)
