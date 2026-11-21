@@ -2131,7 +2131,7 @@ func (t *TUI) createRef(op createOp, commit *core.Commit) {
 
 	const page = "create-ref"
 
-	prompt := newModalForm(52).
+	prompt := newModalForm(62).
 		SetText(message).
 		SetLabel(label).
 		SetButtons([]string{"Cancel", "Create"})
