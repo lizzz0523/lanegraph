@@ -436,6 +436,7 @@ func (m MergeMode) String() string {
 }
 
 // GitMerge 按 mode 把 commit 合入当前分支，并自动暂存和恢复本地改动。
+// squash 成功后立即提交，不留待提交状态；冲突时保留 SQUASH_MSG，由 Continue / Abort 处理。
 func GitMerge(ctx context.Context, repo string, commit Commit, mode MergeMode) (string, error) {
 	if mode != MergeFF && mode != MergeNoFF && mode != MergeSquash {
 		return "", fmt.Errorf("unknown merge mode: %d", mode)
@@ -444,7 +445,14 @@ func GitMerge(ctx context.Context, repo string, commit Commit, mode MergeMode) (
 	if err != nil {
 		return "", fmt.Errorf("git merge error: %w", gitStderr(err))
 	}
-	return output, nil
+	if mode != MergeSquash || !GitSquashInProgress(ctx, repo) {
+		return output, nil
+	}
+	committed, err := GitSquashContinue(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	return output + committed, nil
 }
 
 // GitMergeInProgress 返回仓库是否停在未完成的 merge 中。
@@ -477,6 +485,7 @@ func GitSquashInProgress(ctx context.Context, repo string) bool {
 }
 
 // GitSquashContinue 提交 squash 结果，使用 git 生成的 squash 提交信息；
+// squash merge 成功时由 GitMerge 自动调用，冲突或自动提交失败时由用户 Continue；
 // 有 autostash 时 git commit 会自动恢复本地改动。
 func GitSquashContinue(ctx context.Context, repo string) (string, error) {
 	output, err := gitOutput(ctx, repo, gitContinueEnv(), "commit", "--no-edit")

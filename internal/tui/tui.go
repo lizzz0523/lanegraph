@@ -1520,7 +1520,7 @@ func (t *TUI) mergeCommit() {
 		tview.Escape(commit.ShortHash()), tview.Escape(t.HeadRef), tview.Escape(commit.Subject))
 
 	message += colorMuted.markup("Merge") + " fast-forwards when possible, otherwise creates a merge commit\n"
-	message += colorMuted.markup("Squash") + " stages changes without creating a commit\n"
+	message += colorMuted.markup("Squash") + " combines changes into one new commit\n"
 	message += colorMuted.markup("No FF") + " always creates a merge commit\n\n"
 	message += colorMuted.markup("Local changes will be stashed and restored automatically.")
 
@@ -1583,7 +1583,7 @@ func (t *TUI) abortMerge() {
 	t.setupPrompt(page, prompt)
 }
 
-// continueSquash 提交待完成的 squash；冲突未解决时 git 会报错。
+// continueSquash 提交待完成的 squash（冲突解决或自动提交失败后）；冲突未解决时 git 会报错。
 func (t *TUI) continueSquash() {
 	if t.commitOp == nil || t.commitOp.Loading() {
 		return
@@ -3020,7 +3020,7 @@ func (t *TUI) commitOpLabel(req commitOpRequest, done bool) string {
 	case opMerge:
 		if req.mergeMode == core.MergeSquash {
 			if done {
-				return "squashed " + req.commit.ShortHash() + " (staged)"
+				return "squashed " + req.commit.ShortHash()
 			}
 			return "squashing " + req.commit.ShortHash()
 		}

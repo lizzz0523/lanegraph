@@ -18,7 +18,7 @@ type State struct {
 	Rebasing bool
 	// Merging 表示仓库有未完成的 merge（冲突解决中）。
 	Merging bool
-	// Squashing 表示 squash merge 已应用但尚未提交。
+	// Squashing 表示 squash merge 已应用但尚未提交，通常是有冲突或自动提交失败。
 	Squashing bool
 
 	Branches []Branch
