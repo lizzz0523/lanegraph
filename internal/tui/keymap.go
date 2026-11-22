@@ -1,9 +1,16 @@
 package tui
 
+import (
+	"strings"
+
+	"github.com/mattn/go-runewidth"
+)
+
 // keymap 集中定义 TUI 中所有可打印字符快捷键。
 // Ctrl 组合键、Esc、Tab、Enter 等 tcell.Key 不在其中，仍在各控件里直接判断。
 var keymap = struct {
 	quit rune
+	help rune
 
 	globalPull         rune
 	globalPush         rune
@@ -43,6 +50,7 @@ var keymap = struct {
 	dialogClose rune
 }{
 	quit: 'q',
+	help: '?',
 
 	globalPull:         'p',
 	globalPush:         'P',
@@ -82,56 +90,105 @@ var keymap = struct {
 	dialogClose: 'q',
 }
 
+// keyLabel 把 rune 转成帮助弹窗里展示的按键文本。
+func keyLabel(key rune) string {
+	if key == ' ' {
+		return "Space"
+	}
+	return string(key)
+}
+
 // keyBinding 描述一个快捷键及其说明。
 type keyBinding struct {
-	key  rune
+	keys string
 	desc string
 }
 
-// keyBindings 按面板分组维护 keymap 中按键的说明，供帮助面板等场景使用。
+// keyBindings 按面板分组维护快捷键说明，同时用于帮助弹窗。
 var keyBindings = []struct {
 	name     string
 	bindings []keyBinding
 }{
 	{"Global", []keyBinding{
-		{keymap.quit, "Quit"},
-		{keymap.globalPull, "Pull current branch"},
-		{keymap.globalPush, "Push current branch"},
-		{keymap.globalFetch, "Fetch remote refs"},
-		{keymap.globalCreateBranch, "Create and checkout branch from HEAD"},
-		{keymap.globalCreateTag, "Create tag from HEAD"},
+		{keyLabel(keymap.quit) + " / Ctrl+Q", "Quit"},
+		{keyLabel(keymap.globalPull), "Pull current branch"},
+		{keyLabel(keymap.globalPush), "Push current branch"},
+		{keyLabel(keymap.globalFetch), "Fetch remote refs"},
+		{keyLabel(keymap.globalCreateBranch), "Create and checkout branch from HEAD"},
+		{keyLabel(keymap.globalCreateTag), "Create tag from HEAD"},
+		{keyLabel(keymap.help), "Show this help"},
 	}},
-	{"Commit", []keyBinding{
-		{keymap.commitReset, "Reset current branch to selected commit"},
-		{keymap.commitRebase, "Rebase current branch onto selected commit"},
-		{keymap.commitInteractiveRebase, "Start interactive rebase"},
-		{keymap.commitReword, "Reword selected commit"},
-		{keymap.commitMerge, "Merge selected commit into current branch"},
-		{keymap.commitBranch, "Create branch from selected commit"},
-		{keymap.commitTag, "Create tag from selected commit"},
-		{keymap.commitInfo, "Show full commit message"},
+	{"Branchs & Tags", []keyBinding{
+		{keyLabel(keymap.refCheckout), "Checkout branch or tag"},
+		{keyLabel(keymap.refDelete), "Delete ref"},
 	}},
-	{"Files", []keyBinding{
-		{keymap.fileOpen, "Open file in default app"},
-		{keymap.fileHistory, "Show file history"},
-		{keymap.diffWhitespace, "Toggle whitespace"},
-		{keymap.diffSideBySide, "Toggle side-by-side view"},
+	{"All commits", []keyBinding{
+		{keyLabel(keymap.commitReset), "Reset current branch to selected commit"},
+		{keyLabel(keymap.commitRebase), "Rebase current branch onto selected commit"},
+		{keyLabel(keymap.commitInteractiveRebase), "Start interactive rebase"},
+		{keyLabel(keymap.commitReword), "Reword selected commit"},
+		{keyLabel(keymap.commitMerge), "Merge selected commit into current branch"},
+		{keyLabel(keymap.commitBranch), "Create branch from selected commit"},
+		{keyLabel(keymap.commitTag), "Create tag from selected commit"},
+	}},
+	{"Rebase Interative", []keyBinding{
+		{"← / " + keyLabel(keymap.rebasePrev), "Previous rebase action"},
+		{"→ / " + keyLabel(keymap.rebaseNext), "Next rebase action"},
+	}},
+	{"Commit info", []keyBinding{
+		{keyLabel(keymap.commitInfo), "Show full commit message"},
+	}},
+	{"File changes", []keyBinding{
+		{keyLabel(keymap.fileOpen), "Open file in default app"},
+		{keyLabel(keymap.fileHistory), "Show file history"},
+		{keyLabel(keymap.diffWhitespace), "Toggle whitespace"},
+		{keyLabel(keymap.diffSideBySide), "Toggle side-by-side view"},
 	}},
 	{"Local changes", []keyBinding{
-		{keymap.changeStage, "Stage or unstage file or folder"},
-		{keymap.changeDiscard, "Discard changes"},
+		{keyLabel(keymap.changeStage), "Stage or unstage file or folder"},
+		{keyLabel(keymap.changeDiscard), "Discard changes"},
+		{keyLabel(keymap.fileOpen), "Open file in default app"},
+		{keyLabel(keymap.fileHistory), "Show file history"},
+		{keyLabel(keymap.diffWhitespace), "Toggle whitespace"},
+		{keyLabel(keymap.diffSideBySide), "Toggle side-by-side view"},
 	}},
-	{"Refs", []keyBinding{
-		{keymap.refCheckout, "Checkout branch or tag"},
-		{keymap.refDelete, "Delete ref"},
+	{"Navigation", []keyBinding{
+		{"↑ / ↓ or " + keyLabel(keymap.listDown) + " / " + keyLabel(keymap.listUp), "Move cursor"},
+		{"PgUp / PgDn", "Page up or down"},
+		{"Home / End or " + keyLabel(keymap.listFirst) + " / " + keyLabel(keymap.listLast), "First or last item"},
+		{"Tab / Shift+Tab", "Switch focus"},
+		{"Enter", "Confirm or expand folder"},
+		{"Esc", "Close popup or leave input"},
+		{keyLabel(keymap.dialogClose), "Close popup"},
 	}},
-	{"Dialogs", []keyBinding{
-		{keymap.dialogClose, "Close popup"},
-		{keymap.listDown, "Next item"},
-		{keymap.listUp, "Previous item"},
-		{keymap.listFirst, "First item"},
-		{keymap.listLast, "Last item"},
-		{keymap.rebasePrev, "Previous rebase action"},
-		{keymap.rebaseNext, "Next rebase action"},
-	}},
+}
+
+// renderKeyBindings 生成帮助弹窗展示的快捷键列表。
+func renderKeyBindings() string {
+	width := 0
+	for _, group := range keyBindings {
+		for _, binding := range group.bindings {
+			if w := runewidth.StringWidth(binding.keys); w > width {
+				width = w
+			}
+		}
+	}
+
+	var text strings.Builder
+	for i, group := range keyBindings {
+		if i > 0 {
+			text.WriteString("\n")
+		}
+		text.WriteString(colorAccent.markup(group.name, true))
+		text.WriteString("\n")
+		for _, binding := range group.bindings {
+			text.WriteString("  ")
+			text.WriteString(colorAccent.markup(binding.keys))
+			text.WriteString(strings.Repeat(" ", width-runewidth.StringWidth(binding.keys)))
+			text.WriteString("   ")
+			text.WriteString(binding.desc)
+			text.WriteString("\n")
+		}
+	}
+	return text.String()
 }

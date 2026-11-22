@@ -36,6 +36,8 @@ type TUI struct {
 	mainPanels *tview.Pages
 	statusBar  *tview.TextView
 	statusRow  *tview.Flex
+	// keybindHint 是状态栏右侧的 “Keybindings: ?” 提示，和 Continue/Abort 互斥显示。
+	keybindHint *tview.TextView
 	// continueButton / abortButton 按当前未完成的操作（rebase / merge / squash）显示对应文案和动作；
 	// 没有未完成操作时宽度为 0。
 	continueButton *tview.Button
@@ -55,9 +57,10 @@ type TUI struct {
 	commitButton      *tview.Button
 	amendCheck        *tview.Checkbox
 
-	rebaseForm  *rebaseForm  // interactive rebase 弹窗
-	rewordForm  *rewordForm  // 单条 commit reword 弹窗
-	historyView *historyView // 文件历史弹窗
+	rebaseForm  *rebaseForm     // interactive rebase 弹窗
+	rewordForm  *rewordForm     // 单条 commit reword 弹窗
+	historyView *historyView    // 文件历史弹窗
+	returnFocus tview.Primitive // 打开弹窗前聚焦的控件，关闭弹窗后恢复
 
 	tabStyle            tcell.Style
 	tabActiveStyle      tcell.Style
@@ -80,6 +83,7 @@ type TUI struct {
 	syncStop          chan struct{}     // 关闭后停止分支同步动画
 	statusMsg         string            // 最近一次操作结果，进行中项清空后保留
 	statusBusy        map[string]string // statusBar 当前展示的进行中项，key 为槽位
+	helpVisible       bool              // 快捷键帮助弹窗是否正在显示
 	promptVisible     bool              // 确认弹窗是否正在显示
 	rebaseVisible     bool              // interactive rebase 弹窗是否正在显示
 	rewordVisible     bool              // 单条 commit reword 弹窗是否正在显示
@@ -104,6 +108,21 @@ func (t *TUI) Run() error {
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		// 弹窗显示时，Esc/q 只关闭弹窗；Ctrl+Q 仍然随时可退出。
 		// Tab/Backtab 在弹窗内部循环焦点。
+		if t.helpVisible {
+			switch event.Key() {
+			case tcell.KeyEscape:
+				t.closeHelp()
+				return nil
+			case tcell.KeyRune:
+				if event.Rune() == keymap.dialogClose || event.Rune() == keymap.help {
+					t.closeHelp()
+					return nil
+				}
+			case tcell.KeyTab, tcell.KeyBacktab:
+				return nil
+			}
+		}
+
 		if t.rebaseVisible {
 			switch event.Key() {
 			case tcell.KeyEscape:
@@ -204,6 +223,9 @@ func (t *TUI) Run() error {
 		// B / T 全局从当前 HEAD 创建并检出分支 / 创建标签；输入框输入时不拦截。
 		case event.Key() == tcell.KeyRune && !typing && !t.popupVisible():
 			switch event.Rune() {
+			case keymap.help:
+				t.openHelp()
+				return nil
 			case keymap.globalPull:
 				t.syncBranch(opPull)
 				return nil
@@ -775,8 +797,20 @@ func (t *TUI) setupUI() tview.Primitive {
 	abortButton.SetStyle(dangerStyle).SetActivatedStyle(dangerStyle)
 	bindStatusButton(abortButton)
 
+	// 右侧平时显示快捷键入口，有未完成操作时让位给 Continue/Abort。
+	hintText := "Keybindings: ?"
+	hintWidth := tview.TaggedStringWidth(hintText) + 2
+
+	keybindHint := tview.NewTextView().
+		SetDynamicColors(true).
+		SetWrap(false).
+		SetTextAlign(tview.AlignRight).
+		SetText(colorAccent.markup(hintText))
+	keybindHint.SetBorderPadding(0, 0, 1, 1)
+
 	statusRow := tview.NewFlex().
 		AddItem(statusBar, 0, 1, false).
+		AddItem(keybindHint, hintWidth, 0, false).
 		AddItem(continueButton, 0, 0, false).
 		AddItem(abortButton, 0, 0, false).
 		AddItem(nil, 1, 0, false)
@@ -798,6 +832,7 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.mainPanels = mainPanels
 	t.statusBar = statusBar
 	t.statusRow = statusRow
+	t.keybindHint = keybindHint
 	t.continueButton = continueButton
 	t.abortButton = abortButton
 
@@ -856,7 +891,8 @@ func (t *TUI) setupPrompt(name string, prompt *tview.Modal) {
 		Background(colorText.cell).
 		Foreground(colorOnAccent.cell))
 
-	t.openPrompt(name, prompt)
+	t.promptVisible = true
+	t.openPopup(name, prompt, prompt)
 }
 
 func (t *TUI) setupTasks() {
@@ -1149,7 +1185,7 @@ func (t *TUI) focusOnScrollTree(p scrollFocusable, onClick func()) {
 
 // popupVisible 表示有弹窗正在显示；用于屏蔽底层快捷键和防止弹窗叠加。
 func (t *TUI) popupVisible() bool {
-	return t.promptVisible || t.rebaseVisible || t.rewordVisible || t.historyVisible || t.commitInfoVisible
+	return t.promptVisible || t.rebaseVisible || t.rewordVisible || t.historyVisible || t.commitInfoVisible || t.helpVisible
 }
 
 /** EVENT */
@@ -1215,11 +1251,30 @@ func (t *TUI) setFocusBorder(box *tview.Box, focused bool) {
 	box.SetBorderColor(color).SetTitleColor(color)
 }
 
-// openPrompt 把弹窗作为独立页面打开并设置焦点。
-func (t *TUI) openPrompt(name string, page tview.Primitive) {
-	t.promptVisible = true
+// openPopup 记录打开前的焦点，并把弹窗页面覆盖到主界面上。
+// page 是添加到 Pages 的容器，focus 是实际接收键盘的控件；两者相同时传同一个值。
+func (t *TUI) openPopup(name string, page, focus tview.Primitive) {
+	if t.returnFocus == nil {
+		t.returnFocus = t.app.GetFocus()
+	}
 	t.root.AddPage(name, page, true, true)
-	t.app.SetFocus(page)
+	t.app.SetFocus(focus)
+}
+
+// closePopup 关闭弹窗页面，并把焦点还给打开前的控件。
+// 打开时焦点为空时，回到当前 tab 的列表。
+func (t *TUI) closePopup(name string) {
+	t.root.RemovePage(name)
+	if t.returnFocus != nil {
+		t.app.SetFocus(t.returnFocus)
+		t.returnFocus = nil
+		return
+	}
+	if t.activeTab == tabChange {
+		t.app.SetFocus(t.changeList)
+	} else {
+		t.app.SetFocus(t.commitList)
+	}
 }
 
 func (t *TUI) switchTab(tag string) {
@@ -1386,9 +1441,8 @@ func (t *TUI) resetCommit() {
 		SetText(message).
 		AddButtons([]string{"Cancel", "Soft", "Mixed", "Hard"}).
 		SetDoneFunc(func(buttonIndex int, _ string) {
-			t.root.RemovePage(page)
 			t.promptVisible = false
-			t.app.SetFocus(t.commitList)
+			t.closePopup(page)
 			switch buttonIndex {
 			case 1:
 				t.executeReset(commit, core.ResetSoft)
@@ -1424,9 +1478,8 @@ func (t *TUI) rebaseCommit() {
 		SetText(message).
 		AddButtons([]string{"Cancel", "Rebase"}).
 		SetDoneFunc(func(buttonIndex int, _ string) {
-			t.root.RemovePage(page)
 			t.promptVisible = false
-			t.app.SetFocus(t.commitList)
+			t.closePopup(page)
 			if buttonIndex == 1 {
 				t.executeRebase(base)
 			}
@@ -1501,8 +1554,7 @@ func (t *TUI) closeRebaseInteractive() {
 	t.rebasePopup = nil
 	t.rebaseForm = nil
 	t.rebaseVisible = false
-	t.root.RemovePage("interactive-rebase")
-	t.app.SetFocus(t.commitList)
+	t.closePopup("interactive-rebase")
 }
 
 // confirmRebaseInteractive 校验动作后关闭弹窗并执行 interactive rebase。
@@ -1561,8 +1613,7 @@ func (t *TUI) closeReword() {
 	t.rewordPopup = nil
 	t.rewordForm = nil
 	t.rewordVisible = false
-	t.root.RemovePage("reword")
-	t.app.SetFocus(t.commitList)
+	t.closePopup("reword")
 }
 
 // confirmReword 读取表单内容，关闭弹窗并改写提交信息。
@@ -1595,21 +1646,14 @@ func (t *TUI) abortRebase() {
 		return
 	}
 
-	previous := t.app.GetFocus()
-
 	const page = "rebase-abort"
 
 	prompt := tview.NewModal().
 		SetText("Abort rebase?\n\nAll conflict resolutions will be lost.").
 		AddButtons([]string{"Cancel", "Abort"}).
 		SetDoneFunc(func(buttonIndex int, _ string) {
-			t.root.RemovePage(page)
 			t.promptVisible = false
-			if previous != nil {
-				t.app.SetFocus(previous)
-			} else {
-				t.app.SetFocus(t.commitList)
-			}
+			t.closePopup(page)
 			if buttonIndex == 1 {
 				t.executeCommitOp(opRebaseAbort)
 			}
@@ -1643,9 +1687,8 @@ func (t *TUI) mergeCommit() {
 		SetText(message).
 		AddButtons([]string{"Cancel", "Merge", "Squash", "No FF"}).
 		SetDoneFunc(func(buttonIndex int, _ string) {
-			t.root.RemovePage(page)
 			t.promptVisible = false
-			t.app.SetFocus(t.commitList)
+			t.closePopup(page)
 			switch buttonIndex {
 			case 1:
 				t.executeMerge(commit, core.MergeFF)
@@ -1673,21 +1716,14 @@ func (t *TUI) abortMerge() {
 		return
 	}
 
-	previous := t.app.GetFocus()
-
 	const page = "merge-abort"
 
 	prompt := tview.NewModal().
 		SetText("Abort merge?\n\nAll conflict resolutions will be lost.").
 		AddButtons([]string{"Cancel", "Abort"}).
 		SetDoneFunc(func(buttonIndex int, _ string) {
-			t.root.RemovePage(page)
 			t.promptVisible = false
-			if previous != nil {
-				t.app.SetFocus(previous)
-			} else {
-				t.app.SetFocus(t.commitList)
-			}
+			t.closePopup(page)
 			if buttonIndex == 1 {
 				t.executeCommitOp(opMergeAbort)
 			}
@@ -1710,21 +1746,14 @@ func (t *TUI) abortSquash() {
 		return
 	}
 
-	previous := t.app.GetFocus()
-
 	const page = "squash-abort"
 
 	prompt := tview.NewModal().
 		SetText("Abort squash?\n\nStaged squash changes and conflict resolutions will be lost.\n\n" + colorMuted.markup("Local changes stashed before the merge will be restored.")).
 		AddButtons([]string{"Cancel", "Abort"}).
 		SetDoneFunc(func(buttonIndex int, _ string) {
-			t.root.RemovePage(page)
 			t.promptVisible = false
-			if previous != nil {
-				t.app.SetFocus(previous)
-			} else {
-				t.app.SetFocus(t.commitList)
-			}
+			t.closePopup(page)
 			if buttonIndex == 1 {
 				t.executeCommitOp(opSquashAbort)
 			}
@@ -1797,20 +1826,16 @@ func (t *TUI) openCommitInfo() {
 	})
 
 	t.commitInfoVisible = true
-	t.root.AddPage("commit-info", popup, true, true)
-	t.app.SetFocus(commitInfo)
+	t.openPopup("commit-info", popup, commitInfo)
 }
 
-// closeCommitInfo 关闭 commit 详情弹窗，把焦点还给 commit 信息面板。
+// closeCommitInfo 关闭 commit 详情弹窗。
 func (t *TUI) closeCommitInfo() {
 	if !t.commitInfoVisible {
 		return
 	}
 	t.commitInfoVisible = false
-	t.root.RemovePage("commit-info")
-	if t.commitInfo != nil {
-		t.app.SetFocus(t.commitInfo)
-	}
+	t.closePopup("commit-info")
 }
 
 // openFile 用系统默认应用打开当前选中的文件；目录、分组和占位节点忽略。
@@ -1873,13 +1898,12 @@ func (t *TUI) openHistory(node *tview.TreeNode) {
 	t.historyPopup = &historyPopup{change: change}
 	t.historyView = view
 	t.historyVisible = true
-	t.root.AddPage("history", view.view, true, true)
-	t.app.SetFocus(view.list)
+	t.openPopup("history", view.view, view.list)
 
 	t.requestHistory(change.Path)
 }
 
-// closeHistory 关闭文件历史弹窗，并把焦点还给当前 tab 的列表。
+// closeHistory 关闭文件历史弹窗。
 func (t *TUI) closeHistory() {
 	if !t.historyVisible {
 		return
@@ -1889,12 +1913,7 @@ func (t *TUI) closeHistory() {
 	t.tasks.fileHistoryDiff.Cancel()
 	t.historyPopup = nil
 	t.historyView = nil
-	t.root.RemovePage("history")
-	if t.activeTab == tabChange {
-		t.app.SetFocus(t.changeList)
-	} else {
-		t.app.SetFocus(t.fileList)
-	}
+	t.closePopup("history")
 }
 
 // selectHistory 在历史列表中切换选中项时请求对应 commit 的文件 diff。
@@ -2000,9 +2019,8 @@ func (t *TUI) discardLocalChange() {
 		SetText(message).
 		AddButtons([]string{"Cancel", "Discard"}).
 		SetDoneFunc(func(buttonIndex int, _ string) {
-			t.root.RemovePage(page)
 			t.promptVisible = false
-			t.app.SetFocus(t.changeList)
+			t.closePopup(page)
 			if buttonIndex == 1 {
 				t.executeChangeOp(opDiscard, []core.FileChange{change}, change.Path)
 			}
@@ -2098,8 +2116,6 @@ func (t *TUI) createRef(op createOp, commit *core.Commit) {
 		return
 	}
 
-	previous := t.app.GetFocus()
-
 	label := "Branch name "
 	action := "Create and checkout a new branch"
 	if op == opCreateTag {
@@ -2131,20 +2147,16 @@ func (t *TUI) createRef(op createOp, commit *core.Commit) {
 			}
 		}
 
-		t.root.RemovePage(page)
 		t.promptVisible = false
-		if previous != nil {
-			t.app.SetFocus(previous)
-		} else {
-			t.app.SetFocus(t.commitList)
-		}
+		t.closePopup(page)
 
 		if buttonIndex == 1 {
 			t.executeCreate(op, name, commit)
 		}
 	})
 
-	t.openPrompt(page, prompt)
+	t.promptVisible = true
+	t.openPopup(page, prompt, prompt)
 }
 
 // deleteRef 先弹窗确认，再删除选中的本地分支、远端分支或标签。
@@ -2162,8 +2174,6 @@ func (t *TUI) deleteRef(node *tview.TreeNode) {
 	default:
 		return
 	}
-
-	previous := t.app.GetFocus()
 
 	buttons := []string{"Cancel", "Delete"}
 	var message string
@@ -2188,13 +2198,8 @@ func (t *TUI) deleteRef(node *tview.TreeNode) {
 		SetText(message).
 		AddButtons(buttons).
 		SetDoneFunc(func(buttonIndex int, _ string) {
-			t.root.RemovePage(page)
 			t.promptVisible = false
-			if previous != nil {
-				t.app.SetFocus(previous)
-			} else {
-				t.app.SetFocus(t.refList)
-			}
+			t.closePopup(page)
 			switch buttonIndex {
 			case 1:
 				t.executeDelete(req)
@@ -2205,6 +2210,81 @@ func (t *TUI) deleteRef(node *tview.TreeNode) {
 		})
 
 	t.setupPrompt(page, prompt)
+}
+
+// openHelp 弹出快捷键帮助窗口。
+func (t *TUI) openHelp() {
+	if t.root == nil || t.popupVisible() {
+		return
+	}
+
+	help := tview.NewTextView().
+		SetDynamicColors(true).
+		SetScrollable(true).
+		SetWrap(false).
+		SetText(renderKeyBindings())
+	help.SetBackgroundColor(colorPopup.cell)
+
+	hint := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter).
+		SetText(colorMuted.markup("j/k or ↑/↓ scroll · esc/q close"))
+	hint.SetBackgroundColor(colorPopup.cell)
+
+	// 提示固定在顶部，只有下面的快捷键列表随内容滚动；提示上下各留一行空行。
+	body := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(nil, 1, 0, false).
+		AddItem(hint, 1, 0, false).
+		AddItem(nil, 1, 0, false).
+		AddItem(help, 0, 1, true)
+
+	// Flex 默认不清理自身区域，nil 占位行会露出下面的主界面；
+	// 换成普通 Box 后先铺满弹窗底色再画子项。
+	body.Box = tview.NewBox()
+
+	body.SetTitle(" keybindings ").
+		SetTitleAlign(tview.AlignLeft).
+		SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1).
+		SetBackgroundColor(colorPopup.cell)
+	body.SetBorderStyle(tcell.StyleDefault.
+		Foreground(t.borderFocusColor).
+		Background(colorPopup.cell))
+
+	// 焦点在下面滚动的列表上，边框跟着它切换高亮。
+	help.SetFocusFunc(func() { t.setFocusBorder(body.Box, true) }).
+		SetBlurFunc(func() { t.setFocusBorder(body.Box, false) })
+
+	// 左右按比例留白，窄终端下也能保留足够的说明宽度。
+	inner := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(nil, 10, 0, false).
+		AddItem(body, 0, 1, true).
+		AddItem(nil, 10, 0, false)
+
+	popup := tview.NewFlex().
+		AddItem(nil, 0, 2, false).
+		AddItem(inner, 0, 3, true).
+		AddItem(nil, 0, 2, false)
+
+	// 只有滚动列表接收鼠标；其余区域直接消费，避免点击穿透到下面的主界面。
+	popup.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if help.InRect(event.Position()) {
+			return action, event
+		}
+		return tview.MouseConsumed, nil
+	})
+
+	t.helpVisible = true
+	t.openPopup("help", popup, help)
+}
+
+// closeHelp 关闭快捷键帮助弹窗。
+func (t *TUI) closeHelp() {
+	if !t.helpVisible {
+		return
+	}
+	t.helpVisible = false
+	t.closePopup("help")
 }
 
 /** REFS */
@@ -2934,8 +3014,6 @@ func (t *TUI) promptForcePush() {
 		return
 	}
 
-	previous := t.app.GetFocus()
-
 	message := fmt.Sprintf("The remote branch has commits that are not in your local branch.\n\nForce push %s to its upstream?\n\n",
 		tview.Escape(t.HeadRef))
 
@@ -2947,13 +3025,8 @@ func (t *TUI) promptForcePush() {
 		SetText(message).
 		AddButtons([]string{"Cancel", "Force Push"}).
 		SetDoneFunc(func(buttonIndex int, _ string) {
-			t.root.RemovePage(page)
 			t.promptVisible = false
-			if previous != nil {
-				t.app.SetFocus(previous)
-			} else {
-				t.app.SetFocus(t.refList)
-			}
+			t.closePopup(page)
 			if buttonIndex == 1 {
 				t.executeSync(opPushForce)
 			}
@@ -3289,7 +3362,7 @@ func (t *TUI) renderStatus() {
 // renderInProgressActions 按 rebase / merge / squash 状态切换 statusBar 右侧 Continue / Abort 的文案和动作。
 // 这些操作不会同时进行；同时处于未完成状态时按 rebase、merge、squash 的顺序优先显示。
 func (t *TUI) renderInProgressActions() {
-	if t.statusRow == nil || t.continueButton == nil || t.abortButton == nil {
+	if t.statusRow == nil || t.keybindHint == nil || t.continueButton == nil || t.abortButton == nil {
 		return
 	}
 
@@ -3316,4 +3389,11 @@ func (t *TUI) renderInProgressActions() {
 	}
 	t.statusRow.ResizeItem(t.continueButton, continueWidth, 0)
 	t.statusRow.ResizeItem(t.abortButton, abortWidth, 0)
+
+	// 没有未完成操作时在同样的位置显示快捷键提示。
+	hintWidth := 0
+	if continueLabel == "" {
+		hintWidth = tview.TaggedStringWidth(t.keybindHint.GetText(true)) + 2
+	}
+	t.statusRow.ResizeItem(t.keybindHint, hintWidth, 0)
 }
