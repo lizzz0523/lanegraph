@@ -20,6 +20,8 @@ type State struct {
 	Merging bool
 	// Squashing 表示 squash merge 已应用但尚未提交，通常是有冲突或自动提交失败。
 	Squashing bool
+	// CherryPicking 表示仓库有未完成的 cherry-pick（冲突解决中）。
+	CherryPicking bool
 
 	Branches []Branch
 	Tags     []Tag
@@ -48,27 +50,29 @@ func NewState(ctx context.Context, repo string) (State, error) {
 		return State{}, err
 	}
 
+	s.Branches = refs.Branches
+	s.Tags = refs.Tags
 	s.RepoName = filepath.Base(repo)
 	s.HeadRef = refs.HeadRef
 	s.HeadHash = refs.HeadHash
 	s.Rebasing = refs.Rebasing
 	s.Merging = refs.Merging
 	s.Squashing = refs.Squashing
-	s.Branches = refs.Branches
-	s.Tags = refs.Tags
+	s.CherryPicking = refs.CherryPicking
 	s.Commits = commits
 	return s, nil
 }
 
 // Refs 是仓库的分支、标签与 HEAD 快照。
 type Refs struct {
-	Branches  []Branch
-	Tags      []Tag
-	HeadRef   string
-	HeadHash  string
-	Rebasing  bool
-	Merging   bool
-	Squashing bool
+	Branches      []Branch
+	Tags          []Tag
+	HeadRef       string
+	HeadHash      string
+	Rebasing      bool
+	Merging       bool
+	Squashing     bool
+	CherryPicking bool
 }
 
 // Refs 返回仓库的分支、标签与 HEAD 快照。
@@ -83,13 +87,14 @@ func (s *State) Refs(ctx context.Context) (Refs, error) {
 	}
 	headRef, headHash := GitRepoHead(ctx, s.Repo)
 	return Refs{
-		Branches:  branches,
-		Tags:      tags,
-		HeadRef:   headRef,
-		HeadHash:  headHash,
-		Rebasing:  GitRebaseInProgress(ctx, s.Repo),
-		Merging:   GitMergeInProgress(ctx, s.Repo),
-		Squashing: GitSquashInProgress(ctx, s.Repo),
+		Branches:      branches,
+		Tags:          tags,
+		HeadRef:       headRef,
+		HeadHash:      headHash,
+		Rebasing:      GitRebaseInProgress(ctx, s.Repo),
+		Merging:       GitMergeInProgress(ctx, s.Repo),
+		Squashing:     GitSquashInProgress(ctx, s.Repo),
+		CherryPicking: GitCherryPickInProgress(ctx, s.Repo),
 	}, nil
 }
 
@@ -214,6 +219,21 @@ func (s *State) SquashContinue(ctx context.Context) (string, error) {
 // SquashAbort 取消待完成的 squash。
 func (s *State) SquashAbort(ctx context.Context) (string, error) {
 	return GitSquashAbort(ctx, s.Repo)
+}
+
+// CherryPick 把 commit 应用到当前分支。
+func (s *State) CherryPick(ctx context.Context, commit Commit) (string, error) {
+	return GitCherryPick(ctx, s.Repo, commit)
+}
+
+// CherryPickContinue 在冲突解决并暂存后继续 cherry-pick。
+func (s *State) CherryPickContinue(ctx context.Context) (string, error) {
+	return GitCherryPickContinue(ctx, s.Repo)
+}
+
+// CherryPickAbort 取消未完成的 cherry-pick。
+func (s *State) CherryPickAbort(ctx context.Context) (string, error) {
+	return GitCherryPickAbort(ctx, s.Repo)
 }
 
 // Commit 用 subject 和可选的 description 提交暂存区改动；amend 为 true 时改写 HEAD 提交。

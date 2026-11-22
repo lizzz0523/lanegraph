@@ -109,6 +109,9 @@ const (
 	opMergeAbort
 	opSquashContinue
 	opSquashAbort
+	opCherryPick
+	opCherryPickContinue
+	opCherryPickAbort
 	opCommit
 )
 

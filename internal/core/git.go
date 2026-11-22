@@ -714,6 +714,115 @@ func GitSquashAbort(ctx context.Context, repo string) (string, error) {
 	return output, nil
 }
 
+// cherryPickAutostash 是 cherry-pick 自动暂存使用的标记，作用类似 git 的 MERGE_AUTOSTASH。
+const cherryPickAutostash = "LANEGRAPH_CHERRY_PICK_AUTOSTASH"
+
+// GitCherryPick 把 commit 应用到当前分支，并自动暂存和恢复本地改动。
+func GitCherryPick(ctx context.Context, repo string, commit Commit) (string, error) {
+	if err := gitAutostash(ctx, repo, cherryPickAutostash); err != nil {
+		return "", err
+	}
+
+	output, err := gitOutput(ctx, repo, nil, "cherry-pick", commit.Hash)
+	if err != nil {
+		// 只有停在冲突态时才把 stash 留给 Continue / Abort 恢复。
+		if !GitCherryPickInProgress(ctx, repo) {
+			restored, _ := gitUnstash(ctx, repo, cherryPickAutostash)
+			output += restored
+		}
+		return output, fmt.Errorf("git cherry-pick error: %w", gitStderr(err))
+	}
+
+	restored, _ := gitUnstash(ctx, repo, cherryPickAutostash)
+	return output + restored, nil
+}
+
+// GitCherryPickInProgress 返回仓库是否停在未完成的 cherry-pick 中。
+func GitCherryPickInProgress(ctx context.Context, repo string) bool {
+	return gitPathExists(ctx, repo, "CHERRY_PICK_HEAD")
+}
+
+// GitCherryPickContinue 在冲突解决并暂存后继续 cherry-pick，返回 git 的输出；完成后恢复之前暂存的本地改动。
+func GitCherryPickContinue(ctx context.Context, repo string) (string, error) {
+	output, err := gitOutput(ctx, repo, gitContinueEnv(), "cherry-pick", "--continue")
+	if err != nil {
+		return "", fmt.Errorf("git cherry-pick continue error: %w", gitStderr(err))
+	}
+	restored, _ := gitUnstash(ctx, repo, cherryPickAutostash)
+	return output + restored, nil
+}
+
+// GitCherryPickAbort 取消未完成的 cherry-pick，恢复到 cherry-pick 之前的状态；完成后恢复之前暂存的本地改动。
+func GitCherryPickAbort(ctx context.Context, repo string) (string, error) {
+	output, err := gitOutput(ctx, repo, nil, "cherry-pick", "--abort")
+	if err != nil {
+		return "", fmt.Errorf("git cherry-pick abort error: %w", gitStderr(err))
+	}
+	restored, _ := gitUnstash(ctx, repo, cherryPickAutostash)
+	return output + restored, nil
+}
+
+// gitAutostash 暂存本地改动，并把 stash hash 记录到 name 指定的 git 路径。
+// 没有本地改动时不写记录；name 同时用作 stash 列表里的标记。
+func gitAutostash(ctx context.Context, repo, name string) error {
+	before, _ := gitOutputTrimmed(ctx, repo, "rev-parse", "--verify", "refs/stash")
+	if _, err := gitOutput(ctx, repo, nil, "stash", "push", "-m", name); err != nil {
+		return fmt.Errorf("git stash push error: %w", gitStderr(err))
+	}
+	hash, err := gitOutputTrimmed(ctx, repo, "rev-parse", "--verify", "refs/stash")
+	if err != nil || hash == "" || hash == before {
+		return nil
+	}
+
+	path, ok := gitPath(ctx, repo, name)
+	if !ok {
+		_, _ = gitOutput(ctx, repo, nil, "stash", "pop")
+		return errors.New("git path not found: " + name)
+	}
+	if err := os.WriteFile(path, []byte(hash+"\n"), 0o600); err != nil {
+		// 记录失败时立即恢复改动，避免它滞留在 stash 里。
+		_, _ = gitOutput(ctx, repo, nil, "stash", "pop")
+		return fmt.Errorf("write autostash error: %w", err)
+	}
+	return nil
+}
+
+// gitUnstash 恢复 name 记录的本地改动并删除记录。
+// 恢复冲突时保留 stash 条目，和 git --autostash 的行为一致，由用户自行处理。
+func gitUnstash(ctx context.Context, repo, name string) (string, error) {
+	path, ok := gitPath(ctx, repo, name)
+	if !ok {
+		return "", nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read autostash error: %w", err)
+	}
+	// 先清掉记录：即使恢复失败，也不能影响之后的操作。
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("remove autostash error: %w", err)
+	}
+
+	hash := strings.TrimSpace(string(data))
+	if hash == "" {
+		return "", nil
+	}
+
+	var output string
+	if top, topErr := gitOutputTrimmed(ctx, repo, "rev-parse", "--verify", "refs/stash"); topErr == nil && top == hash {
+		output, err = gitOutput(ctx, repo, nil, "stash", "pop")
+	} else {
+		output, err = gitOutput(ctx, repo, nil, "stash", "apply", hash)
+	}
+	if err != nil {
+		return output, fmt.Errorf("git stash restore error: %w", gitStderr(err))
+	}
+	return output, nil
+}
+
 // gitPathExists 判断 git 路径是否存在。
 func gitPathExists(ctx context.Context, repo, name string) bool {
 	path, ok := gitPath(ctx, repo, name)

@@ -23,6 +23,7 @@ var keymap = struct {
 	commitInteractiveRebase rune
 	commitReword            rune
 	commitMerge             rune
+	commitCherryPick        rune
 	commitBranch            rune
 	commitTag               rune
 	commitInfo              rune
@@ -63,6 +64,7 @@ var keymap = struct {
 	commitInteractiveRebase: 'i',
 	commitReword:            'w',
 	commitMerge:             'm',
+	commitCherryPick:        'c',
 	commitBranch:            'b',
 	commitTag:               't',
 	commitInfo:              ' ',
@@ -128,6 +130,7 @@ var keyBindings = []struct {
 		{keyLabel(keymap.commitInteractiveRebase), "Start interactive rebase"},
 		{keyLabel(keymap.commitReword), "Reword selected commit"},
 		{keyLabel(keymap.commitMerge), "Merge selected commit into current branch"},
+		{keyLabel(keymap.commitCherryPick), "Cherry-pick selected commit onto current branch"},
 		{keyLabel(keymap.commitBranch), "Create branch from selected commit"},
 		{keyLabel(keymap.commitTag), "Create tag from selected commit"},
 	}},
