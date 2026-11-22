@@ -899,6 +899,14 @@ func (t *TUI) setupPrompt(name string, prompt *tview.Modal) {
 		Background(colorText.cell).
 		Foreground(colorOnAccent.cell))
 
+	// 只有弹窗自身接收鼠标；其余区域直接消费，避免点击穿透到下面的主界面。
+	prompt.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if prompt.InRect(event.Position()) {
+			return action, event
+		}
+		return tview.MouseConsumed, nil
+	})
+
 	t.promptVisible = true
 	t.openPopup(name, prompt, prompt)
 }

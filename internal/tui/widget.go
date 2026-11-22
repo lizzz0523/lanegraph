@@ -67,6 +67,14 @@ func newModalForm(width int) *modalForm {
 	f.SetCancelFunc(func() {
 		f.finish(-1, "")
 	})
+
+	// 只有弹窗自身接收鼠标；其余区域直接消费，避免点击穿透到下面的主界面。
+	f.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if f.InRect(event.Position()) {
+			return action, event
+		}
+		return tview.MouseConsumed, nil
+	})
 	return f
 }
 
