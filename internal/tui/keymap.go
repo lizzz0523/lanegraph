@@ -124,7 +124,7 @@ var keyBindings = []struct {
 		{keyLabel(keymap.refCheckout), "Checkout branch or tag"},
 		{keyLabel(keymap.refDelete), "Delete branch or tag"},
 	}},
-	{"All commits", []keyBinding{
+	{"All Commits", []keyBinding{
 		{keyLabel(keymap.commitReset), "Reset current branch to selected commit"},
 		{keyLabel(keymap.commitRebase), "Rebase current branch onto selected commit"},
 		{keyLabel(keymap.commitInteractiveRebase), "Start interactive rebase"},
@@ -138,16 +138,16 @@ var keyBindings = []struct {
 		{"← / " + keyLabel(keymap.rebasePrev), "Previous rebase action"},
 		{"→ / " + keyLabel(keymap.rebaseNext), "Next rebase action"},
 	}},
-	{"Commit info", []keyBinding{
+	{"Commit Message", []keyBinding{
 		{keyLabel(keymap.commitInfo), "Show full commit message"},
 	}},
-	{"File changes", []keyBinding{
+	{"File Changes", []keyBinding{
 		{keyLabel(keymap.fileOpen), "Open file in default app"},
 		{keyLabel(keymap.fileHistory), "Show file history"},
 		{keyLabel(keymap.diffWhitespace), "Toggle whitespace"},
 		{keyLabel(keymap.diffSideBySide), "Toggle side-by-side view"},
 	}},
-	{"Local changes", []keyBinding{
+	{"Local Changes", []keyBinding{
 		{keyLabel(keymap.changeStage), "Stage or unstage file or folder"},
 		{keyLabel(keymap.changeDiscard), "Discard changes"},
 		{keyLabel(keymap.fileOpen), "Open file in default app"},
