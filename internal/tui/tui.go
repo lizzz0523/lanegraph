@@ -58,6 +58,14 @@ type TUI struct {
 	historyList *listView
 	historyDiff *tview.TextView
 
+	tabStyle            tcell.Style
+	tabActiveStyle      tcell.Style
+	selectedStyle       tcell.Style
+	headerStyle         tcell.Style
+	headerSelectedStyle tcell.Style
+	borderColor         tcell.Color
+	borderFocusColor    tcell.Color
+
 	activeTab         string // 当前显示的主面板 tab
 	infoWidth         int
 	diffWidth         int               // 当前 diff 渲染使用的面板内宽（side-by-side 时有效）
@@ -73,14 +81,6 @@ type TUI struct {
 	syncFrame         int               // 分支同步动画当前帧；-1 表示没有在执行同步操作
 	syncStop          chan struct{}     // 关闭后停止分支同步动画
 	quitting          bool              // 退出流程已启动，忽略重复退出
-
-	tabStyle            tcell.Style
-	tabActiveStyle      tcell.Style
-	selectedStyle       tcell.Style
-	headerStyle         tcell.Style
-	headerSelectedStyle tcell.Style
-	borderColor         tcell.Color
-	borderFocusColor    tcell.Color
 
 	refs    *async.Task[core.Refs, refsRequest]
 	commits *async.Task[[]core.Commit, commitsRequest]
@@ -885,10 +885,6 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.commitButton = commitButton
 	t.amendCheck = amendCheck
 
-	t.activeTab = tabCommit
-	t.statusBusy = make(map[string]string)
-	t.syncFrame = -1
-
 	t.tabStyle = defaultStyle
 	t.tabActiveStyle = accentStyle
 	t.selectedStyle = selectedStyle
@@ -897,6 +893,10 @@ func (t *TUI) setupUI() tview.Primitive {
 	// 边框和标题在未聚焦/聚焦时分别使用这两种颜色。
 	t.borderColor = colorBorder.cell
 	t.borderFocusColor = colorAccent.cell
+
+	t.activeTab = tabCommit
+	t.statusBusy = make(map[string]string)
+	t.syncFrame = -1
 
 	// SetRoot 只会对 commitList 触发 focus 回调，其余需手动初始化为未聚焦
 	t.setFocusBorder(filterText.Box, false)
