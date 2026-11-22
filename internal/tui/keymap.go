@@ -122,7 +122,7 @@ var keyBindings = []struct {
 	}},
 	{"Branchs & Tags", []keyBinding{
 		{keyLabel(keymap.refCheckout), "Checkout branch or tag"},
-		{keyLabel(keymap.refDelete), "Delete ref"},
+		{keyLabel(keymap.refDelete), "Delete branch or tag"},
 	}},
 	{"All commits", []keyBinding{
 		{keyLabel(keymap.commitReset), "Reset current branch to selected commit"},
