@@ -725,6 +725,10 @@ func (t *TUI) setupUI() tview.Primitive {
 	changeTab := tview.NewButton("Local Changes")
 	commitTab := tview.NewButton("All Commits")
 
+	// 按钮获得焦点时按 Enter 切换 tab；再次按下当前 tab 会刷新数据。
+	changeTab.SetSelectedFunc(func() { t.switchTab(tabChange) })
+	commitTab.SetSelectedFunc(func() { t.switchTab(tabCommit) })
+
 	// 左键按下也要吞掉，否则 Button 会自己 setFocus，抢走列表焦点。
 	bindTab := func(button *tview.Button, tag string) {
 		button.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
@@ -1237,9 +1241,9 @@ func (t *TUI) focusChain() []tview.Primitive {
 		return t.historyView.focusables()
 	}
 	if t.activeTab == tabChange {
-		return []tview.Primitive{t.filterText, t.refList, t.changeList, t.changeDiff, t.commitSubject, t.commitDescription, t.commitButton}
+		return []tview.Primitive{t.changeTab, t.commitTab, t.filterText, t.refList, t.changeList, t.changeDiff, t.commitSubject, t.commitDescription, t.commitButton}
 	}
-	return []tview.Primitive{t.filterText, t.refList, t.commitList, t.commitInfo, t.fileList, t.fileDiff}
+	return []tview.Primitive{t.changeTab, t.commitTab, t.filterText, t.refList, t.commitList, t.commitInfo, t.fileList, t.fileDiff}
 }
 
 // setFocusBorder 按焦点状态切换边框和标题颜色。
@@ -1329,11 +1333,13 @@ func (t *TUI) refreshTabStyles() {
 }
 
 func (t *TUI) setTabStyle(button *tview.Button, active bool) {
-	style := t.tabStyle
 	if active {
-		style = t.tabActiveStyle
+		// 激活 tab 保持强调色，聚焦时加粗，提示 Tab 焦点停在这里。
+		button.SetStyle(t.tabActiveStyle).SetActivatedStyle(t.tabActiveStyle.Bold(true))
+		return
 	}
-	button.SetStyle(style).SetActivatedStyle(style)
+	// 未激活 tab 获得焦点时用选中底色，和列表的选中态一致。
+	button.SetStyle(t.tabStyle).SetActivatedStyle(t.selectedStyle)
 }
 
 // refreshRefs 按当前 Branches / Tags 重建引用树；selected 为要选中的引用名，
