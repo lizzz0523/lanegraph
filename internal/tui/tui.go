@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"lanegraph/internal/async"
 	"lanegraph/internal/core"
-	"lanegraph/internal/loader"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -62,8 +62,8 @@ type TUI struct {
 	infoWidth         int
 	diffWidth         int               // 当前 diff 渲染使用的面板内宽（side-by-side 时有效）
 	historyWidth      int               // history 弹窗内 diff 的渲染宽度
-	statusMsg         string            // 最近一次操作结果，loading 结束后保留
-	statusBusy        map[string]string // statusBar 当前展示的 loading 项，key 为槽位
+	statusMsg         string            // 最近一次操作结果，进行中项清空后保留
+	statusBusy        map[string]string // statusBar 当前展示的进行中项，key 为槽位
 	pendingRef        string            // checkout 后等待 refs 刷新完成再选中的引用
 	pendingCommit     string            // history 跳转后等待 commits 刷新完成再选中的提交
 	promptVisible     bool              // 确认弹窗是否正在显示
@@ -82,24 +82,24 @@ type TUI struct {
 	borderColor         tcell.Color
 	borderFocusColor    tcell.Color
 
-	refs    *loader.Loader[core.Refs, refsRequest]
-	commits *loader.Loader[[]core.Commit, commitsRequest]
+	refs    *async.Task[core.Refs, refsRequest]
+	commits *async.Task[[]core.Commit, commitsRequest]
 
-	diff  *loader.Loader[string, diffRequest]
-	files *loader.Loader[[]core.FileChange, filesRequest]
+	diff  *async.Task[string, diffRequest]
+	files *async.Task[[]core.FileChange, filesRequest]
 
-	localDiff  *loader.Loader[string, localDiffRequest]
-	localFiles *loader.Loader[[]core.FileChange, localFilesRequest]
+	localDiff  *async.Task[string, localDiffRequest]
+	localFiles *async.Task[[]core.FileChange, localFilesRequest]
 
-	fileHistory     *loader.Loader[[]core.Commit, historyRequest]
-	fileHistoryDiff *loader.Loader[string, historyDiffRequest]
+	fileHistory     *async.Task[[]core.Commit, historyRequest]
+	fileHistoryDiff *async.Task[string, historyDiffRequest]
 
-	checkout *loader.Loader[string, checkoutRequest]
-	createOp *loader.Loader[string, createRequest]
-	deleteOp *loader.Loader[string, deleteRequest]
-	syncOp   *loader.Loader[string, syncOpRequest]
-	commitOp *loader.Loader[string, commitOpRequest]
-	changeOp *loader.Loader[string, changeOpRequest]
+	checkout *async.Task[string, checkoutRequest]
+	createOp *async.Task[string, createRequest]
+	deleteOp *async.Task[string, deleteRequest]
+	syncOp   *async.Task[string, syncOpRequest]
+	commitOp *async.Task[string, commitOpRequest]
+	changeOp *async.Task[string, changeOpRequest]
 }
 
 type refsRequest struct{}
@@ -140,7 +140,7 @@ type checkoutRequest struct {
 	tag    core.Tag
 }
 
-// name 返回 loader key 和 loading 文案使用的名字。
+// name 返回 task key 和进行中文案使用的名字。
 func (r checkoutRequest) name() string {
 	if r.tag.Name != "" {
 		return r.tag.Name
@@ -169,7 +169,7 @@ type deleteRequest struct {
 	force  bool
 }
 
-// name 返回 loader key 和状态栏文案使用的名字。
+// name 返回 task key 和状态栏文案使用的名字。
 func (r deleteRequest) name() string {
 	if r.tag.Name != "" {
 		return r.tag.Name
@@ -310,8 +310,8 @@ func (t *TUI) Run() error {
 
 	t.app = app
 
-	t.setupLoaders()
-	defer t.closeLoaders()
+	t.setupTasks()
+	defer t.closeTasks()
 
 	t.refreshTabStyles()
 	t.refreshRefs("")
@@ -478,7 +478,7 @@ func (t *TUI) setupUI() tview.Primitive {
 	// 文件预览由 changed 负责，这里只处理目录展开/收起；
 	// 鼠标第一次点中目录只移动光标，再次点击已选中的目录才切换。
 	fileList.SetSelectedFunc(func(node *tview.TreeNode) {
-		if t.files.Loading() || len(node.GetChildren()) == 0 || node != filePrevCurrent {
+		if t.files.Running() || len(node.GetChildren()) == 0 || node != filePrevCurrent {
 			return
 		}
 		setFolderExpanded(node, !node.IsExpanded())
@@ -578,7 +578,7 @@ func (t *TUI) setupUI() tview.Primitive {
 	// 文件预览由 changed 负责，这里只处理目录展开/收起；
 	// 鼠标第一次点中目录只移动光标，再次点击已选中的目录才切换。
 	changeList.SetSelectedFunc(func(node *tview.TreeNode) {
-		if t.localFiles.Loading() || len(node.GetChildren()) == 0 || node != changePrevCurrent {
+		if t.localFiles.Running() || len(node.GetChildren()) == 0 || node != changePrevCurrent {
 			return
 		}
 		setFolderExpanded(node, !node.IsExpanded())
@@ -929,10 +929,10 @@ func (t *TUI) setupPrompt(name string, prompt *tview.Modal) {
 	t.openPrompt(name, prompt)
 }
 
-func (t *TUI) setupLoaders() {
+func (t *TUI) setupTasks() {
 	post := func(f func()) { t.app.QueueUpdateDraw(f) }
 
-	// compareKey 返回 compare 在 Loader 缓存 key 中的标识。
+	// compareKey 返回 compare 在 Task 缓存 key 中的标识。
 	compareKey := func(compare *core.Commit) string {
 		if compare == nil {
 			return ""
@@ -940,110 +940,114 @@ func (t *TUI) setupLoaders() {
 		return compare.Hash
 	}
 
-	t.refs = loader.New(loader.Config[core.Refs, refsRequest]{
+	t.refs = async.New(async.Config[core.Refs, refsRequest]{
 		Key: func(refsRequest) string { return "refs" },
-		Load: func(ctx context.Context, _ refsRequest) (core.Refs, error) {
+		Run: func(ctx context.Context, _ refsRequest) (core.Refs, error) {
 			return t.Refs(ctx)
 		},
 		Post:      post,
-		OnLoading: t.showRefsLoading,
+		OnRunning: t.showRefsRunning,
 		OnResult:  t.showRefs,
+		NoCache:   true,
 	})
 
-	t.commits = loader.New(loader.Config[[]core.Commit, commitsRequest]{
+	t.commits = async.New(async.Config[[]core.Commit, commitsRequest]{
 		Key: func(commitsRequest) string { return "commits" },
-		Load: func(ctx context.Context, _ commitsRequest) ([]core.Commit, error) {
+		Run: func(ctx context.Context, _ commitsRequest) ([]core.Commit, error) {
 			return t.History(ctx)
 		},
 		Post:      post,
-		OnLoading: t.showCommitsLoading,
+		OnRunning: t.showCommitsRunning,
 		OnResult:  t.showCommits,
+		NoCache:   true,
 	})
 
-	t.files = loader.New(loader.Config[[]core.FileChange, filesRequest]{
+	t.files = async.New(async.Config[[]core.FileChange, filesRequest]{
 		Key: func(req filesRequest) string {
 			return fmt.Sprintf("%s\x00%s", req.commit.Hash, compareKey(req.compare))
 		},
-		Load: func(ctx context.Context, req filesRequest) ([]core.FileChange, error) {
+		Run: func(ctx context.Context, req filesRequest) ([]core.FileChange, error) {
 			return t.Files(ctx, req.commit, req.compare)
 		},
 		Post:      post,
-		OnLoading: t.showFilesLoading,
+		OnRunning: t.showFilesRunning,
 		OnResult:  t.showFiles,
 	})
 
-	t.diff = loader.New(loader.Config[string, diffRequest]{
+	t.diff = async.New(async.Config[string, diffRequest]{
 		Key: func(req diffRequest) string {
 			return fmt.Sprintf("%s\x00%s\x00%s\x00%s", req.commit.Hash, compareKey(req.compare), req.change.Path, req.options)
 		},
-		Load: func(ctx context.Context, req diffRequest) (string, error) {
+		Run: func(ctx context.Context, req diffRequest) (string, error) {
 			return renderDiff(t.Diff(ctx, req.commit, req.compare, req.change, req.options))
 		},
 		Post:      post,
-		OnLoading: t.showFileDiffLoading,
+		OnRunning: t.showFileDiffRunning,
 		OnResult:  t.showFileDiff,
 	})
 
-	t.localFiles = loader.New(loader.Config[[]core.FileChange, localFilesRequest]{
+	t.localFiles = async.New(async.Config[[]core.FileChange, localFilesRequest]{
 		Key: func(localFilesRequest) string { return "local" },
-		Load: func(ctx context.Context, _ localFilesRequest) ([]core.FileChange, error) {
+		Run: func(ctx context.Context, _ localFilesRequest) ([]core.FileChange, error) {
 			return t.LocalFiles(ctx)
 		},
 		Post:      post,
-		OnLoading: t.showLocalLoading,
+		OnRunning: t.showLocalRunning,
 		OnResult:  t.showLocal,
+		NoCache:   true,
 	})
 
-	t.localDiff = loader.New(loader.Config[string, localDiffRequest]{
+	t.localDiff = async.New(async.Config[string, localDiffRequest]{
 		Key: func(req localDiffRequest) string {
 			return fmt.Sprintf("%d\x00%s\x00%s", req.change.Scope, req.change.Path, req.options)
 		},
-		Load: func(ctx context.Context, req localDiffRequest) (string, error) {
+		Run: func(ctx context.Context, req localDiffRequest) (string, error) {
 			return renderDiff(t.LocalDiff(ctx, req.change, req.options))
 		},
 		Post:      post,
-		OnLoading: t.showLocalDiffLoading,
+		OnRunning: t.showLocalDiffRunning,
 		OnResult:  t.showLocalDiff,
 	})
 
-	t.fileHistory = loader.New(loader.Config[[]core.Commit, historyRequest]{
+	t.fileHistory = async.New(async.Config[[]core.Commit, historyRequest]{
 		Key: func(req historyRequest) string { return req.path },
-		Load: func(ctx context.Context, req historyRequest) ([]core.Commit, error) {
+		Run: func(ctx context.Context, req historyRequest) ([]core.Commit, error) {
 			return t.FileHistory(ctx, req.path)
 		},
 		Post:     post,
 		OnResult: t.showHistory,
 	})
 
-	t.fileHistoryDiff = loader.New(loader.Config[string, historyDiffRequest]{
+	t.fileHistoryDiff = async.New(async.Config[string, historyDiffRequest]{
 		Key: func(req historyDiffRequest) string {
 			return fmt.Sprintf("%s\x00%s\x00%s", req.commit.Hash, req.change.Path, req.options)
 		},
-		Load: func(ctx context.Context, req historyDiffRequest) (string, error) {
+		Run: func(ctx context.Context, req historyDiffRequest) (string, error) {
 			return renderDiff(t.Diff(ctx, req.commit, nil, req.change, req.options))
 		},
 		Post:     post,
 		OnResult: t.showHistoryDiff,
 	})
 
-	t.checkout = loader.New(loader.Config[string, checkoutRequest]{
+	t.checkout = async.New(async.Config[string, checkoutRequest]{
 		Key: func(req checkoutRequest) string { return req.name() },
-		Load: func(ctx context.Context, req checkoutRequest) (string, error) {
+		Run: func(ctx context.Context, req checkoutRequest) (string, error) {
 			if req.tag.Name != "" {
 				return t.Checkout(ctx, req.tag)
 			}
 			return t.CheckoutBranch(ctx, req.branch)
 		},
 		Post:      post,
-		OnLoading: t.showCheckoutLoading,
+		OnRunning: t.showCheckoutRunning,
 		OnResult:  t.showCheckout,
+		NoCache:   true,
 	})
 
-	t.createOp = loader.New(loader.Config[string, createRequest]{
+	t.createOp = async.New(async.Config[string, createRequest]{
 		Key: func(req createRequest) string {
 			return fmt.Sprintf("%d\x00%s", req.op, req.name)
 		},
-		Load: func(ctx context.Context, req createRequest) (string, error) {
+		Run: func(ctx context.Context, req createRequest) (string, error) {
 			switch req.op {
 			case opCreateBranch:
 				return t.CreateBranch(ctx, req.name, req.commit)
@@ -1054,15 +1058,16 @@ func (t *TUI) setupLoaders() {
 			}
 		},
 		Post:      post,
-		OnLoading: t.showCreateLoading,
+		OnRunning: t.showCreateRunning,
 		OnResult:  t.showCreate,
+		NoCache:   true,
 	})
 
-	t.deleteOp = loader.New(loader.Config[string, deleteRequest]{
+	t.deleteOp = async.New(async.Config[string, deleteRequest]{
 		Key: func(req deleteRequest) string {
 			return fmt.Sprintf("%t\x00%s", req.force, req.name())
 		},
-		Load: func(ctx context.Context, req deleteRequest) (string, error) {
+		Run: func(ctx context.Context, req deleteRequest) (string, error) {
 			switch {
 			case req.tag.Name != "":
 				return req.name(), t.DeleteTag(ctx, req.tag.Name)
@@ -1073,13 +1078,14 @@ func (t *TUI) setupLoaders() {
 			}
 		},
 		Post:      post,
-		OnLoading: t.showDeleteLoading,
+		OnRunning: t.showDeleteRunning,
 		OnResult:  t.showDelete,
+		NoCache:   true,
 	})
 
-	t.syncOp = loader.New(loader.Config[string, syncOpRequest]{
+	t.syncOp = async.New(async.Config[string, syncOpRequest]{
 		Key: func(req syncOpRequest) string { return fmt.Sprintf("%d", req.op) },
-		Load: func(ctx context.Context, req syncOpRequest) (string, error) {
+		Run: func(ctx context.Context, req syncOpRequest) (string, error) {
 			switch req.op {
 			case opPull:
 				return t.Pull(ctx)
@@ -1092,15 +1098,16 @@ func (t *TUI) setupLoaders() {
 			}
 		},
 		Post:      post,
-		OnLoading: t.showSyncLoading,
+		OnRunning: t.showSyncRunning,
 		OnResult:  t.showSync,
+		NoCache:   true,
 	})
 
-	t.commitOp = loader.New(loader.Config[string, commitOpRequest]{
+	t.commitOp = async.New(async.Config[string, commitOpRequest]{
 		Key: func(req commitOpRequest) string {
 			return fmt.Sprintf("%d\x00%s\x00%d\x00%d", req.op, req.commit.Hash, req.resetMode, req.mergeMode)
 		},
-		Load: func(ctx context.Context, req commitOpRequest) (string, error) {
+		Run: func(ctx context.Context, req commitOpRequest) (string, error) {
 			switch req.op {
 			case opReset:
 				return t.Reset(ctx, req.commit, req.resetMode)
@@ -1125,15 +1132,16 @@ func (t *TUI) setupLoaders() {
 			}
 		},
 		Post:      post,
-		OnLoading: t.showCommitOpLoading,
+		OnRunning: t.showCommitOpRunning,
 		OnResult:  t.showCommitOp,
+		NoCache:   true,
 	})
 
-	t.changeOp = loader.New(loader.Config[string, changeOpRequest]{
+	t.changeOp = async.New(async.Config[string, changeOpRequest]{
 		Key: func(req changeOpRequest) string {
 			return fmt.Sprintf("%d\x00%s", req.op, req.path)
 		},
-		Load: func(ctx context.Context, req changeOpRequest) (string, error) {
+		Run: func(ctx context.Context, req changeOpRequest) (string, error) {
 			switch req.op {
 			case opStage:
 				return req.path, t.Stage(ctx, req.changes)
@@ -1147,13 +1155,14 @@ func (t *TUI) setupLoaders() {
 			}
 		},
 		Post:      post,
-		OnLoading: t.showChangeOpLoading,
+		OnRunning: t.showChangeOpRunning,
 		OnResult:  t.showChangeOp,
+		NoCache:   true,
 	})
 }
 
-func (t *TUI) loaders() []loader.Lifecycle {
-	return []loader.Lifecycle{
+func (t *TUI) tasks() []async.Lifecycle {
+	return []async.Lifecycle{
 		t.refs,
 		t.commits,
 		t.files,
@@ -1171,15 +1180,15 @@ func (t *TUI) loaders() []loader.Lifecycle {
 	}
 }
 
-func (t *TUI) waitLoaders() {
-	for _, loader := range t.loaders() {
-		loader.Wait()
+func (t *TUI) waitTasks() {
+	for _, task := range t.tasks() {
+		task.Wait()
 	}
 }
 
-func (t *TUI) closeLoaders() {
-	for _, loader := range t.loaders() {
-		loader.Close()
+func (t *TUI) closeTasks() {
+	for _, task := range t.tasks() {
+		task.Close()
 	}
 }
 
@@ -1237,7 +1246,7 @@ func (t *TUI) focusOnScrollTree(p scrollFocusable, onClick func()) {
 
 /** EVENT */
 
-// quit 先停止 Loader，再等后台 goroutine 退出，最后停止事件循环。
+// quit 先停止 Task，再等后台 goroutine 退出，最后停止事件循环。
 // 不能在事件循环里同步等待，否则 Post 无法被消费。
 func (t *TUI) quit() {
 	if t.quitting {
@@ -1248,11 +1257,11 @@ func (t *TUI) quit() {
 	// 先停掉动画，避免 ticker 在 app.Stop 之后继续投递更新。
 	t.stopSyncSpinner()
 
-	// Close 是非阻塞的，先阻止新的请求并取消在途 Load。
-	t.closeLoaders()
+	// Close 是非阻塞的，先阻止新的请求并取消在途 Run。
+	t.closeTasks()
 
 	go func() {
-		t.waitLoaders()
+		t.waitTasks()
 		t.app.Stop()
 	}()
 }
@@ -1340,7 +1349,7 @@ func (t *TUI) refreshTab(tag string) {
 		t.reloadCommits()
 	}
 
-	// 数据可能命中 Loader 缓存而不会触发 changed 回调，
+	// 数据可能命中 Task 缓存而不会触发 changed 回调，
 	// 这里主动按当前 tab 和最新 options 重渲染 diff。
 	t.refreshActiveDiff()
 }
@@ -1441,7 +1450,7 @@ func (t *TUI) compareCommit(row int) {
 
 // resetCommit 先弹窗选择 reset 模式，确认后把当前分支重置到选中的 commit。
 func (t *TUI) resetCommit() {
-	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Loading() {
+	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Running() {
 		return
 	}
 	row := t.commitList.CurrentItem()
@@ -1481,7 +1490,7 @@ func (t *TUI) resetCommit() {
 
 // rebaseCommit 先弹窗确认，再把当前分支 rebase 到选中的 commit。
 func (t *TUI) rebaseCommit() {
-	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Loading() {
+	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Running() {
 		return
 	}
 	row := t.commitList.CurrentItem()
@@ -1514,7 +1523,7 @@ func (t *TUI) rebaseCommit() {
 
 // continueRebase 在冲突解决并暂存后继续 rebase。
 func (t *TUI) continueRebase() {
-	if t.commitOp == nil || t.commitOp.Loading() {
+	if t.commitOp == nil || t.commitOp.Running() {
 		return
 	}
 	t.executeCommitOp(opRebaseContinue)
@@ -1522,7 +1531,7 @@ func (t *TUI) continueRebase() {
 
 // abortRebase 先弹窗确认，再取消未完成的 rebase。
 func (t *TUI) abortRebase() {
-	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Loading() {
+	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Running() {
 		return
 	}
 
@@ -1551,7 +1560,7 @@ func (t *TUI) abortRebase() {
 
 // mergeCommit 先弹窗确认，再把选中的 commit merge 到当前分支。
 func (t *TUI) mergeCommit() {
-	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Loading() {
+	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Running() {
 		return
 	}
 	row := t.commitList.CurrentItem()
@@ -1592,7 +1601,7 @@ func (t *TUI) mergeCommit() {
 
 // continueMerge 在冲突解决并暂存后继续 merge。
 func (t *TUI) continueMerge() {
-	if t.commitOp == nil || t.commitOp.Loading() {
+	if t.commitOp == nil || t.commitOp.Running() {
 		return
 	}
 	t.executeCommitOp(opMergeContinue)
@@ -1600,7 +1609,7 @@ func (t *TUI) continueMerge() {
 
 // abortMerge 先弹窗确认，再取消未完成的 merge。
 func (t *TUI) abortMerge() {
-	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Loading() {
+	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Running() {
 		return
 	}
 
@@ -1629,7 +1638,7 @@ func (t *TUI) abortMerge() {
 
 // continueSquash 提交待完成的 squash（冲突解决或自动提交失败后）；冲突未解决时 git 会报错。
 func (t *TUI) continueSquash() {
-	if t.commitOp == nil || t.commitOp.Loading() {
+	if t.commitOp == nil || t.commitOp.Running() {
 		return
 	}
 	t.executeCommitOp(opSquashContinue)
@@ -1637,7 +1646,7 @@ func (t *TUI) continueSquash() {
 
 // abortSquash 先弹窗确认，再取消待完成的 squash。
 func (t *TUI) abortSquash() {
-	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Loading() {
+	if t.commitOp == nil || t.root == nil || t.promptVisible || t.commitOp.Running() {
 		return
 	}
 
@@ -1666,7 +1675,7 @@ func (t *TUI) abortSquash() {
 
 // commitChanges 用表单内容提交暂存区改动；Amend 勾选时改写 HEAD。
 func (t *TUI) commitChanges() {
-	if t.commitOp == nil || t.commitOp.Loading() {
+	if t.commitOp == nil || t.commitOp.Running() {
 		return
 	}
 	subject := strings.TrimSpace(t.commitSubject.GetText())
@@ -1933,7 +1942,7 @@ func (t *TUI) locateHistory() {
 
 func (t *TUI) selectFile(node *tview.TreeNode) {
 	// 文件列表加载中时，旧树节点属于旧 commit，不能拿来请求新 commit 的 diff。
-	if t.files.Loading() {
+	if t.files.Running() {
 		return
 	}
 	t.requestFileDiff(t.CurrentCommit, t.CompareCommit, node)
@@ -1941,7 +1950,7 @@ func (t *TUI) selectFile(node *tview.TreeNode) {
 
 func (t *TUI) selectLocalFile(node *tview.TreeNode) {
 	// 列表加载中时，旧树节点属于旧数据，不能拿来发起新的 diff 请求。
-	if t.localFiles.Loading() {
+	if t.localFiles.Running() {
 		return
 	}
 	t.requestLocalDiff(node)
@@ -1949,7 +1958,7 @@ func (t *TUI) selectLocalFile(node *tview.TreeNode) {
 
 // toggleLocalChange 用空格暂存/取消暂存当前文件；目录节点处理目录内的全部变更。
 func (t *TUI) toggleLocalChange() {
-	if t.changeOp == nil || t.localFiles.Loading() || t.changeOp.Loading() {
+	if t.changeOp == nil || t.localFiles.Running() || t.changeOp.Running() {
 		return
 	}
 	node := t.changeList.GetCurrentNode()
@@ -1986,7 +1995,7 @@ func (t *TUI) toggleLocalChange() {
 
 // discardLocalChange 先弹窗确认，再丢弃当前文件的改动。
 func (t *TUI) discardLocalChange() {
-	if t.changeOp == nil || t.root == nil || t.promptVisible || t.localFiles.Loading() || t.changeOp.Loading() {
+	if t.changeOp == nil || t.root == nil || t.promptVisible || t.localFiles.Running() || t.changeOp.Running() {
 		return
 	}
 	node := t.changeList.GetCurrentNode()
@@ -2049,7 +2058,7 @@ func (t *TUI) refreshViewedDiff() {
 // refreshActiveDiff 重新请求当前 tab 中选中文件的 diff。
 func (t *TUI) refreshActiveDiff() {
 	if t.activeTab == tabChange {
-		if t.changeList == nil || (t.localFiles != nil && t.localFiles.Loading()) {
+		if t.changeList == nil || (t.localFiles != nil && t.localFiles.Running()) {
 			return
 		}
 		if node := t.changeList.GetCurrentNode(); node != nil {
@@ -2060,7 +2069,7 @@ func (t *TUI) refreshActiveDiff() {
 		return
 	}
 
-	if t.fileList == nil || (t.files != nil && t.files.Loading()) {
+	if t.fileList == nil || (t.files != nil && t.files.Running()) {
 		return
 	}
 	if node := t.fileList.GetCurrentNode(); node != nil {
@@ -2081,7 +2090,7 @@ func (t *TUI) refreshHistoryDiff() {
 // checkoutRef 对选中的分支或标签执行 checkout：
 // 本地分支直接切换；远端分支切换到同名本地分支，不存在时创建跟踪分支；标签进入 detached HEAD。
 func (t *TUI) checkoutRef(node *tview.TreeNode) {
-	if t.checkout == nil || t.checkout.Loading() {
+	if t.checkout == nil || t.checkout.Running() {
 		return
 	}
 	t.executeCheckout(node)
@@ -2089,7 +2098,7 @@ func (t *TUI) checkoutRef(node *tview.TreeNode) {
 
 // syncBranch 拉取当前分支、推送当前分支或拉取远端引用；同一时间只允许一个同步操作。
 func (t *TUI) syncBranch(op syncOp) {
-	if t.syncOp == nil || t.syncOp.Loading() {
+	if t.syncOp == nil || t.syncOp.Running() {
 		return
 	}
 	t.executeSync(op)
@@ -2108,7 +2117,7 @@ func (t *TUI) createRefFromCommit(op createOp) {
 // createRef 弹出输入框，创建分支或标签。
 // commit 为 nil 时从 HEAD 创建，否则从该 commit 创建。
 func (t *TUI) createRef(op createOp, commit *core.Commit) {
-	if t.createOp == nil || t.root == nil || t.promptVisible || t.createOp.Loading() {
+	if t.createOp == nil || t.root == nil || t.promptVisible || t.createOp.Running() {
 		return
 	}
 
@@ -2163,7 +2172,7 @@ func (t *TUI) createRef(op createOp, commit *core.Commit) {
 
 // deleteRef 先弹窗确认，再删除选中的本地分支、远端分支或标签。
 func (t *TUI) deleteRef(node *tview.TreeNode) {
-	if t.deleteOp == nil || t.root == nil || t.promptVisible || t.deleteOp.Loading() {
+	if t.deleteOp == nil || t.root == nil || t.promptVisible || t.deleteOp.Running() {
 		return
 	}
 
@@ -2225,11 +2234,11 @@ func (t *TUI) deleteRef(node *tview.TreeNode) {
 
 // reloadRefs 重新读取仓库级 refs（分支、标签和 HEAD）。
 func (t *TUI) reloadRefs() {
-	t.refs.Reload(refsRequest{})
+	t.refs.Execute(refsRequest{})
 }
 
-func (t *TUI) showRefsLoading(_ refsRequest) {
-	t.statusStart("refs", "refs")
+func (t *TUI) showRefsRunning(_ refsRequest) {
+	t.statusStart("refs", "loading refs")
 }
 
 func (t *TUI) showRefs(_ refsRequest, refs core.Refs, err error) {
@@ -2283,11 +2292,11 @@ func (t *TUI) refName() string {
 
 // reloadCommits 重新读取 git log；加载期间保留旧列表，避免切 tab 时闪空。
 func (t *TUI) reloadCommits() {
-	t.commits.Reload(commitsRequest{})
+	t.commits.Execute(commitsRequest{})
 }
 
-func (t *TUI) showCommitsLoading(_ commitsRequest) {
-	t.statusStart("commits", "commits")
+func (t *TUI) showCommitsRunning(_ commitsRequest) {
+	t.statusStart("commits", "loading commits")
 }
 
 func (t *TUI) showCommits(_ commitsRequest, commits []core.Commit, err error) {
@@ -2396,18 +2405,18 @@ func (t *TUI) syncCommitInfoWidth(view *tview.TextView) {
 
 /** FILES */
 
-// requestFiles 请求 commit 相对 compare 的文件列表；相同 commit+compare 的重复请求由 Loader 去重。
+// requestFiles 请求 commit 相对 compare 的文件列表；相同 commit+compare 的重复请求由 Task 去重。
 func (t *TUI) requestFiles(commit core.Commit, compare *core.Commit) {
-	t.files.Request(filesRequest{commit: commit, compare: compare})
+	t.files.Execute(filesRequest{commit: commit, compare: compare})
 }
 
-// showFilesLoading 保留旧文件树，只通过 statusBar 提示加载。
-func (t *TUI) showFilesLoading(_ filesRequest) {
+// showFilesRunning 保留旧文件树，只通过 statusBar 提示加载。
+func (t *TUI) showFilesRunning(_ filesRequest) {
 	// 保留旧 diff 内容，但停掉在途请求，避免旧结果在文件加载期间回写面板。
 	t.diff.Cancel()
 	t.statusDone("diff", "")
 
-	t.statusStart("files", "file changes")
+	t.statusStart("files", "loading file changes")
 }
 
 func (t *TUI) showFiles(_ filesRequest, changes []core.FileChange, err error) {
@@ -2430,7 +2439,7 @@ func (t *TUI) showFiles(_ filesRequest, changes []core.FileChange, err error) {
 
 	switch {
 	case err != nil:
-		// 失败由 Loader 记录，下次请求同一 commit 时会重试。
+		// 失败由 Task 记录，下次请求同一 commit 时会重试。
 		t.clearFileDiff("failed to load file changes")
 	case len(changes) == 0:
 		t.clearFileDiff("no changes")
@@ -2457,7 +2466,7 @@ func (t *TUI) requestFileDiff(commit core.Commit, compare *core.Commit, node *tv
 		}
 		return
 	}
-	t.diff.Request(diffRequest{
+	t.diff.Execute(diffRequest{
 		commit:  commit,
 		change:  change,
 		compare: compare,
@@ -2465,9 +2474,9 @@ func (t *TUI) requestFileDiff(commit core.Commit, compare *core.Commit, node *tv
 	})
 }
 
-// showFileDiffLoading 保留旧 diff，只通过 statusBar 提示加载。
-func (t *TUI) showFileDiffLoading(req diffRequest) {
-	t.statusStart("diff", "diff "+req.change.Path)
+// showFileDiffRunning 保留旧 diff，只通过 statusBar 提示加载。
+func (t *TUI) showFileDiffRunning(req diffRequest) {
+	t.statusStart("diff", "loading diff "+req.change.Path)
 }
 
 func (t *TUI) showFileDiff(req diffRequest, text string, err error) {
@@ -2483,7 +2492,7 @@ func (t *TUI) showFileDiff(req diffRequest, text string, err error) {
 	t.setDiff(t.fileDiff, "diff", req.change, text, message)
 }
 
-// clearFileDiff 清空 diff 并让在途请求失效；Loader 会取消对应的 git 进程。
+// clearFileDiff 清空 diff 并让在途请求失效；Task 会取消对应的 git 进程。
 func (t *TUI) clearFileDiff(message string) {
 	t.diff.Cancel()
 	t.clearDiff(t.fileDiff, "diff", message)
@@ -2493,17 +2502,17 @@ func (t *TUI) clearFileDiff(message string) {
 
 // reloadLocal 重新读取本地变更；加载期间保留旧列表，避免切 tab 时闪空。
 func (t *TUI) reloadLocal() {
-	t.localFiles.Reload(localFilesRequest{})
+	t.localFiles.Execute(localFilesRequest{})
 }
 
-// showLocalLoading 保留旧变更树，只通过 statusBar 提示加载。
-func (t *TUI) showLocalLoading(_ localFilesRequest) {
+// showLocalRunning 保留旧变更树，只通过 statusBar 提示加载。
+func (t *TUI) showLocalRunning(_ localFilesRequest) {
 	// 保留旧 diff 内容，但停掉在途请求并丢弃缓存：
 	// 文件内容可能已经变化，不能再用 scope+path 命中旧结果。
 	t.localDiff.Reset()
 	t.statusDone("local-diff", "")
 
-	t.statusStart("local", "local changes")
+	t.statusStart("local", "loading local changes")
 }
 
 func (t *TUI) showLocal(_ localFilesRequest, changes []core.FileChange, err error) {
@@ -2532,7 +2541,7 @@ func (t *TUI) showLocal(_ localFilesRequest, changes []core.FileChange, err erro
 
 	switch {
 	case err != nil:
-		// 失败由 Loader 记录，下次请求本地变更时会重试。
+		// 失败由 Task 记录，下次请求本地变更时会重试。
 		t.clearLocalDiff("failed to load local changes")
 	case len(changes) == 0:
 		t.clearLocalDiff("no changes")
@@ -2578,15 +2587,15 @@ func (t *TUI) requestLocalDiff(node *tview.TreeNode) {
 		}
 		return
 	}
-	t.localDiff.Request(localDiffRequest{
+	t.localDiff.Execute(localDiffRequest{
 		change:  change,
 		options: t.diffOptions(t.changeDiff),
 	})
 }
 
-// showLocalDiffLoading 保留旧 diff，只通过 statusBar 提示加载。
-func (t *TUI) showLocalDiffLoading(req localDiffRequest) {
-	t.statusStart("local-diff", "diff "+req.change.Path)
+// showLocalDiffRunning 保留旧 diff，只通过 statusBar 提示加载。
+func (t *TUI) showLocalDiffRunning(req localDiffRequest) {
+	t.statusStart("local-diff", "loading diff "+req.change.Path)
 }
 
 func (t *TUI) showLocalDiff(req localDiffRequest, text string, err error) {
@@ -2602,7 +2611,7 @@ func (t *TUI) showLocalDiff(req localDiffRequest, text string, err error) {
 	t.setDiff(t.changeDiff, "local-diff", req.change, text, message)
 }
 
-// clearLocalDiff 清空 diff 并让在途请求失效；Loader 会取消对应的 git 进程。
+// clearLocalDiff 清空 diff 并让在途请求失效；Task 会取消对应的 git 进程。
 func (t *TUI) clearLocalDiff(message string) {
 	t.localDiff.Cancel()
 	t.clearDiff(t.changeDiff, "local-diff", message)
@@ -2610,9 +2619,9 @@ func (t *TUI) clearLocalDiff(message string) {
 
 /** HISTORY */
 
-// requestHistory 请求 path 的文件历史；相同路径的重复请求由 Loader 去重。
+// requestHistory 请求 path 的文件历史；相同路径的重复请求由 Task 去重。
 func (t *TUI) requestHistory(path string) {
-	t.fileHistory.Request(historyRequest{path: path})
+	t.fileHistory.Execute(historyRequest{path: path})
 }
 
 // showHistory 用文件历史填充弹窗左侧列表，默认选中第一条并请求 diff。
@@ -2666,7 +2675,7 @@ func (t *TUI) requestHistoryDiff(commit core.Commit) {
 		}
 		options.Width = t.historyWidth
 	}
-	t.fileHistoryDiff.Request(historyDiffRequest{
+	t.fileHistoryDiff.Execute(historyDiffRequest{
 		commit:  commit,
 		change:  core.FileChange{Path: t.HistoryChange.Path},
 		options: options,
@@ -2795,18 +2804,18 @@ func (t *TUI) syncDiffViewWidth(view *tview.TextView) {
 
 /** CHECKOUT */
 
-// executeCheckout 通过节点引用取分支或标签并绕过缓存，保证每次按空格都真正执行 git checkout。
+// executeCheckout 通过节点引用取分支或标签并强制执行，保证每次按空格都真正执行 git checkout。
 func (t *TUI) executeCheckout(node *tview.TreeNode) {
 	switch ref := node.GetReference().(type) {
 	case core.Branch:
-		t.checkout.Reload(checkoutRequest{branch: ref})
+		t.checkout.Execute(checkoutRequest{branch: ref})
 	case core.Tag:
-		t.checkout.Reload(checkoutRequest{tag: ref})
+		t.checkout.Execute(checkoutRequest{tag: ref})
 	}
 }
 
-func (t *TUI) showCheckoutLoading(req checkoutRequest) {
-	t.statusStart("checkout", "checkout "+req.name())
+func (t *TUI) showCheckoutRunning(req checkoutRequest) {
+	t.statusStart("checkout", "checking out "+req.name())
 }
 
 func (t *TUI) showCheckout(_ checkoutRequest, ref string, err error) {
@@ -2826,12 +2835,12 @@ func (t *TUI) showCheckout(_ checkoutRequest, ref string, err error) {
 
 /** CREATE */
 
-// executeCreate 通过 Reload 绕过缓存，保证每次创建都真正执行 git 命令。
+// executeCreate 通过 Execute 强制执行，保证每次创建都真正执行 git 命令。
 func (t *TUI) executeCreate(op createOp, name string, commit *core.Commit) {
-	t.createOp.Reload(createRequest{op: op, name: name, commit: commit})
+	t.createOp.Execute(createRequest{op: op, name: name, commit: commit})
 }
 
-func (t *TUI) showCreateLoading(req createRequest) {
+func (t *TUI) showCreateRunning(req createRequest) {
 	t.statusStart("create", t.createOpLabel(req, false))
 }
 
@@ -2855,7 +2864,7 @@ func (t *TUI) showCreate(req createRequest, ref string, err error) {
 	t.reloadCommits()
 }
 
-// createOpLabel 返回创建操作的 loading/完成文案。
+// createOpLabel 返回创建操作的进行中/完成文案。
 func (t *TUI) createOpLabel(req createRequest, done bool) string {
 	noun := "branch"
 	if req.op == opCreateTag {
@@ -2864,17 +2873,17 @@ func (t *TUI) createOpLabel(req createRequest, done bool) string {
 	if done {
 		return "created " + noun + " " + req.name
 	}
-	return "create " + noun + " " + req.name
+	return "creating " + noun + " " + req.name
 }
 
 /** DELETE */
 
-// executeDelete 通过 Reload 绕过缓存，保证每次删除都真正执行 git 命令。
+// executeDelete 通过 Execute 强制执行，保证每次删除都真正执行 git 命令。
 func (t *TUI) executeDelete(req deleteRequest) {
-	t.deleteOp.Reload(req)
+	t.deleteOp.Execute(req)
 }
 
-func (t *TUI) showDeleteLoading(req deleteRequest) {
+func (t *TUI) showDeleteRunning(req deleteRequest) {
 	t.statusStart("delete", t.deleteOpLabel(req, false))
 }
 
@@ -2892,7 +2901,7 @@ func (t *TUI) showDelete(req deleteRequest, _ string, err error) {
 	t.reloadCommits()
 }
 
-// deleteOpLabel 返回删除操作的 loading/完成文案。
+// deleteOpLabel 返回删除操作的进行中/完成文案。
 func (t *TUI) deleteOpLabel(req deleteRequest, done bool) string {
 	noun := "branch "
 	switch {
@@ -2909,12 +2918,12 @@ func (t *TUI) deleteOpLabel(req deleteRequest, done bool) string {
 
 /** SYNC OP */
 
-// executeSync 通过 Reload 绕过缓存，保证每次按键都真正执行 git 命令。
+// executeSync 通过 Execute 强制执行，保证每次按键都真正执行 git 命令。
 func (t *TUI) executeSync(op syncOp) {
-	t.syncOp.Reload(syncOpRequest{op: op})
+	t.syncOp.Execute(syncOpRequest{op: op})
 }
 
-func (t *TUI) showSyncLoading(req syncOpRequest) {
+func (t *TUI) showSyncRunning(req syncOpRequest) {
 	t.statusStart("sync", t.syncOpLabel(req, false))
 	t.startSyncSpinner()
 }
@@ -2946,24 +2955,24 @@ func (t *TUI) showSync(req syncOpRequest, _ string, err error) {
 	}
 }
 
-// syncOpLabel 返回同步操作的 loading/完成文案。
+// syncOpLabel 返回同步操作的进行中/完成文案。
 func (t *TUI) syncOpLabel(req syncOpRequest, done bool) string {
 	switch req.op {
 	case opPull:
 		if done {
 			return "pulled " + t.HeadRef
 		}
-		return "pull " + t.HeadRef
+		return "pulling " + t.HeadRef
 	case opPush, opPushForce:
 		if done {
 			return "pushed " + t.HeadRef
 		}
-		return "push " + t.HeadRef
+		return "pushing " + t.HeadRef
 	default:
 		if done {
 			return "fetched"
 		}
-		return "fetch"
+		return "fetching"
 	}
 }
 
@@ -3061,24 +3070,24 @@ func (t *TUI) renderSyncIndicator() {
 
 /** COMMIT OP */
 
-// executeReset 通过 Reload 绕过缓存，把当前分支重置到 commit。
+// executeReset 通过 Execute 强制执行，把当前分支重置到 commit。
 func (t *TUI) executeReset(commit core.Commit, mode core.ResetMode) {
-	t.commitOp.Reload(commitOpRequest{op: opReset, commit: commit, resetMode: mode})
+	t.commitOp.Execute(commitOpRequest{op: opReset, commit: commit, resetMode: mode})
 }
 
-// executeRebase 通过 Reload 绕过缓存，把当前分支 rebase 到 commit。
+// executeRebase 通过 Execute 强制执行，把当前分支 rebase 到 commit。
 func (t *TUI) executeRebase(commit core.Commit) {
-	t.commitOp.Reload(commitOpRequest{op: opRebase, commit: commit})
+	t.commitOp.Execute(commitOpRequest{op: opRebase, commit: commit})
 }
 
-// executeMerge 通过 Reload 绕过缓存，把 commit 合入当前分支。
+// executeMerge 通过 Execute 强制执行，把 commit 合入当前分支。
 func (t *TUI) executeMerge(commit core.Commit, mode core.MergeMode) {
-	t.commitOp.Reload(commitOpRequest{op: opMerge, commit: commit, mergeMode: mode})
+	t.commitOp.Execute(commitOpRequest{op: opMerge, commit: commit, mergeMode: mode})
 }
 
-// executeCommit 通过 Reload 绕过缓存，用表单内容提交暂存区改动。
+// executeCommit 通过 Execute 强制执行，用表单内容提交暂存区改动。
 func (t *TUI) executeCommit(subject, description string, amend bool) {
-	t.commitOp.Reload(commitOpRequest{
+	t.commitOp.Execute(commitOpRequest{
 		op:          opCommit,
 		subject:     subject,
 		description: description,
@@ -3088,10 +3097,10 @@ func (t *TUI) executeCommit(subject, description string, amend bool) {
 
 // executeCommitOp 执行只带操作类型的 continue / abort。
 func (t *TUI) executeCommitOp(op commitOp) {
-	t.commitOp.Reload(commitOpRequest{op: op})
+	t.commitOp.Execute(commitOpRequest{op: op})
 }
 
-func (t *TUI) showCommitOpLoading(req commitOpRequest) {
+func (t *TUI) showCommitOpRunning(req commitOpRequest) {
 	t.statusStart("commit", t.commitOpLabel(req, false))
 }
 
@@ -3143,7 +3152,7 @@ func (t *TUI) showCommitOp(req commitOpRequest, _ string, err error) {
 	t.refreshTab(t.activeTab)
 }
 
-// commitOpLabel 返回 commit 操作的 loading/完成文案。
+// commitOpLabel 返回 commit 操作的进行中/完成文案。
 func (t *TUI) commitOpLabel(req commitOpRequest, done bool) string {
 	switch req.op {
 	case opReset:
@@ -3214,10 +3223,10 @@ func (t *TUI) commitOpLabel(req commitOpRequest, done bool) string {
 /** CHANGE OP */
 
 func (t *TUI) executeChangeOp(op changeOp, changes []core.FileChange, path string) {
-	t.changeOp.Reload(changeOpRequest{op: op, changes: changes, path: path})
+	t.changeOp.Execute(changeOpRequest{op: op, changes: changes, path: path})
 }
 
-func (t *TUI) showChangeOpLoading(req changeOpRequest) {
+func (t *TUI) showChangeOpRunning(req changeOpRequest) {
 	t.statusStart("change", t.changeOpLabel(req, false))
 }
 
@@ -3233,7 +3242,7 @@ func (t *TUI) showChangeOp(req changeOpRequest, _ string, err error) {
 	t.reloadLocal()
 }
 
-// changeOpLabel 返回本地变更操作的 loading/完成文案。
+// changeOpLabel 返回本地变更操作的进行中/完成文案。
 func (t *TUI) changeOpLabel(req changeOpRequest, done bool) string {
 	path := req.path
 	if len(req.changes) > 1 {
@@ -3260,7 +3269,7 @@ func (t *TUI) changeOpLabel(req changeOpRequest, done bool) string {
 
 /** STATUS */
 
-// statusStart 标记一个槽位正在加载；同一槽位重复调用只更新文案。
+// statusStart 标记一个槽位正在执行；同一槽位重复调用只更新文案。
 func (t *TUI) statusStart(slot, message string) {
 	if t.statusBar == nil {
 		return
@@ -3272,7 +3281,7 @@ func (t *TUI) statusStart(slot, message string) {
 	t.renderStatus()
 }
 
-// statusDone 结束槽位的 loading；message 非空时同时更新最近完成信息。
+// statusDone 结束槽位的进行中状态；message 非空时同时更新最近完成信息。
 func (t *TUI) statusDone(slot, message string) {
 	if t.statusBar == nil {
 		return
@@ -3299,7 +3308,7 @@ func (t *TUI) renderStatus() {
 		messages = append(messages, tview.Escape(message))
 	}
 	sort.Strings(messages)
-	t.statusBar.SetText(colorMuted.markup("loading " + strings.Join(messages, ", ") + "…"))
+	t.statusBar.SetText(colorMuted.markup(strings.Join(messages, ", ") + "…"))
 }
 
 // renderInProgressActions 按 rebase / merge / squash 状态切换 statusBar 右侧 Continue / Abort 的文案和动作。

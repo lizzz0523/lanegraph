@@ -1,10 +1,10 @@
-package loader
+package async
 
 import "container/list"
 
 const defaultCacheSize = 64
 
-// entry 是一次加载结果，成功和失败共用。
+// entry 是一次执行结果，成功和失败共用。
 type entry[T any] struct {
 	value T
 	err   error
@@ -57,16 +57,6 @@ func (c *cache[T]) Put(key string, value entry[T]) {
 	if c.lru.Len() > c.capacity {
 		c.removeOldest()
 	}
-}
-
-func (c *cache[T]) Delete(key string) {
-	elem, ok := c.items[key]
-	if !ok {
-		return
-	}
-	item := elem.Value.(*cacheItem[T])
-	delete(c.items, item.key)
-	c.lru.Remove(elem)
 }
 
 func (c *cache[T]) Clear() {
