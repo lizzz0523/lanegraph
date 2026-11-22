@@ -402,7 +402,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetTopLevel(1).
 		SetGraphics(false)
 
-	fileList.SetTitle(" file changes ").
+	fileList.SetTitle(" commit files ").
 		SetTitleAlign(tview.AlignLeft).
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
@@ -2474,7 +2474,7 @@ func (t *TUI) showCommits(_ commitsRequest, commits []core.Commit, err error) {
 		t.tasks.files.Cancel()
 		t.statusDone("files", "")
 		t.commitInfo.SetText("")
-		t.fileList.SetTitle(" file changes ")
+		t.fileList.SetTitle(" commit files ")
 		t.fileList.SetRoot(tview.NewTreeNode(""))
 		t.clearFileDiff("no commits")
 		return
@@ -2560,22 +2560,22 @@ func (t *TUI) showFilesRunning(_ filesRequest) {
 	t.tasks.diff.Cancel()
 	t.statusDone("diff", "")
 
-	t.statusStart("files", "loading file changes")
+	t.statusStart("files", "loading commit files")
 }
 
 func (t *TUI) showFiles(_ filesRequest, changes []core.FileChange, err error) {
-	title := " file changes "
+	title := " commit files "
 	var fileRoot *tview.TreeNode
 	switch {
 	case err != nil:
 		fileRoot = tview.NewTreeNode("")
 		fileRoot.AddChild(tview.NewTreeNode(colorDanger.markup("error") + " " + tview.Escape(err.Error())))
 	case len(changes) == 0:
-		title = " file changes (0) "
+		title = " commit files (0) "
 		fileRoot = tview.NewTreeNode("")
 		fileRoot.AddChild(tview.NewTreeNode(colorMuted.markup("(no changes)")))
 	default:
-		title = fmt.Sprintf(" file changes (%d) ", len(changes))
+		title = fmt.Sprintf(" commit files (%d) ", len(changes))
 		fileRoot = buildFileTree(changes, t.selectedStyle)
 	}
 	t.fileList.SetTitle(title)
@@ -2584,7 +2584,7 @@ func (t *TUI) showFiles(_ filesRequest, changes []core.FileChange, err error) {
 	switch {
 	case err != nil:
 		// 失败由 Task 记录，下次请求同一 commit 时会重试。
-		t.clearFileDiff("failed to load file changes")
+		t.clearFileDiff("failed to load commit files")
 	case len(changes) == 0:
 		t.clearFileDiff("no changes")
 	default:

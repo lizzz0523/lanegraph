@@ -116,7 +116,7 @@ var keyBindings = []struct {
 		{keyLabel(keymap.quit) + " / Ctrl+Q", "Quit"},
 		{keyLabel(keymap.globalPull), "Pull current branch"},
 		{keyLabel(keymap.globalPush), "Push current branch"},
-		{keyLabel(keymap.globalFetch), "Fetch remote refs"},
+		{keyLabel(keymap.globalFetch), "Fetch remote branches and tags"},
 		{keyLabel(keymap.globalCreateBranch), "Create and checkout branch from HEAD"},
 		{keyLabel(keymap.globalCreateTag), "Create tag from HEAD"},
 	}},
@@ -131,27 +131,27 @@ var keyBindings = []struct {
 		{keyLabel(keymap.commitReword), "Reword selected commit"},
 		{keyLabel(keymap.commitMerge), "Merge selected commit into current branch"},
 		{keyLabel(keymap.commitCherryPick), "Cherry-pick selected commit onto current branch"},
-		{keyLabel(keymap.commitBranch), "Create branch from selected commit"},
+		{keyLabel(keymap.commitBranch), "Create and checkout branch from selected commit"},
 		{keyLabel(keymap.commitTag), "Create tag from selected commit"},
 	}},
-	{"Rebase Interative", []keyBinding{
+	{"Interative Rebase", []keyBinding{
 		{"← / " + keyLabel(keymap.rebasePrev), "Previous rebase action"},
 		{"→ / " + keyLabel(keymap.rebaseNext), "Next rebase action"},
 	}},
 	{"Commit Message", []keyBinding{
 		{keyLabel(keymap.commitInfo), "Show full commit message"},
 	}},
-	{"File Changes", []keyBinding{
+	{"Commit Files", []keyBinding{
 		{keyLabel(keymap.fileOpen), "Open file in default app"},
 		{keyLabel(keymap.fileHistory), "Show file history"},
-		{keyLabel(keymap.diffWhitespace), "Toggle whitespace"},
-		{keyLabel(keymap.diffSideBySide), "Toggle side-by-side view"},
 	}},
 	{"Local Changes", []keyBinding{
 		{keyLabel(keymap.changeStage), "Stage or unstage file or folder"},
 		{keyLabel(keymap.changeDiscard), "Discard changes"},
 		{keyLabel(keymap.fileOpen), "Open file in default app"},
 		{keyLabel(keymap.fileHistory), "Show file history"},
+	}},
+	{"File Diff", []keyBinding{
 		{keyLabel(keymap.diffWhitespace), "Toggle whitespace"},
 		{keyLabel(keymap.diffSideBySide), "Toggle side-by-side view"},
 	}},
