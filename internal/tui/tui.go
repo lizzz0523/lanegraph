@@ -55,10 +55,8 @@ type TUI struct {
 	commitButton      *tview.Button
 	amendCheck        *tview.Checkbox
 
-	rebaseForm *rebaseForm // interactive rebase 弹窗
-
-	historyList *listView
-	historyDiff *tview.TextView
+	rebaseForm  *rebaseForm  // interactive rebase 弹窗
+	historyView *historyView // 文件历史弹窗
 
 	tabStyle            tcell.Style
 	tabActiveStyle      tcell.Style
@@ -71,11 +69,11 @@ type TUI struct {
 	activeTab         string // 当前显示的主面板 tab
 	infoWidth         int
 	diffWidth         int               // 当前 diff 渲染使用的面板内宽（side-by-side 时有效）
-	historyWidth      int               // history 弹窗内 diff 的渲染宽度
 	refFolderExpanded map[string]bool   // 用户手动展开过的引用树目录，按目录 key 记录
 	pendingRef        string            // checkout 后等待 refs 刷新完成再选中的引用
 	pendingCommit     string            // history 跳转后等待 commits 刷新完成再选中的提交
 	rebasePopup       *rebasePopup      // interactive rebase 的业务状态
+	historyPopup      *historyPopup     // 文件历史弹窗的业务状态
 	syncFrame         int               // 分支同步动画当前帧；-1 表示没有在执行同步操作
 	syncStop          chan struct{}     // 关闭后停止分支同步动画
 	statusMsg         string            // 最近一次操作结果，进行中项清空后保留
@@ -1130,7 +1128,7 @@ func (t *TUI) nextFocus(step int) tview.Primitive {
 // focusChain 返回当前 Tab/Backtab 的循环顺序；history 弹窗显示时只在弹窗内部切换。
 func (t *TUI) focusChain() []tview.Primitive {
 	if t.historyVisible {
-		return []tview.Primitive{t.historyList, t.historyDiff}
+		return t.historyView.focusables()
 	}
 	if t.activeTab == tabChange {
 		return []tview.Primitive{t.filterText, t.refList, t.changeList, t.changeDiff, t.commitSubject, t.commitDescription, t.commitButton}
@@ -1746,106 +1744,25 @@ func (t *TUI) openHistory(node *tview.TreeNode) {
 		return
 	}
 
-	historyList := newListView(t.selectedStyle, tcell.StyleDefault)
-	// item 之间留一个空行，选中背景只覆盖 item 自身。
-	historyList.SetGap(1)
+	view := newHistoryView(
+		change.Path,
+		t.selectedStyle,
+		t.borderColor,
+		t.borderFocusColor,
+		t.selectHistory,
+		t.locateHistory,
+		t.syncHistoryDiffWidth,
+		t.toggleWhitespace,
+		t.toggleSideBySide,
+	)
+	t.focusOnScroll(view.list)
+	t.focusOnScroll(view.diff)
 
-	historyList.SetTitle(" history ").
-		SetTitleAlign(tview.AlignLeft).
-		SetBorder(true).
-		SetBorderPadding(0, 0, 1, 1).
-		SetFocusFunc(func() { t.setFocusBorder(historyList.Box, true) }).
-		SetBlurFunc(func() { t.setFocusBorder(historyList.Box, false) })
-
-	historyList.SetBackgroundColor(colorPopup.cell)
-	historyList.SetBorderStyle(tcell.StyleDefault.
-		Foreground(t.borderColor).
-		Background(colorPopup.cell))
-
-	historyList.SetSelectedFunc(func() {
-		t.selectHistory()
-	})
-	historyList.SetActivatedFunc(func() {
-		t.locateHistory()
-	})
-
-	historyDiff := tview.NewTextView().
-		SetDynamicColors(true).
-		SetScrollable(true).
-		SetWrap(false).
-		SetText(colorMuted.markup("loading…"))
-
-	historyDiff.SetTitle(" file diff: "+tview.Escape(change.Path)+" ").
-		SetTitleAlign(tview.AlignLeft).
-		SetBorder(true).
-		SetBorderPadding(0, 0, 1, 1).
-		SetFocusFunc(func() { t.setFocusBorder(historyDiff.Box, true) }).
-		SetBlurFunc(func() { t.setFocusBorder(historyDiff.Box, false) })
-
-	historyDiff.SetBackgroundColor(colorPopup.cell)
-	historyDiff.SetBorderStyle(tcell.StyleDefault.
-		Foreground(t.borderColor).
-		Background(colorPopup.cell))
-
-	historyDiff.SetDrawFunc(func(_ tcell.Screen, _, _, _, _ int) (int, int, int, int) {
-		t.syncHistoryDiffWidth(historyDiff)
-		return historyDiff.GetInnerRect()
-	})
-
-	historyDiff.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() != tcell.KeyRune {
-			return event
-		}
-		switch event.Rune() {
-		case 'w':
-			t.toggleWhitespace()
-			return nil
-		case 's':
-			t.toggleSideBySide()
-			return nil
-		}
-		return event
-	})
-
-	t.focusOnScroll(historyList)
-	t.focusOnScroll(historyDiff)
-
-	history := tview.NewFlex().
-		AddItem(historyList, 40, 0, true).
-		AddItem(historyDiff, 0, 1, false)
-
-	inner := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(nil, 3, 0, false).
-		AddItem(history, 0, 1, true).
-		AddItem(nil, 3, 0, false)
-
-	// 弹窗铺满 mainPage 所在区域，左右各留 15 列、上下各留 3 行，
-	// 内容区正好是 mainPage 宽 - 30、高 - 6。
-	popup := tview.NewFlex().
-		AddItem(nil, 15, 0, false).
-		AddItem(inner, 0, 1, true).
-		AddItem(nil, 15, 0, false)
-
-	// 弹窗铺满 mainPage，只有两个子面板需要接收鼠标；其余区域直接消费，
-	// 避免点击穿透到下面的主界面。
-	popup.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
-		if historyList.InRect(event.Position()) || historyDiff.InRect(event.Position()) {
-			return action, event
-		}
-		return tview.MouseConsumed, nil
-	})
-
-	t.setFocusBorder(historyList.Box, true)
-	t.setFocusBorder(historyDiff.Box, false)
-
-	t.HistoryChange = change
-	t.HistoryCommits = nil
-	t.historyList = historyList
-	t.historyDiff = historyDiff
-	t.historyWidth = 0
+	t.historyPopup = &historyPopup{change: change}
+	t.historyView = view
 	t.historyVisible = true
-	t.root.AddPage("history", popup, true, true)
-	t.app.SetFocus(historyList)
+	t.root.AddPage("history", view.view, true, true)
+	t.app.SetFocus(view.list)
 
 	t.requestHistory(change.Path)
 }
@@ -1858,10 +1775,8 @@ func (t *TUI) closeHistory() {
 	t.historyVisible = false
 	t.tasks.fileHistory.Cancel()
 	t.tasks.fileHistoryDiff.Cancel()
-	t.historyList = nil
-	t.historyDiff = nil
-	t.HistoryChange = core.FileChange{}
-	t.HistoryCommits = nil
+	t.historyPopup = nil
+	t.historyView = nil
 	t.root.RemovePage("history")
 	if t.activeTab == tabChange {
 		t.app.SetFocus(t.changeList)
@@ -1875,11 +1790,11 @@ func (t *TUI) selectHistory() {
 	if !t.historyVisible {
 		return
 	}
-	row := t.historyList.CurrentItem()
-	if row < 0 || row >= len(t.HistoryCommits) {
+	commit, ok := t.historyPopup.commitAt(t.historyView.list.CurrentItem())
+	if !ok {
 		return
 	}
-	t.requestHistoryDiff(t.HistoryCommits[row])
+	t.requestHistoryDiff(commit)
 }
 
 // locateHistory 关闭历史弹窗，切到 commit tab 并定位到选中的 commit。
@@ -1887,11 +1802,11 @@ func (t *TUI) locateHistory() {
 	if !t.historyVisible {
 		return
 	}
-	row := t.historyList.CurrentItem()
-	if row < 0 || row >= len(t.HistoryCommits) {
+	commit, ok := t.historyPopup.commitAt(t.historyView.list.CurrentItem())
+	if !ok {
 		return
 	}
-	hash := t.HistoryCommits[row].Hash
+	hash := commit.Hash
 
 	t.closeHistory()
 	t.pendingCommit = hash
@@ -2031,9 +1946,9 @@ func (t *TUI) refreshActiveDiff() {
 
 // refreshHistoryDiff 按当前选中的历史 commit 重新请求 diff。
 func (t *TUI) refreshHistoryDiff() {
-	index := t.historyList.CurrentItem()
-	if index >= 0 && index < len(t.HistoryCommits) {
-		t.requestHistoryDiff(t.HistoryCommits[index])
+	commit, ok := t.historyPopup.commitAt(t.historyView.list.CurrentItem())
+	if ok {
+		t.requestHistoryDiff(commit)
 	}
 }
 
@@ -2576,43 +2491,27 @@ func (t *TUI) requestHistory(path string) {
 
 // showHistory 用文件历史填充弹窗左侧列表，默认选中第一条并请求 diff。
 func (t *TUI) showHistory(_ historyRequest, commits []core.Commit, err error) {
-	if !t.historyVisible || t.historyList == nil || t.historyDiff == nil {
+	if !t.historyVisible || t.historyPopup == nil || t.historyView == nil {
 		return
 	}
-	t.HistoryCommits = commits
+	t.historyPopup.setCommits(commits)
 
 	switch {
 	case err != nil:
-		t.historyList.SetTitle(" history ")
-		t.historyList.SetItems(nil)
 		t.tasks.fileHistoryDiff.Cancel()
-		t.historyDiff.SetText(colorDanger.markup("failed to load history:") + " " + tview.Escape(err.Error()))
-		return
+		t.historyView.SetError(err.Error())
 	case len(commits) == 0:
-		t.historyList.SetTitle(" history (0) ")
-		t.historyList.SetItems(nil)
 		t.tasks.fileHistoryDiff.Cancel()
-		t.historyDiff.SetText(colorMuted.markup("(no history)"))
-		return
+		t.historyView.SetCommits(nil)
+	default:
+		t.historyView.SetCommits(commits)
 	}
-
-	t.historyList.SetTitle(fmt.Sprintf(" history (%d) ", len(commits)))
-	items := make([][]string, 0, len(commits))
-	for _, commit := range commits {
-		header := fmt.Sprintf("%s %s",
-			colorAccent.markup(tview.Escape(commit.Author)),
-			colorMuted.markup(commit.Date.Format("Jan _2, 2006 15:04:05")))
-		subject := " " + colorText.markup(tview.Escape(commit.Subject), true)
-		items = append(items, []string{header, subject})
-	}
-	t.historyList.SetItems(items)
-	t.historyList.SetCurrentItem(0)
 }
 
 /** HISTORY DIFF */
 
 func (t *TUI) requestHistoryDiff(commit core.Commit) {
-	if t.historyDiff == nil {
+	if t.historyPopup == nil || t.historyView == nil {
 		return
 	}
 	options := core.DiffOptions{
@@ -2620,20 +2519,17 @@ func (t *TUI) requestHistoryDiff(commit core.Commit) {
 		SideBySide:       t.SideBySide,
 	}
 	if options.SideBySide {
-		if _, _, width, _ := t.historyDiff.GetInnerRect(); width > 0 {
-			t.historyWidth = width
-		}
-		options.Width = t.historyWidth
+		options.Width = t.historyView.width
 	}
 	t.tasks.fileHistoryDiff.Execute(historyDiffRequest{
 		commit:  commit,
-		change:  core.FileChange{Path: t.HistoryChange.Path},
+		change:  core.FileChange{Path: t.historyPopup.change.Path},
 		options: options,
 	})
 }
 
 func (t *TUI) showHistoryDiff(req historyDiffRequest, text string, err error) {
-	if !t.historyVisible || t.historyDiff == nil {
+	if !t.historyVisible || t.historyView == nil {
 		return
 	}
 	switch {
@@ -2642,21 +2538,14 @@ func (t *TUI) showHistoryDiff(req historyDiffRequest, text string, err error) {
 	case text == "":
 		text = colorMuted.markup("(no diff)")
 	}
-	t.historyDiff.SetTitle(" file diff: " + tview.Escape(req.change.Path) + " ")
-	t.historyDiff.SetText(text)
-	t.historyDiff.ScrollToBeginning()
+	t.historyView.SetDiff(req.change.Path, text)
 }
 
 // syncHistoryDiffWidth 在 side-by-side 模式下按弹窗内宽重新请求 diff。
-func (t *TUI) syncHistoryDiffWidth(view *tview.TextView) {
-	if !t.historyVisible || !t.SideBySide {
+func (t *TUI) syncHistoryDiffWidth() {
+	if !t.historyVisible || !t.SideBySide || t.historyView == nil {
 		return
 	}
-	_, _, width, _ := view.GetInnerRect()
-	if width <= 0 || width == t.historyWidth {
-		return
-	}
-	t.historyWidth = width
 	t.refreshHistoryDiff()
 }
 
@@ -2683,7 +2572,7 @@ func (t *TUI) clearDiff(view *tview.TextView, slot, message string) {
 // diffView 返回当前显示的 diff 面板；history 弹窗打开时返回弹窗内的 diff。
 func (t *TUI) diffView() *tview.TextView {
 	if t.historyVisible {
-		return t.historyDiff
+		return t.historyView.diff
 	}
 	if t.activeTab == tabChange {
 		return t.changeDiff

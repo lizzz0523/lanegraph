@@ -28,11 +28,6 @@ type State struct {
 	CurrentCommit Commit
 	CompareCommit *Commit
 
-	// HistoryChange 是文件历史弹窗当前对应的文件。
-	HistoryChange FileChange
-	// HistoryCommits 是文件历史弹窗当前展示的提交。
-	HistoryCommits []Commit
-
 	// IgnoreWhitespace 表示 diff 是否忽略纯空白改动。
 	IgnoreWhitespace bool
 	// SideBySide 表示 diff 是否使用左右对照布局。

@@ -670,3 +670,165 @@ func (f *rebaseForm) SetErrorHint(message string) {
 func (f *rebaseForm) focusables() []tview.Primitive {
 	return []tview.Primitive{f.list, f.cancelButton, f.rebaseButton}
 }
+
+// historyView 是文件历史弹窗：左侧 commit 列表，右侧文件 diff。
+type historyView struct {
+	view  *tview.Flex
+	list  *listView
+	diff  *tview.TextView
+	width int // side-by-side 时 diff 的渲染宽度
+}
+
+func newHistoryView(
+	path string,
+	selectedStyle tcell.Style,
+	borderColor, focusColor tcell.Color,
+	onSelect, onActivate func(),
+	onResize func(),
+	onToggleWhitespace, onToggleSideBySide func(),
+) *historyView {
+	v := &historyView{}
+
+	borderStyle := tcell.StyleDefault.
+		Foreground(borderColor).
+		Background(colorPopup.cell)
+
+	setFocusBorder := func(box *tview.Box, focused bool) {
+		color := borderColor
+		if focused {
+			color = focusColor
+		}
+		box.SetBorderColor(color).SetTitleColor(color)
+	}
+
+	list := newListView(selectedStyle, tcell.StyleDefault)
+	// item 之间留一个空行，选中背景只覆盖 item 自身。
+	list.SetGap(1)
+
+	list.SetTitle(" history ").
+		SetTitleAlign(tview.AlignLeft).
+		SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1).
+		SetFocusFunc(func() { setFocusBorder(list.Box, true) }).
+		SetBlurFunc(func() { setFocusBorder(list.Box, false) }).
+		SetBackgroundColor(colorPopup.cell).
+		SetBorderStyle(borderStyle)
+
+	list.SetSelectedFunc(onSelect)
+	list.SetActivatedFunc(onActivate)
+
+	diff := tview.NewTextView().
+		SetDynamicColors(true).
+		SetScrollable(true).
+		SetWrap(false).
+		SetText(colorMuted.markup("loading…"))
+
+	diff.SetTitle(" file diff: "+tview.Escape(path)+" ").
+		SetTitleAlign(tview.AlignLeft).
+		SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1).
+		SetFocusFunc(func() { setFocusBorder(diff.Box, true) }).
+		SetBlurFunc(func() { setFocusBorder(diff.Box, false) })
+	// TextView 重写了 SetBackgroundColor 以同步文字背景，必须直接调用。
+	diff.SetBackgroundColor(colorPopup.cell)
+	diff.SetBorderStyle(borderStyle)
+
+	diff.SetDrawFunc(func(_ tcell.Screen, _, _, _, _ int) (int, int, int, int) {
+		_, _, width, _ := diff.GetInnerRect()
+		if width > 0 && width != v.width {
+			v.width = width
+			onResize()
+		}
+		return diff.GetInnerRect()
+	})
+
+	diff.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() != tcell.KeyRune {
+			return event
+		}
+		switch event.Rune() {
+		case 'w':
+			onToggleWhitespace()
+			return nil
+		case 's':
+			onToggleSideBySide()
+			return nil
+		}
+		return event
+	})
+
+	content := tview.NewFlex().
+		AddItem(list, 40, 0, true).
+		AddItem(diff, 0, 1, false)
+
+	inner := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(nil, 3, 0, false).
+		AddItem(content, 0, 1, true).
+		AddItem(nil, 3, 0, false)
+
+	// 弹窗铺满 mainPage 所在区域，左右各留 15 列、上下各留 3 行，
+	// 内容区正好是 mainPage 宽 - 30、高 - 6。
+	view := tview.NewFlex().
+		AddItem(nil, 15, 0, false).
+		AddItem(inner, 0, 1, true).
+		AddItem(nil, 15, 0, false)
+
+	// 弹窗铺满 mainPage，只有两个子面板需要接收鼠标；其余区域直接消费，
+	// 避免点击穿透到下面的主界面。
+	view.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if list.InRect(event.Position()) || diff.InRect(event.Position()) {
+			return action, event
+		}
+		return tview.MouseConsumed, nil
+	})
+
+	setFocusBorder(list.Box, true)
+	setFocusBorder(diff.Box, false)
+
+	v.view = view
+	v.list = list
+	v.diff = diff
+
+	return v
+}
+
+// SetCommits 用文件历史填充左侧列表并选中第一条；空历史在 diff 面板提示。
+func (v *historyView) SetCommits(commits []core.Commit) {
+	if len(commits) == 0 {
+		v.list.SetTitle(" history (0) ")
+		v.list.SetItems(nil)
+		v.diff.SetText(colorMuted.markup("(no history)"))
+		return
+	}
+
+	v.list.SetTitle(fmt.Sprintf(" history (%d) ", len(commits)))
+	items := make([][]string, 0, len(commits))
+	for _, commit := range commits {
+		header := fmt.Sprintf("%s %s",
+			colorAccent.markup(tview.Escape(commit.Author)),
+			colorMuted.markup(commit.Date.Format("Jan _2, 2006 15:04:05")))
+		subject := " " + colorText.markup(tview.Escape(commit.Subject), true)
+		items = append(items, []string{header, subject})
+	}
+	v.list.SetItems(items)
+	v.list.SetCurrentItem(0)
+}
+
+// SetError 清空历史列表并在 diff 面板显示错误。
+func (v *historyView) SetError(message string) {
+	v.list.SetTitle(" history ")
+	v.list.SetItems(nil)
+	v.diff.SetText(colorDanger.markup("failed to load history:") + " " + tview.Escape(message))
+}
+
+// SetDiff 更新 diff 标题和正文，并回到顶部。
+func (v *historyView) SetDiff(path, text string) {
+	v.diff.SetTitle(" file diff: " + tview.Escape(path) + " ")
+	v.diff.SetText(text)
+	v.diff.ScrollToBeginning()
+}
+
+// focusables 返回 Tab 循环的焦点顺序。
+func (v *historyView) focusables() []tview.Primitive {
+	return []tview.Primitive{v.list, v.diff}
+}
