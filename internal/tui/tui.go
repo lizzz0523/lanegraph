@@ -55,6 +55,8 @@ type TUI struct {
 	commitButton      *tview.Button
 	amendCheck        *tview.Checkbox
 
+	rebaseForm *rebaseForm // interactive rebase 弹窗
+
 	historyList *listView
 	historyDiff *tview.TextView
 
@@ -70,16 +72,18 @@ type TUI struct {
 	infoWidth         int
 	diffWidth         int               // 当前 diff 渲染使用的面板内宽（side-by-side 时有效）
 	historyWidth      int               // history 弹窗内 diff 的渲染宽度
-	statusMsg         string            // 最近一次操作结果，进行中项清空后保留
-	statusBusy        map[string]string // statusBar 当前展示的进行中项，key 为槽位
+	refFolderExpanded map[string]bool   // 用户手动展开过的引用树目录，按目录 key 记录
 	pendingRef        string            // checkout 后等待 refs 刷新完成再选中的引用
 	pendingCommit     string            // history 跳转后等待 commits 刷新完成再选中的提交
-	promptVisible     bool              // 确认弹窗是否正在显示
-	historyVisible    bool              // 文件历史弹窗是否正在显示
-	commitInfoVisible bool              // commit 详情弹窗是否正在显示
-	refFolderExpanded map[string]bool   // 用户手动展开过的引用树目录，按目录 key 记录
+	rebasePopup       *rebasePopup      // interactive rebase 的业务状态
 	syncFrame         int               // 分支同步动画当前帧；-1 表示没有在执行同步操作
 	syncStop          chan struct{}     // 关闭后停止分支同步动画
+	statusMsg         string            // 最近一次操作结果，进行中项清空后保留
+	statusBusy        map[string]string // statusBar 当前展示的进行中项，key 为槽位
+	promptVisible     bool              // 确认弹窗是否正在显示
+	rebaseVisible     bool              // interactive rebase 弹窗是否正在显示
+	historyVisible    bool              // 文件历史弹窗是否正在显示
+	commitInfoVisible bool              // commit 详情弹窗是否正在显示
 	quitting          bool              // 退出流程已启动，忽略重复退出
 
 	tasks tasks
@@ -106,6 +110,21 @@ func (t *TUI) Run() error {
 				t.closeCommitInfo()
 			}
 			return nil
+		}
+
+		// interactive rebase 弹窗显示时，Esc 只关闭弹窗，Tab/Backtab 在弹窗内部循环焦点。
+		if t.rebaseVisible {
+			switch event.Key() {
+			case tcell.KeyEscape:
+				t.closeRebaseInteractive()
+				return nil
+			case tcell.KeyTab:
+				t.focusRebaseInteractive(1)
+				return nil
+			case tcell.KeyBacktab:
+				t.focusRebaseInteractive(-1)
+				return nil
+			}
 		}
 
 		filtering := t.filterText != nil && t.filterText.HasFocus()
@@ -234,16 +253,21 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetFocusFunc(func() { t.setFocusBorder(commitList.Box, true) }).
 		SetBlurFunc(func() { t.setFocusBorder(commitList.Box, false) })
 
-	// r 把当前分支 rebase 到选中的 commit；R 把当前分支 reset 到选中的 commit；
-	// m 把选中的 commit merge 到当前分支；b / t 从选中的 commit 创建分支 / 标签。
+	// R 把当前分支 reset 到选中的 commit；
+	// r 把当前分支 rebase 到选中的 commit；i 执行 interactive rebase；
+	// m 把选中的 commit merge 到当前分支；
+	// b / t 从选中的 commit 创建分支 / 标签。
 	commitList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyRune {
 			switch event.Rune() {
+			case 'R':
+				t.resetCommit()
+				return nil
 			case 'r':
 				t.rebaseCommit()
 				return nil
-			case 'R':
-				t.resetCommit()
+			case 'i':
+				t.rebaseCommitInteractive()
 				return nil
 			case 'm':
 				t.mergeCommit()
@@ -259,7 +283,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		return event
 	})
 
-	commitList.SetLines(renderGraph(t.Commits, core.ComputeGraph(t.Commits)))
+	commitList.SetLines(renderGraph(t.Commits, core.ComputeGraph(t.Commits), true))
 
 	commitList.SetSelectedFunc(func() {
 		t.refreshCommit(false)
@@ -962,24 +986,26 @@ func (t *TUI) setupTasks() {
 			switch req.op {
 			case opReset:
 				return t.Reset(ctx, req.commit, req.resetMode)
-			case opMerge:
-				return t.Merge(ctx, req.commit, req.mergeMode)
+			case opRebase:
+				return t.Rebase(ctx, req.commit)
+			case opRebaseInteractive:
+				return t.RebaseInteractive(ctx, req.commit, req.rebaseActions)
 			case opRebaseContinue:
 				return t.RebaseContinue(ctx)
-			case opMergeContinue:
-				return t.MergeContinue(ctx)
 			case opRebaseAbort:
 				return t.RebaseAbort(ctx)
+			case opMerge:
+				return t.Merge(ctx, req.commit, req.mergeMode)
+			case opMergeContinue:
+				return t.MergeContinue(ctx)
 			case opMergeAbort:
 				return t.MergeAbort(ctx)
 			case opSquashContinue:
 				return t.SquashContinue(ctx)
 			case opSquashAbort:
 				return t.SquashAbort(ctx)
-			case opCommit:
-				return t.Commit(ctx, req.subject, req.description, req.amend)
 			default:
-				return t.Rebase(ctx, req.commit)
+				return t.Commit(ctx, req.subject, req.description, req.amend)
 			}
 		},
 		Post:      post,
@@ -1317,10 +1343,10 @@ func (t *TUI) rebaseCommit() {
 	if row < 0 || row >= len(t.Commits) {
 		return
 	}
-	commit := t.Commits[row]
+	base := t.Commits[row]
 
 	message := fmt.Sprintf("Rebase %s onto %s?\n\n%s\n\n",
-		tview.Escape(t.HeadRef), tview.Escape(commit.ShortHash()), tview.Escape(commit.Subject))
+		tview.Escape(t.HeadRef), tview.Escape(base.ShortHash()), tview.Escape(base.Subject))
 
 	message += colorMuted.markup("Local changes will be stashed and restored automatically.")
 
@@ -1334,11 +1360,115 @@ func (t *TUI) rebaseCommit() {
 			t.promptVisible = false
 			t.app.SetFocus(t.commitList)
 			if buttonIndex == 1 {
-				t.executeRebase(commit)
+				t.executeRebase(base)
 			}
 		})
 
 	t.setupPrompt(page, prompt)
+}
+
+// rebaseCommitInteractive 先弹窗选择每个 commit 的动作，确认后执行 interactive rebase。
+func (t *TUI) rebaseCommitInteractive() {
+	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.rebaseVisible || t.tasks.commit.Running() {
+		return
+	}
+	row := t.commitList.CurrentItem()
+	if row < 0 || row >= len(t.Commits) {
+		return
+	}
+	base := t.Commits[row]
+
+	commits := rebaseCommits(t.Commits, t.HeadHash, base.Hash)
+	if len(commits) == 0 {
+		t.statusDone("commit", "no commits to rebase")
+		return
+	}
+
+	popup := &rebasePopup{
+		base:    base,
+		commits: commits,
+		actions: make([]core.RebaseAction, len(commits)),
+	}
+	for i := range popup.actions {
+		popup.actions[i] = core.RebasePick
+	}
+
+	message := fmt.Sprintf("Rebase %s onto %s?\n\n%s",
+		tview.Escape(t.HeadRef), tview.Escape(base.ShortHash()), tview.Escape(base.Subject))
+
+	rebase := newRebaseForm(
+		message,
+		renderGraph(commits, core.ComputeGraph(commits), false),
+		popup.actions,
+		t.selectedStyle,
+		t.borderColor,
+		t.borderFocusColor,
+		t.cycleRebaseAction,
+		t.closeRebaseInteractive,
+		t.confirmRebaseInteractive,
+	)
+
+	t.rebasePopup = popup
+	t.rebaseForm = rebase
+	t.rebaseVisible = true
+	t.promptVisible = true
+	t.root.AddPage("interactive-rebase", rebase.view, true, true)
+	t.app.SetFocus(rebase.list)
+}
+
+// cycleRebaseAction 切换当前选中 commit 的 rebase 动作并刷新列表。
+func (t *TUI) cycleRebaseAction(delta int) {
+	if !t.rebaseVisible {
+		return
+	}
+	t.rebasePopup.cycleAction(t.rebaseForm.list.CurrentItem(), delta)
+	t.rebaseForm.SetActions(t.rebasePopup.actions)
+	t.rebaseForm.ResetHint()
+}
+
+// closeRebaseInteractive 关闭 interactive rebase 弹窗，把焦点还给 commit 列表。
+func (t *TUI) closeRebaseInteractive() {
+	if !t.rebaseVisible {
+		return
+	}
+	t.rebasePopup = nil
+	t.rebaseForm = nil
+	t.rebaseVisible = false
+	t.promptVisible = false
+	t.root.RemovePage("interactive-rebase")
+	t.app.SetFocus(t.commitList)
+}
+
+// confirmRebaseInteractive 校验动作后关闭弹窗并执行 interactive rebase。
+func (t *TUI) confirmRebaseInteractive() {
+	if !t.rebaseVisible {
+		return
+	}
+	popup, form := t.rebasePopup, t.rebaseForm
+	if message := popup.validationError(); message != "" {
+		form.SetErrorHint(message)
+		return
+	}
+	base, actions := popup.base, popup.actionMap()
+	t.closeRebaseInteractive()
+	t.executeRebaseInteractive(base, actions)
+}
+
+// focusRebaseInteractive 在弹窗的列表和两个按钮之间循环焦点。
+func (t *TUI) focusRebaseInteractive(delta int) {
+	if !t.rebaseVisible {
+		return
+	}
+	focusables := t.rebaseForm.focusables()
+	current := 0
+	for i, primitive := range focusables {
+		if primitive.HasFocus() {
+			current = i
+			break
+		}
+	}
+	current = (current + delta + len(focusables)) % len(focusables)
+	t.app.SetFocus(focusables[current])
 }
 
 // continueRebase 在冲突解决并暂存后继续 rebase。
@@ -2141,7 +2271,7 @@ func (t *TUI) showCommits(_ commitsRequest, commits []core.Commit, err error) {
 	}
 
 	t.Commits = commits
-	t.commitList.SetLines(renderGraph(commits, core.ComputeGraph(commits)))
+	t.commitList.SetLines(renderGraph(commits, core.ComputeGraph(commits), true))
 	// 刷新后 compare 可能已不存在（rebase/切分支），按 hash 重新确认。
 	t.syncCompare()
 
@@ -2900,6 +3030,11 @@ func (t *TUI) executeRebase(commit core.Commit) {
 	t.tasks.commit.Execute(commitOpRequest{op: opRebase, commit: commit})
 }
 
+// executeRebaseInteractive 通过 Execute 强制执行 interactive rebase。
+func (t *TUI) executeRebaseInteractive(commit core.Commit, actions map[string]core.RebaseAction) {
+	t.tasks.commit.Execute(commitOpRequest{op: opRebaseInteractive, commit: commit, rebaseActions: actions})
+}
+
 // executeMerge 通过 Execute 强制执行，把 commit 合入当前分支。
 func (t *TUI) executeMerge(commit core.Commit, mode core.MergeMode) {
 	t.tasks.commit.Execute(commitOpRequest{op: opMerge, commit: commit, mergeMode: mode})
@@ -2932,6 +3067,10 @@ func (t *TUI) showCommitOp(req commitOpRequest, _ string, err error) {
 		switch req.op {
 		case opReset:
 			message = "reset failed: " + message
+		case opRebase:
+			message = "rebase failed: " + message
+		case opRebaseInteractive:
+			message = "interactive rebase failed: " + message
 		case opRebaseContinue:
 			message = "rebase continue failed: " + message
 		case opRebaseAbort:
@@ -2950,10 +3089,8 @@ func (t *TUI) showCommitOp(req commitOpRequest, _ string, err error) {
 			message = "squash continue failed: " + message
 		case opSquashAbort:
 			message = "squash abort failed: " + message
-		case opCommit:
-			message = "commit failed: " + message
 		default:
-			message = "rebase failed: " + message
+			message = "commit failed: " + message
 		}
 	}
 	t.statusDone("commit", message)
@@ -2980,6 +3117,16 @@ func (t *TUI) commitOpLabel(req commitOpRequest, done bool) string {
 			return "reset --" + req.resetMode.String() + " " + req.commit.ShortHash()
 		}
 		return "resetting --" + req.resetMode.String() + " " + req.commit.ShortHash()
+	case opRebase:
+		if done {
+			return "rebased onto " + req.commit.ShortHash()
+		}
+		return "rebasing onto " + req.commit.ShortHash()
+	case opRebaseInteractive:
+		if done {
+			return "interactively rebased onto " + req.commit.ShortHash()
+		}
+		return "interactively rebasing onto " + req.commit.ShortHash()
 	case opRebaseContinue:
 		if done {
 			return "rebase continued"
@@ -3021,7 +3168,7 @@ func (t *TUI) commitOpLabel(req commitOpRequest, done bool) string {
 			return "squash aborted"
 		}
 		return "aborting squash"
-	case opCommit:
+	default:
 		if done {
 			if req.amend {
 				return "amended commit"
@@ -3032,11 +3179,6 @@ func (t *TUI) commitOpLabel(req commitOpRequest, done bool) string {
 			return "amending commit"
 		}
 		return "committing changes"
-	default:
-		if done {
-			return "rebased onto " + req.commit.ShortHash()
-		}
-		return "rebasing onto " + req.commit.ShortHash()
 	}
 }
 

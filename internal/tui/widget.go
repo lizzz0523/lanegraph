@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"fmt"
 	"sort"
 	"strings"
+
+	"lanegraph/internal/core"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -484,4 +487,186 @@ func (v *listView) move(delta int) {
 		index = len(v.items) - 1
 	}
 	v.SetCurrentItem(index)
+}
+
+// rebaseForm 是 interactive rebase 弹窗，布局为说明、动作列表、提示和按钮三段。
+// 动作状态和 rebase 规则由调用方维护，这里只负责展示和交互转发。
+type rebaseForm struct {
+	view         *tview.Flex
+	list         *listView
+	lines        []string // renderGraph 生成的、不含动作列的行
+	hint         *tview.TextView
+	cancelButton *tview.Button
+	rebaseButton *tview.Button
+}
+
+func newRebaseForm(
+	message string,
+	lines []string,
+	actions []core.RebaseAction,
+	selectedStyle tcell.Style,
+	borderColor, focusColor tcell.Color,
+	onCycleAction func(delta int),
+	onCancel, onConfirm func(),
+) *rebaseForm {
+	f := &rebaseForm{lines: lines}
+
+	buttonStyle := tcell.StyleDefault.
+		Foreground(colorText.cell).
+		Background(colorPopup.cell)
+	buttonActivatedStyle := tcell.StyleDefault.
+		Foreground(colorOnAccent.cell).
+		Background(colorText.cell)
+	borderStyle := tcell.StyleDefault.
+		Foreground(borderColor).
+		Background(colorPopup.cell)
+
+	setFocusBorder := func(box *tview.Box, focused bool) {
+		color := borderColor
+		if focused {
+			color = focusColor
+		}
+		box.SetBorderColor(color).SetTitleColor(color)
+	}
+
+	// 顶部操作说明与现有 rebase 弹窗保持一致。
+	header := tview.NewTextView().
+		SetDynamicColors(true).
+		SetWrap(true).
+		SetTextAlign(tview.AlignCenter).
+		SetText(message)
+	header.SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1).
+		SetBorderStyle(borderStyle)
+	header.SetBackgroundColor(colorPopup.cell)
+
+	// 中间列表复用 commit list 的渲染和交互，只在每行最左侧加一列动作。
+	list := newListView(selectedStyle, tcell.StyleDefault)
+	list.SetTitle(" commits ").
+		SetTitleAlign(tview.AlignLeft).
+		SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1).
+		SetFocusFunc(func() { setFocusBorder(list.Box, true) }).
+		SetBlurFunc(func() { setFocusBorder(list.Box, false) }).
+		SetBackgroundColor(colorPopup.cell).
+		SetBorderStyle(borderStyle)
+	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyLeft:
+			onCycleAction(-1)
+			return nil
+		case tcell.KeyRight:
+			onCycleAction(1)
+			return nil
+		}
+		return event
+	})
+
+	// 底部与 rebase 弹窗一样上下排列：提示在上，按钮在下并居中。
+	hint := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter)
+	hint.SetBackgroundColor(colorPopup.cell)
+
+	cancelButton := tview.NewButton("Cancel").
+		SetSelectedFunc(onCancel)
+	rebaseButton := tview.NewButton("Rebase").
+		SetSelectedFunc(onConfirm)
+	for _, button := range []*tview.Button{cancelButton, rebaseButton} {
+		button.SetStyle(buttonStyle).SetActivatedStyle(buttonActivatedStyle)
+	}
+
+	buttons := tview.NewFlex().
+		AddItem(nil, 0, 1, false).
+		AddItem(cancelButton, len("Cancel")+6, 0, false).
+		AddItem(nil, 2, 0, false).
+		AddItem(rebaseButton, len("Rebase")+6, 0, false).
+		AddItem(nil, 0, 1, false)
+
+	footer := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(hint, 1, 0, false).
+		AddItem(nil, 1, 0, false).
+		AddItem(buttons, 1, 0, false)
+	// Flex 默认不清空背景，nil 行和按钮两侧会露出下面的主界面；
+	// 换成普通 Box 让 footer 自己铺满弹窗底色。
+	footer.Box = tview.NewBox()
+	footer.SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1).
+		SetBackgroundColor(colorPopup.cell).
+		SetBorderStyle(borderStyle)
+
+	parts := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(header, 5, 0, false).
+		AddItem(list, 0, 1, true).
+		AddItem(footer, 5, 0, false)
+
+	inner := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(nil, 8, 0, false).
+		AddItem(parts, 0, 1, true).
+		AddItem(nil, 8, 0, false)
+
+	// 弹窗铺满整个界面，左右各留 15 列、上下各留 3 行，和 history 弹窗一致。
+	view := tview.NewFlex().
+		AddItem(nil, 35, 0, false).
+		AddItem(inner, 0, 1, true).
+		AddItem(nil, 35, 0, false)
+
+	// 只有三个分区和按钮接收鼠标；其余区域直接消费，避免点击穿透到下面的主界面。
+	view.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if header.InRect(event.Position()) || list.InRect(event.Position()) || footer.InRect(event.Position()) {
+			return action, event
+		}
+		return tview.MouseConsumed, nil
+	})
+
+	f.view = view
+	f.list = list
+	f.hint = hint
+	f.cancelButton = cancelButton
+	f.rebaseButton = rebaseButton
+
+	f.ResetHint()
+	f.SetActions(actions)
+
+	// 构造时不会触发 focus 回调，先手动初始化列表的聚焦边框。
+	setFocusBorder(list.Box, true)
+
+	return f
+}
+
+// SetActions 按 actions 重绘动作列；线的部分保持不变。
+func (f *rebaseForm) SetActions(actions []core.RebaseAction) {
+	rows := make([]string, len(f.lines))
+	for i, line := range f.lines {
+		label := fmt.Sprintf("%-7s", string(actions[i]))
+		color := colorSuccess
+		switch actions[i] {
+		case core.RebaseSquash:
+			color = colorSecondary
+		case core.RebaseFixup:
+			color = colorAccent
+		case core.RebaseDrop:
+			color = colorDanger
+		}
+		rows[i] = color.markup(label) + " " + line
+	}
+	f.list.SetLines(rows)
+}
+
+// ResetHint 恢复默认的底部提示。
+func (f *rebaseForm) ResetHint() {
+	f.hint.SetText(colorMuted.markup(tview.Escape("Local changes will be stashed and restored automatically.")))
+}
+
+// SetErrorHint 用危险色显示校验错误。
+func (f *rebaseForm) SetErrorHint(message string) {
+	f.hint.SetText(colorDanger.markup(tview.Escape(message)))
+}
+
+// focusables 返回 Tab 循环的焦点顺序。
+func (f *rebaseForm) focusables() []tview.Primitive {
+	return []tview.Primitive{f.list, f.cancelButton, f.rebaseButton}
 }

@@ -176,6 +176,11 @@ func (s *State) Rebase(ctx context.Context, commit Commit) (string, error) {
 	return GitRebase(ctx, s.Repo, commit)
 }
 
+// RebaseInteractive 以 commit 为基点执行 interactive rebase，actions 指定每个提交的动作。
+func (s *State) RebaseInteractive(ctx context.Context, commit Commit, actions map[string]RebaseAction) (string, error) {
+	return GitRebaseInteractive(ctx, s.Repo, commit, actions)
+}
+
 // RebaseContinue 在冲突解决并暂存后继续 rebase。
 func (s *State) RebaseContinue(ctx context.Context) (string, error) {
 	return GitRebaseContinue(ctx, s.Repo)

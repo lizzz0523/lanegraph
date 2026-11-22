@@ -119,7 +119,7 @@ func (c cell) glyphs() (line, conn string) {
 	}
 }
 
-func renderGraph(commits []core.Commit, graph core.Graph) []string {
+func renderGraph(commits []core.Commit, graph core.Graph, showRefs bool) []string {
 	colorOf := authorColorMap(commits)
 	now := time.Now()
 
@@ -198,7 +198,7 @@ func renderGraph(commits []core.Commit, graph core.Graph) []string {
 		fmt.Fprintf(&out, " %s", colorHash.markup(commit.ShortHash()))
 		fmt.Fprintf(&out, " %s", colorOf[commit.Author].markup(tview.Escape(authorInitial(commit.Author)), true))
 		fmt.Fprintf(&out, " %s", colorDate.markup(tview.Escape(commitDate(commit.Date, now))))
-		if commit.Refs != "" {
+		if showRefs && commit.Refs != "" {
 			fmt.Fprintf(&out, " %s", colorRefs.markup("("+tview.Escape(commit.Refs)+")", true))
 		}
 		fmt.Fprintf(&out, " %s", tview.Escape(commit.Subject))

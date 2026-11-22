@@ -100,6 +100,7 @@ type commitOp uint8
 const (
 	opReset commitOp = iota
 	opRebase
+	opRebaseInteractive
 	opRebaseContinue
 	opRebaseAbort
 	opMerge
@@ -111,13 +112,14 @@ const (
 )
 
 type commitOpRequest struct {
-	op          commitOp
-	commit      core.Commit
-	resetMode   core.ResetMode // 仅 reset 使用
-	mergeMode   core.MergeMode // 仅 merge 使用
-	subject     string         // 仅 commit 使用
-	description string         // 仅 commit 使用
-	amend       bool           // 仅 commit 使用
+	op            commitOp
+	commit        core.Commit
+	resetMode     core.ResetMode               // 仅 reset 使用
+	mergeMode     core.MergeMode               // 仅 merge 使用
+	rebaseActions map[string]core.RebaseAction // 仅 interactive rebase 使用
+	subject       string                       // 仅 commit 使用
+	description   string                       // 仅 commit 使用
+	amend         bool                         // 仅 commit 使用
 }
 
 // changeOp 是本地变更列表上的操作类型。
