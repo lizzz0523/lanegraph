@@ -558,6 +558,15 @@ func newRebaseForm(
 		case tcell.KeyRight:
 			onCycleAction(1)
 			return nil
+		case tcell.KeyRune:
+			switch event.Rune() {
+			case 'h':
+				onCycleAction(-1)
+				return nil
+			case 'l':
+				onCycleAction(1)
+				return nil
+			}
 		}
 		return event
 	})

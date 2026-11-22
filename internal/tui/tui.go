@@ -99,28 +99,57 @@ func (t *TUI) Run() error {
 		EnableMouse(true)
 
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		// history / commit 详情弹窗显示时，Esc/q 只关闭弹窗；Ctrl+Q 仍然随时可退出。
-		if (t.historyVisible || t.commitInfoVisible) &&
-			(event.Key() == tcell.KeyEscape || (event.Key() == tcell.KeyRune && event.Rune() == 'q')) {
-			if t.historyVisible {
-				t.closeHistory()
-			} else if t.commitInfoVisible {
-				t.closeCommitInfo()
-			}
-			return nil
-		}
-
-		// interactive rebase 弹窗显示时，Esc 只关闭弹窗，Tab/Backtab 在弹窗内部循环焦点。
+		// 弹窗显示时，Esc/q 只关闭弹窗；Ctrl+Q 仍然随时可退出。
+		// Tab/Backtab 在弹窗内部循环焦点。
 		if t.rebaseVisible {
 			switch event.Key() {
 			case tcell.KeyEscape:
 				t.closeRebaseInteractive()
 				return nil
+			case tcell.KeyRune:
+				if event.Rune() == 'q' {
+					t.closeRebaseInteractive()
+					return nil
+				}
 			case tcell.KeyTab:
-				t.focusRebaseInteractive(1)
+				app.SetFocus(t.nextFocus(1))
 				return nil
 			case tcell.KeyBacktab:
-				t.focusRebaseInteractive(-1)
+				app.SetFocus(t.nextFocus(-1))
+				return nil
+			}
+		}
+
+		if t.historyVisible {
+			switch event.Key() {
+			case tcell.KeyEscape:
+				t.closeHistory()
+				return nil
+			case tcell.KeyRune:
+				if event.Rune() == 'q' {
+					t.closeHistory()
+					return nil
+				}
+			case tcell.KeyTab:
+				app.SetFocus(t.nextFocus(1))
+				return nil
+			case tcell.KeyBacktab:
+				app.SetFocus(t.nextFocus(-1))
+				return nil
+			}
+		}
+
+		if t.commitInfoVisible {
+			switch event.Key() {
+			case tcell.KeyEscape:
+				t.closeCommitInfo()
+				return nil
+			case tcell.KeyRune:
+				if event.Rune() == 'q' {
+					t.closeCommitInfo()
+					return nil
+				}
+			case tcell.KeyTab, tcell.KeyBacktab:
 				return nil
 			}
 		}
@@ -131,7 +160,7 @@ func (t *TUI) Run() error {
 		// filter 和 commit 输入框里要能正常输入字母；Ctrl+Q 仍然随时可退出。
 		typing := filtering || committing
 		switch {
-		case event.Key() == tcell.KeyCtrlQ || (event.Key() == tcell.KeyRune && event.Rune() == 'q' && !typing && !t.promptVisible):
+		case event.Key() == tcell.KeyCtrlQ || (event.Key() == tcell.KeyRune && event.Rune() == 'q' && !typing && !t.popupVisible()):
 			t.quit()
 			return nil
 		case event.Key() == tcell.KeyEscape && filtering:
@@ -150,7 +179,7 @@ func (t *TUI) Run() error {
 			return nil
 		// p / P / f 全局触发当前分支的 pull / push / fetch；
 		// B / T 全局从当前 HEAD 创建并检出分支 / 创建标签；输入框输入时不拦截。
-		case event.Key() == tcell.KeyRune && !typing && !t.promptVisible:
+		case event.Key() == tcell.KeyRune && !typing && !t.popupVisible():
 			switch event.Rune() {
 			case 'p':
 				t.syncBranch(opPull)
@@ -1088,6 +1117,11 @@ func (t *TUI) focusOnScrollTree(p scrollFocusable, onClick func()) {
 	})
 }
 
+// popupVisible 表示有弹窗正在显示；用于屏蔽底层快捷键和防止弹窗叠加。
+func (t *TUI) popupVisible() bool {
+	return t.promptVisible || t.rebaseVisible || t.historyVisible || t.commitInfoVisible
+}
+
 /** EVENT */
 
 // quit 先停止 Task，再等后台 goroutine 退出，最后停止事件循环。
@@ -1125,8 +1159,11 @@ func (t *TUI) nextFocus(step int) tview.Primitive {
 	return chain[0]
 }
 
-// focusChain 返回当前 Tab/Backtab 的循环顺序；history 弹窗显示时只在弹窗内部切换。
+// focusChain 返回当前 Tab/Backtab 的循环顺序；弹窗显示时只在弹窗内部切换。
 func (t *TUI) focusChain() []tview.Primitive {
+	if t.rebaseVisible {
+		return t.rebaseForm.focusables()
+	}
 	if t.historyVisible {
 		return t.historyView.focusables()
 	}
@@ -1409,7 +1446,6 @@ func (t *TUI) rebaseCommitInteractive() {
 	t.rebasePopup = popup
 	t.rebaseForm = rebase
 	t.rebaseVisible = true
-	t.promptVisible = true
 	t.root.AddPage("interactive-rebase", rebase.view, true, true)
 	t.app.SetFocus(rebase.list)
 }
@@ -1432,7 +1468,6 @@ func (t *TUI) closeRebaseInteractive() {
 	t.rebasePopup = nil
 	t.rebaseForm = nil
 	t.rebaseVisible = false
-	t.promptVisible = false
 	t.root.RemovePage("interactive-rebase")
 	t.app.SetFocus(t.commitList)
 }
@@ -1450,23 +1485,6 @@ func (t *TUI) confirmRebaseInteractive() {
 	base, actions := popup.base, popup.actionMap()
 	t.closeRebaseInteractive()
 	t.executeRebaseInteractive(base, actions)
-}
-
-// focusRebaseInteractive 在弹窗的列表和两个按钮之间循环焦点。
-func (t *TUI) focusRebaseInteractive(delta int) {
-	if !t.rebaseVisible {
-		return
-	}
-	focusables := t.rebaseForm.focusables()
-	current := 0
-	for i, primitive := range focusables {
-		if primitive.HasFocus() {
-			current = i
-			break
-		}
-	}
-	current = (current + delta + len(focusables)) % len(focusables)
-	t.app.SetFocus(focusables[current])
 }
 
 // continueRebase 在冲突解决并暂存后继续 rebase。
@@ -2818,7 +2836,7 @@ func (t *TUI) syncOpLabel(req syncOpRequest, done bool) string {
 // promptForcePush 在 push 因非快进被拒后弹窗确认，确认后用 force push 重推当前分支。
 func (t *TUI) promptForcePush() {
 	// 已有弹窗时只保留 statusBar 的错误信息，避免叠出多个弹窗。
-	if t.root == nil || t.promptVisible {
+	if t.root == nil || t.popupVisible() {
 		return
 	}
 
