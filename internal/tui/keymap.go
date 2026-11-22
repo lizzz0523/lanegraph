@@ -110,13 +110,13 @@ var keyBindings = []struct {
 	bindings []keyBinding
 }{
 	{"Global", []keyBinding{
+		{keyLabel(keymap.help), "Show this help"},
 		{keyLabel(keymap.quit) + " / Ctrl+Q", "Quit"},
 		{keyLabel(keymap.globalPull), "Pull current branch"},
 		{keyLabel(keymap.globalPush), "Push current branch"},
 		{keyLabel(keymap.globalFetch), "Fetch remote refs"},
 		{keyLabel(keymap.globalCreateBranch), "Create and checkout branch from HEAD"},
 		{keyLabel(keymap.globalCreateTag), "Create tag from HEAD"},
-		{keyLabel(keymap.help), "Show this help"},
 	}},
 	{"Branchs & Tags", []keyBinding{
 		{keyLabel(keymap.refCheckout), "Checkout branch or tag"},
