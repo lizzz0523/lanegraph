@@ -511,6 +511,9 @@ func newRebaseForm(
 ) *rebaseForm {
 	f := &rebaseForm{lines: lines}
 
+	frameStyle := tcell.StyleDefault.
+		Foreground(tview.Styles.BorderColor).
+		Background(colorPopup.cell)
 	buttonStyle := tcell.StyleDefault.
 		Foreground(colorText.cell).
 		Background(colorPopup.cell)
@@ -537,7 +540,7 @@ func newRebaseForm(
 		SetText(message)
 	header.SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
-		SetBorderStyle(borderStyle)
+		SetBorderStyle(frameStyle)
 	header.SetBackgroundColor(colorPopup.cell)
 
 	// 中间列表复用 commit list 的渲染和交互，只在每行最左侧加一列动作。
@@ -603,7 +606,7 @@ func newRebaseForm(
 	footer.SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
 		SetBackgroundColor(colorPopup.cell).
-		SetBorderStyle(borderStyle)
+		SetBorderStyle(frameStyle)
 
 	parts := tview.NewFlex().
 		SetDirection(tview.FlexRow).
@@ -678,6 +681,164 @@ func (f *rebaseForm) SetErrorHint(message string) {
 // focusables 返回 Tab 循环的焦点顺序。
 func (f *rebaseForm) focusables() []tview.Primitive {
 	return []tview.Primitive{f.list, f.cancelButton, f.rebaseButton}
+}
+
+// rewordForm 是单条 commit reword 弹窗：说明、提交信息输入、提示和按钮。
+type rewordForm struct {
+	view         *tview.Flex
+	subject      *tview.TextArea
+	description  *tview.TextArea
+	hint         *tview.TextView
+	cancelButton *tview.Button
+	rewordButton *tview.Button
+}
+
+func newRewordForm(
+	commit core.Commit,
+	selectedStyle tcell.Style,
+	borderColor, focusColor tcell.Color,
+	onCancel, onConfirm func(),
+) *rewordForm {
+	f := &rewordForm{}
+
+	frameStyle := tcell.StyleDefault.
+		Foreground(tview.Styles.BorderColor).
+		Background(colorPopup.cell)
+	buttonStyle := tcell.StyleDefault.
+		Foreground(colorText.cell).
+		Background(colorPopup.cell)
+	buttonActivatedStyle := tcell.StyleDefault.
+		Foreground(colorOnAccent.cell).
+		Background(colorText.cell)
+	borderStyle := tcell.StyleDefault.
+		Foreground(borderColor).
+		Background(colorPopup.cell)
+
+	setFocusBorder := func(box *tview.Box, focused bool) {
+		color := borderColor
+		if focused {
+			color = focusColor
+		}
+		box.SetBorderColor(color).SetTitleColor(color)
+	}
+
+	message := fmt.Sprintf("Reword %s?\n\n%s",
+		tview.Escape(commit.ShortHash()), tview.Escape(commit.Subject))
+	header := tview.NewTextView().
+		SetDynamicColors(true).
+		SetWrap(true).
+		SetTextAlign(tview.AlignCenter).
+		SetText(message)
+	header.SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1).
+		SetBorderStyle(frameStyle)
+	header.SetBackgroundColor(colorPopup.cell)
+
+	newTextArea := func(title, text string) *tview.TextArea {
+		area := tview.NewTextArea().SetText(text, true)
+		area.SetTitle(title).
+			SetTitleAlign(tview.AlignLeft).
+			SetBorder(true).
+			SetBorderPadding(0, 0, 1, 1).
+			SetFocusFunc(func() { setFocusBorder(area.Box, true) }).
+			SetBlurFunc(func() { setFocusBorder(area.Box, false) })
+		area.SetBackgroundColor(colorPopup.cell)
+		area.SetTextStyle(tcell.StyleDefault.
+			Foreground(colorText.cell).
+			Background(colorPopup.cell))
+		area.SetSelectedStyle(selectedStyle)
+		area.SetBorderStyle(borderStyle)
+		return area
+	}
+	subject := newTextArea(" commit subject ", commit.Subject)
+	description := newTextArea(" description ", strings.Trim(commit.Body, "\r\n"))
+
+	hint := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter)
+	hint.SetBackgroundColor(colorPopup.cell)
+	hint.SetText(colorMuted.markup(tview.Escape("Local changes will be stashed and restored automatically.")))
+
+	cancelButton := tview.NewButton("Cancel").
+		SetSelectedFunc(onCancel)
+	rewordButton := tview.NewButton("Reword").
+		SetSelectedFunc(onConfirm)
+	for _, button := range []*tview.Button{cancelButton, rewordButton} {
+		button.SetStyle(buttonStyle).SetActivatedStyle(buttonActivatedStyle)
+	}
+
+	buttons := tview.NewFlex().
+		AddItem(nil, 0, 1, false).
+		AddItem(cancelButton, len("Cancel")+6, 0, false).
+		AddItem(nil, 2, 0, false).
+		AddItem(rewordButton, len("Reword")+6, 0, false).
+		AddItem(nil, 0, 1, false)
+
+	footer := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(hint, 1, 0, false).
+		AddItem(nil, 1, 0, false).
+		AddItem(buttons, 1, 0, false)
+	// Flex 默认不清空背景，nil 行和按钮两侧会露出下面的主界面；
+	// 换成普通 Box 让 footer 自己铺满弹窗底色。
+	footer.Box = tview.NewBox()
+	footer.SetBorder(true).
+		SetBorderPadding(0, 0, 1, 1).
+		SetBackgroundColor(colorPopup.cell).
+		SetBorderStyle(frameStyle)
+
+	parts := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(header, 5, 0, false).
+		AddItem(subject, 3, 0, false).
+		AddItem(description, 0, 1, true).
+		AddItem(footer, 5, 0, false)
+
+	inner := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(nil, 15, 0, false).
+		AddItem(parts, 0, 1, true).
+		AddItem(nil, 15, 0, false)
+
+	view := tview.NewFlex().
+		AddItem(nil, 35, 0, false).
+		AddItem(inner, 0, 1, true).
+		AddItem(nil, 35, 0, false)
+
+	view.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if header.InRect(event.Position()) || subject.InRect(event.Position()) ||
+			description.InRect(event.Position()) || footer.InRect(event.Position()) {
+			return action, event
+		}
+		return tview.MouseConsumed, nil
+	})
+
+	f.view = view
+	f.subject = subject
+	f.description = description
+	f.hint = hint
+	f.cancelButton = cancelButton
+	f.rewordButton = rewordButton
+
+	setFocusBorder(subject.Box, true)
+	setFocusBorder(description.Box, false)
+
+	return f
+}
+
+// ResetHint 恢复默认的底部提示。
+func (f *rewordForm) ResetHint() {
+	f.hint.SetText(colorMuted.markup(tview.Escape("Local changes will be stashed and restored automatically.")))
+}
+
+// SetErrorHint 用危险色显示校验错误。
+func (f *rewordForm) SetErrorHint(message string) {
+	f.hint.SetText(colorDanger.markup(tview.Escape(message)))
+}
+
+// focusables 返回 Tab 循环的焦点顺序。
+func (f *rewordForm) focusables() []tview.Primitive {
+	return []tview.Primitive{f.subject, f.description, f.cancelButton, f.rewordButton}
 }
 
 // historyView 是文件历史弹窗：左侧 commit 列表，右侧文件 diff。

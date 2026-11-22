@@ -101,6 +101,7 @@ const (
 	opReset commitOp = iota
 	opRebase
 	opRebaseInteractive
+	opReword
 	opRebaseContinue
 	opRebaseAbort
 	opMerge
@@ -117,8 +118,8 @@ type commitOpRequest struct {
 	resetMode     core.ResetMode               // 仅 reset 使用
 	mergeMode     core.MergeMode               // 仅 merge 使用
 	rebaseActions map[string]core.RebaseAction // 仅 interactive rebase 使用
-	subject       string                       // 仅 commit 使用
-	description   string                       // 仅 commit 使用
+	subject       string                       // 仅 commit / reword 使用
+	description   string                       // 仅 commit / reword 使用
 	amend         bool                         // 仅 commit 使用
 }
 

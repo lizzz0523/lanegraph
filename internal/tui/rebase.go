@@ -101,3 +101,23 @@ func reachableCommits(byHash map[string]core.Commit, start string) map[string]bo
 	}
 	return seen
 }
+
+// rewordPopup 是单条 commit reword 的业务状态。
+type rewordPopup struct {
+	commit core.Commit
+}
+
+// rewordValidation 返回不能 reword 的原因；空字符串表示可以执行。
+func rewordValidation(commits []core.Commit, headHash string, commit core.Commit) string {
+	if len(commit.Parents) > 1 {
+		return "cannot reword a merge commit"
+	}
+	byHash := make(map[string]core.Commit, len(commits))
+	for _, c := range commits {
+		byHash[c.Hash] = c
+	}
+	if !reachableCommits(byHash, headHash)[commit.Hash] {
+		return "commit is not on the current branch"
+	}
+	return ""
+}

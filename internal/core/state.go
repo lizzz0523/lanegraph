@@ -176,6 +176,11 @@ func (s *State) RebaseInteractive(ctx context.Context, commit Commit, actions ma
 	return GitRebaseInteractive(ctx, s.Repo, commit, actions)
 }
 
+// Reword 改写 commit 的提交信息。
+func (s *State) Reword(ctx context.Context, commit Commit, subject, description string) (string, error) {
+	return GitReword(ctx, s.Repo, commit, subject, description)
+}
+
 // RebaseContinue 在冲突解决并暂存后继续 rebase。
 func (s *State) RebaseContinue(ctx context.Context) (string, error) {
 	return GitRebaseContinue(ctx, s.Repo)

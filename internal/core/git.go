@@ -490,6 +490,78 @@ func GitRebaseInteractive(ctx context.Context, repo string, commit Commit, actio
 	return output, nil
 }
 
+// rewordSequenceEditor 在 todo 的目标提交后插入 exec，用新消息 amend 该提交。
+// 冲突恢复后 git rebase --continue 会继续执行这条 exec，新消息不会丢失。
+const rewordSequenceEditor = `#!/bin/sh
+set -e
+todo="$1"
+tmp="$todo.lanegraph"
+awk -v hash="$LANEGRAPH_REWORD_HASH" -v cmd="$LANEGRAPH_REWORD_CMD" '
+{
+    print
+    if (NF >= 2 && substr(hash, 1, length($2)) == $2) {
+        print "exec " cmd
+    }
+}' "$todo" > "$tmp"
+mv "$tmp" "$todo"
+`
+
+// GitReword 改写 commit 的提交信息；commit 必须是当前分支上的非 merge 提交。
+// 新消息写入 git 目录，冲突后 continue 仍能通过 todo 里的 exec 读取。
+func GitReword(ctx context.Context, repo string, commit Commit, subject, description string) (string, error) {
+	if len(commit.Parents) > 1 {
+		return "", fmt.Errorf("cannot reword a merge commit")
+	}
+
+	dir, err := os.MkdirTemp("", "lanegraph-reword-")
+	if err != nil {
+		return "", fmt.Errorf("reword error: %w", err)
+	}
+	defer os.RemoveAll(dir)
+
+	messagePath, ok := gitPath(ctx, repo, "lanegraph-reword-message")
+	if !ok {
+		return "", fmt.Errorf("reword error: cannot resolve git directory")
+	}
+	message := subject + "\n"
+	if description != "" {
+		message += "\n" + description + "\n"
+	}
+	if err := os.WriteFile(messagePath, []byte(message), 0o600); err != nil {
+		return "", fmt.Errorf("reword error: %w", err)
+	}
+
+	editorPath := filepath.Join(dir, "sequence-editor")
+	if err := os.WriteFile(editorPath, []byte(rewordSequenceEditor), 0o700); err != nil {
+		return "", fmt.Errorf("reword error: %w", err)
+	}
+	// GIT_SEQUENCE_EDITOR 和 exec 都由 git 通过 shell 执行，路径用单引号包裹。
+	editorPath = "'" + strings.ReplaceAll(editorPath, "'", "'\\''") + "'"
+	messagePath = "'" + strings.ReplaceAll(messagePath, "'", "'\\''") + "'"
+	env := append(os.Environ(),
+		"GIT_SEQUENCE_EDITOR="+editorPath,
+		"LANEGRAPH_REWORD_HASH="+commit.Hash,
+		"LANEGRAPH_REWORD_CMD=git commit --amend --no-verify -F "+messagePath,
+	)
+
+	args := []string{"rebase", "-i", "--autostash", "--empty=keep"}
+	if len(commit.Parents) == 0 {
+		args = append(args, "--root")
+	} else {
+		args = append(args, commit.Parents[0])
+	}
+
+	output, err := gitOutput(ctx, repo, env, args...)
+	if err != nil {
+		if !GitRebaseInProgress(ctx, repo) {
+			removeRewordMessage(ctx, repo)
+		}
+		return "", fmt.Errorf("git rebase error: %w", gitStderr(err))
+	}
+	removeRewordMessage(ctx, repo)
+	return output, nil
+}
+
 // GitRebaseInProgress 返回仓库是否停在未完成的 rebase 中。
 // rebase-merge 和 rebase-apply 是两种后端；rebase-apply 下的 applying 表示 git am，不算 rebase。
 func GitRebaseInProgress(ctx context.Context, repo string) bool {
@@ -505,6 +577,9 @@ func GitRebaseContinue(ctx context.Context, repo string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("git rebase continue error: %w", gitStderr(err))
 	}
+	if !GitRebaseInProgress(ctx, repo) {
+		removeRewordMessage(ctx, repo)
+	}
 	return output, nil
 }
 
@@ -514,7 +589,15 @@ func GitRebaseAbort(ctx context.Context, repo string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("git rebase abort error: %w", gitStderr(err))
 	}
+	removeRewordMessage(ctx, repo)
 	return output, nil
+}
+
+// removeRewordMessage 清理 reword 使用的临时消息文件。
+func removeRewordMessage(ctx context.Context, repo string) {
+	if path, ok := gitPath(ctx, repo, "lanegraph-reword-message"); ok {
+		os.Remove(path)
+	}
 }
 
 // MergeMode 是 git merge 的合并方式。

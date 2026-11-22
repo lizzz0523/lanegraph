@@ -56,6 +56,7 @@ type TUI struct {
 	amendCheck        *tview.Checkbox
 
 	rebaseForm  *rebaseForm  // interactive rebase 弹窗
+	rewordForm  *rewordForm  // 单条 commit reword 弹窗
 	historyView *historyView // 文件历史弹窗
 
 	tabStyle            tcell.Style
@@ -73,6 +74,7 @@ type TUI struct {
 	pendingRef        string            // checkout 后等待 refs 刷新完成再选中的引用
 	pendingCommit     string            // history 跳转后等待 commits 刷新完成再选中的提交
 	rebasePopup       *rebasePopup      // interactive rebase 的业务状态
+	rewordPopup       *rewordPopup      // 单条 commit reword 的业务状态
 	historyPopup      *historyPopup     // 文件历史弹窗的业务状态
 	syncFrame         int               // 分支同步动画当前帧；-1 表示没有在执行同步操作
 	syncStop          chan struct{}     // 关闭后停止分支同步动画
@@ -80,6 +82,7 @@ type TUI struct {
 	statusBusy        map[string]string // statusBar 当前展示的进行中项，key 为槽位
 	promptVisible     bool              // 确认弹窗是否正在显示
 	rebaseVisible     bool              // interactive rebase 弹窗是否正在显示
+	rewordVisible     bool              // 单条 commit reword 弹窗是否正在显示
 	historyVisible    bool              // 文件历史弹窗是否正在显示
 	commitInfoVisible bool              // commit 详情弹窗是否正在显示
 	quitting          bool              // 退出流程已启动，忽略重复退出
@@ -109,6 +112,26 @@ func (t *TUI) Run() error {
 			case tcell.KeyRune:
 				if event.Rune() == 'q' {
 					t.closeRebaseInteractive()
+					return nil
+				}
+			case tcell.KeyTab:
+				app.SetFocus(t.nextFocus(1))
+				return nil
+			case tcell.KeyBacktab:
+				app.SetFocus(t.nextFocus(-1))
+				return nil
+			}
+		}
+
+		if t.rewordVisible {
+			editing := t.rewordForm.subject.HasFocus() || t.rewordForm.description.HasFocus()
+			switch event.Key() {
+			case tcell.KeyEscape:
+				t.closeReword()
+				return nil
+			case tcell.KeyRune:
+				if event.Rune() == 'q' && !editing {
+					t.closeReword()
 					return nil
 				}
 			case tcell.KeyTab:
@@ -281,7 +304,9 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetBlurFunc(func() { t.setFocusBorder(commitList.Box, false) })
 
 	// R 把当前分支 reset 到选中的 commit；
-	// r 把当前分支 rebase 到选中的 commit；i 执行 interactive rebase；
+	// r 把当前分支 rebase 到选中的 commit；
+	// i 执行 interactive rebase；
+	// w 改写选中的 commit 的提交信息；
 	// m 把选中的 commit merge 到当前分支；
 	// b / t 从选中的 commit 创建分支 / 标签。
 	commitList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -295,6 +320,9 @@ func (t *TUI) setupUI() tview.Primitive {
 				return nil
 			case 'i':
 				t.rebaseCommitInteractive()
+				return nil
+			case 'w':
+				t.rewordCommit()
 				return nil
 			case 'm':
 				t.mergeCommit()
@@ -1017,6 +1045,8 @@ func (t *TUI) setupTasks() {
 				return t.Rebase(ctx, req.commit)
 			case opRebaseInteractive:
 				return t.RebaseInteractive(ctx, req.commit, req.rebaseActions)
+			case opReword:
+				return t.Reword(ctx, req.commit, req.subject, req.description)
 			case opRebaseContinue:
 				return t.RebaseContinue(ctx)
 			case opRebaseAbort:
@@ -1119,7 +1149,7 @@ func (t *TUI) focusOnScrollTree(p scrollFocusable, onClick func()) {
 
 // popupVisible 表示有弹窗正在显示；用于屏蔽底层快捷键和防止弹窗叠加。
 func (t *TUI) popupVisible() bool {
-	return t.promptVisible || t.rebaseVisible || t.historyVisible || t.commitInfoVisible
+	return t.promptVisible || t.rebaseVisible || t.rewordVisible || t.historyVisible || t.commitInfoVisible
 }
 
 /** EVENT */
@@ -1163,6 +1193,9 @@ func (t *TUI) nextFocus(step int) tview.Primitive {
 func (t *TUI) focusChain() []tview.Primitive {
 	if t.rebaseVisible {
 		return t.rebaseForm.focusables()
+	}
+	if t.rewordVisible {
+		return t.rewordForm.focusables()
 	}
 	if t.historyVisible {
 		return t.historyView.focusables()
@@ -1485,6 +1518,67 @@ func (t *TUI) confirmRebaseInteractive() {
 	base, actions := popup.base, popup.actionMap()
 	t.closeRebaseInteractive()
 	t.executeRebaseInteractive(base, actions)
+}
+
+// rewordCommit 先弹窗编辑提交信息，确认后改写选中的 commit。
+func (t *TUI) rewordCommit() {
+	if t.tasks.commit == nil || t.root == nil || t.popupVisible() || t.tasks.commit.Running() {
+		return
+	}
+	row := t.commitList.CurrentItem()
+	if row < 0 || row >= len(t.Commits) {
+		return
+	}
+	commit := t.Commits[row]
+
+	popup := &rewordPopup{commit: commit}
+
+	if message := rewordValidation(t.Commits, t.HeadHash, commit); message != "" {
+		t.statusDone("commit", message)
+		return
+	}
+
+	reword := newRewordForm(
+		commit,
+		t.selectedStyle,
+		t.borderColor,
+		t.borderFocusColor,
+		t.closeReword,
+		t.confirmReword,
+	)
+	t.rewordPopup = popup
+	t.rewordForm = reword
+	t.rewordVisible = true
+	t.root.AddPage("reword", reword.view, true, true)
+	t.app.SetFocus(reword.subject)
+}
+
+// closeReword 关闭 reword 弹窗，把焦点还给 commit 列表。
+func (t *TUI) closeReword() {
+	if !t.rewordVisible {
+		return
+	}
+	t.rewordPopup = nil
+	t.rewordForm = nil
+	t.rewordVisible = false
+	t.root.RemovePage("reword")
+	t.app.SetFocus(t.commitList)
+}
+
+// confirmReword 读取表单内容，关闭弹窗并改写提交信息。
+func (t *TUI) confirmReword() {
+	if !t.rewordVisible {
+		return
+	}
+	subject := strings.TrimSpace(t.rewordForm.subject.GetText())
+	if subject == "" {
+		t.rewordForm.SetErrorHint("commit subject is required")
+		return
+	}
+	description := strings.TrimSpace(t.rewordForm.description.GetText())
+	commit := t.rewordPopup.commit
+	t.closeReword()
+	t.executeReword(commit, subject, description)
 }
 
 // continueRebase 在冲突解决并暂存后继续 rebase。
@@ -2942,6 +3036,11 @@ func (t *TUI) executeRebaseInteractive(commit core.Commit, actions map[string]co
 	t.tasks.commit.Execute(commitOpRequest{op: opRebaseInteractive, commit: commit, rebaseActions: actions})
 }
 
+// executeReword 通过 Execute 强制执行，改写 commit 的提交信息。
+func (t *TUI) executeReword(commit core.Commit, subject, description string) {
+	t.tasks.commit.Execute(commitOpRequest{op: opReword, commit: commit, subject: subject, description: description})
+}
+
 // executeMerge 通过 Execute 强制执行，把 commit 合入当前分支。
 func (t *TUI) executeMerge(commit core.Commit, mode core.MergeMode) {
 	t.tasks.commit.Execute(commitOpRequest{op: opMerge, commit: commit, mergeMode: mode})
@@ -2978,6 +3077,8 @@ func (t *TUI) showCommitOp(req commitOpRequest, _ string, err error) {
 			message = "rebase failed: " + message
 		case opRebaseInteractive:
 			message = "interactive rebase failed: " + message
+		case opReword:
+			message = "reword failed: " + message
 		case opRebaseContinue:
 			message = "rebase continue failed: " + message
 		case opRebaseAbort:
@@ -3034,6 +3135,11 @@ func (t *TUI) commitOpLabel(req commitOpRequest, done bool) string {
 			return "interactively rebased onto " + req.commit.ShortHash()
 		}
 		return "interactively rebasing onto " + req.commit.ShortHash()
+	case opReword:
+		if done {
+			return "reworded " + req.commit.ShortHash()
+		}
+		return "rewording " + req.commit.ShortHash()
 	case opRebaseContinue:
 		if done {
 			return "rebase continued"
