@@ -289,13 +289,13 @@ func (v *listView) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 		case tcell.KeyRune:
 			// 与 tview.TreeView 保持一致：j/k 移动，g/G 跳到首尾。
 			switch event.Rune() {
-			case 'j':
+			case keymap.listDown:
 				v.move(1)
-			case 'k':
+			case keymap.listUp:
 				v.move(-1)
-			case 'g':
+			case keymap.listFirst:
 				v.SetCurrentItem(0)
-			case 'G':
+			case keymap.listLast:
 				v.SetCurrentItem(len(v.items) - 1)
 			}
 		}
@@ -563,10 +563,10 @@ func newRebaseForm(
 			return nil
 		case tcell.KeyRune:
 			switch event.Rune() {
-			case 'h':
+			case keymap.rebasePrev:
 				onCycleAction(-1)
 				return nil
-			case 'l':
+			case keymap.rebaseNext:
 				onCycleAction(1)
 				return nil
 			}
@@ -917,10 +917,10 @@ func newHistoryView(
 			return event
 		}
 		switch event.Rune() {
-		case 'w':
+		case keymap.diffWhitespace:
 			onToggleWhitespace()
 			return nil
-		case 's':
+		case keymap.diffSideBySide:
 			onToggleSideBySide()
 			return nil
 		}

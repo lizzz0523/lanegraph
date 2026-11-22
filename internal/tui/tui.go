@@ -110,7 +110,7 @@ func (t *TUI) Run() error {
 				t.closeRebaseInteractive()
 				return nil
 			case tcell.KeyRune:
-				if event.Rune() == 'q' {
+				if event.Rune() == keymap.dialogClose {
 					t.closeRebaseInteractive()
 					return nil
 				}
@@ -130,7 +130,7 @@ func (t *TUI) Run() error {
 				t.closeReword()
 				return nil
 			case tcell.KeyRune:
-				if event.Rune() == 'q' && !editing {
+				if event.Rune() == keymap.dialogClose && !editing {
 					t.closeReword()
 					return nil
 				}
@@ -149,7 +149,7 @@ func (t *TUI) Run() error {
 				t.closeHistory()
 				return nil
 			case tcell.KeyRune:
-				if event.Rune() == 'q' {
+				if event.Rune() == keymap.dialogClose {
 					t.closeHistory()
 					return nil
 				}
@@ -168,7 +168,7 @@ func (t *TUI) Run() error {
 				t.closeCommitInfo()
 				return nil
 			case tcell.KeyRune:
-				if event.Rune() == 'q' {
+				if event.Rune() == keymap.dialogClose {
 					t.closeCommitInfo()
 					return nil
 				}
@@ -183,7 +183,7 @@ func (t *TUI) Run() error {
 		// filter 和 commit 输入框里要能正常输入字母；Ctrl+Q 仍然随时可退出。
 		typing := filtering || committing
 		switch {
-		case event.Key() == tcell.KeyCtrlQ || (event.Key() == tcell.KeyRune && event.Rune() == 'q' && !typing && !t.popupVisible()):
+		case event.Key() == tcell.KeyCtrlQ || (event.Key() == tcell.KeyRune && event.Rune() == keymap.quit && !typing && !t.popupVisible()):
 			t.quit()
 			return nil
 		case event.Key() == tcell.KeyEscape && filtering:
@@ -204,19 +204,19 @@ func (t *TUI) Run() error {
 		// B / T 全局从当前 HEAD 创建并检出分支 / 创建标签；输入框输入时不拦截。
 		case event.Key() == tcell.KeyRune && !typing && !t.popupVisible():
 			switch event.Rune() {
-			case 'p':
+			case keymap.globalPull:
 				t.syncBranch(opPull)
 				return nil
-			case 'P':
+			case keymap.globalPush:
 				t.syncBranch(opPush)
 				return nil
-			case 'f':
+			case keymap.globalFetch:
 				t.syncBranch(opFetch)
 				return nil
-			case 'B':
+			case keymap.globalCreateBranch:
 				t.createRef(opCreateBranch, nil)
 				return nil
-			case 'T':
+			case keymap.globalCreateTag:
 				t.createRef(opCreateTag, nil)
 				return nil
 			}
@@ -312,25 +312,25 @@ func (t *TUI) setupUI() tview.Primitive {
 	commitList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyRune {
 			switch event.Rune() {
-			case 'R':
+			case keymap.commitReset:
 				t.resetCommit()
 				return nil
-			case 'r':
+			case keymap.commitRebase:
 				t.rebaseCommit()
 				return nil
-			case 'i':
+			case keymap.commitInteractiveRebase:
 				t.rebaseCommitInteractive()
 				return nil
-			case 'w':
+			case keymap.commitReword:
 				t.rewordCommit()
 				return nil
-			case 'm':
+			case keymap.commitMerge:
 				t.mergeCommit()
 				return nil
-			case 'b':
+			case keymap.commitBranch:
 				t.createRefFromCommit(opCreateBranch)
 				return nil
-			case 't':
+			case keymap.commitTag:
 				t.createRefFromCommit(opCreateTag)
 				return nil
 			}
@@ -364,7 +364,7 @@ func (t *TUI) setupUI() tview.Primitive {
 
 	// 空格弹窗查看完整的 commit 信息。
 	commitInfo.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyRune && event.Rune() == ' ' {
+		if event.Key() == tcell.KeyRune && event.Rune() == keymap.commitInfo {
 			t.openCommitInfo()
 			return nil
 		}
@@ -393,10 +393,10 @@ func (t *TUI) setupUI() tview.Primitive {
 			return event
 		}
 		switch event.Rune() {
-		case 'o':
+		case keymap.fileOpen:
 			t.openFile(fileList.GetCurrentNode())
 			return nil
-		case 'h':
+		case keymap.fileHistory:
 			t.openHistory(fileList.GetCurrentNode())
 			return nil
 		}
@@ -436,10 +436,10 @@ func (t *TUI) setupUI() tview.Primitive {
 			return event
 		}
 		switch event.Rune() {
-		case 'w':
+		case keymap.diffWhitespace:
 			t.toggleWhitespace()
 			return nil
-		case 's':
+		case keymap.diffSideBySide:
 			t.toggleSideBySide()
 			return nil
 		}
@@ -487,16 +487,16 @@ func (t *TUI) setupUI() tview.Primitive {
 			return event
 		}
 		switch event.Rune() {
-		case ' ':
+		case keymap.changeStage:
 			t.toggleLocalChange()
 			return nil
-		case 'd':
+		case keymap.changeDiscard:
 			t.discardLocalChange()
 			return nil
-		case 'o':
+		case keymap.fileOpen:
 			t.openFile(changeList.GetCurrentNode())
 			return nil
-		case 'h':
+		case keymap.fileHistory:
 			t.openHistory(changeList.GetCurrentNode())
 			return nil
 		}
@@ -536,10 +536,10 @@ func (t *TUI) setupUI() tview.Primitive {
 			return event
 		}
 		switch event.Rune() {
-		case 'w':
+		case keymap.diffWhitespace:
 			t.toggleWhitespace()
 			return nil
-		case 's':
+		case keymap.diffSideBySide:
 			t.toggleSideBySide()
 			return nil
 		}
@@ -650,14 +650,14 @@ func (t *TUI) setupUI() tview.Primitive {
 			return event
 		}
 		switch event.Rune() {
-		case ' ':
+		case keymap.refCheckout:
 			if _, isFolder := node.GetReference().(folder); isFolder {
 				t.toggleRefFolder(node)
 			} else {
 				t.checkoutRef(node)
 			}
 			return nil
-		case 'd':
+		case keymap.refDelete:
 			t.deleteRef(node)
 			return nil
 		}
