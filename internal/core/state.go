@@ -34,11 +34,13 @@ type State struct {
 	IgnoreWhitespace bool
 	// SideBySide 表示 diff 是否使用左右对照布局。
 	SideBySide bool
+	// Colorizers 是启动时探测到的可用 diff 着色器，按优先顺序排列。
+	Colorizers []DiffColorizer
 }
 
 func NewState(ctx context.Context, repo string) (State, error) {
 	repo = GitRoot(ctx, repo)
-	s := State{Repo: repo, IgnoreWhitespace: true}
+	s := State{Repo: repo, IgnoreWhitespace: true, Colorizers: detectDiffColorizers()}
 
 	refs, err := s.Refs(ctx)
 	if err != nil {

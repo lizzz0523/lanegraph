@@ -970,13 +970,15 @@ func parseNameStatus(output string, scope ChangeScope) []FileChange {
 type DiffOptions struct {
 	IgnoreWhitespace bool
 	SideBySide       bool
+	// Colorizers 是当前环境可用的 diff 着色器，按优先顺序尝试。
+	Colorizers []DiffColorizer
 	// Width 是 diff 渲染的目标宽度（面板内宽）；<=0 时使用默认宽度。
 	Width int
 }
 
 // String 把影响 diff 渲染结果的选项编码成稳定的缓存 key。
 func (o DiffOptions) String() string {
-	return fmt.Sprintf("%t\x00%t\x00%d", o.IgnoreWhitespace, o.SideBySide, o.Width)
+	return fmt.Sprintf("%t\x00%t\x00%d\x00%v", o.IgnoreWhitespace, o.SideBySide, o.Width, o.Colorizers)
 }
 
 // GitFileDiff 相对 compare 计算单个文件的 diff，并交给 diff 着色器处理。
@@ -1235,23 +1237,50 @@ func gitOutput(ctx context.Context, repo string, env []string, args ...string) (
 	return string(output), nil
 }
 
-// colorizeDiff 依次尝试 git-split-diffs 和 git-delta 为原始 diff 着色；
-// 两者都不可用时返回原始 diff，由调用方决定如何展示。
-func colorizeDiff(ctx context.Context, diff string, options DiffOptions) (string, error) {
-	output, err := colorizeSplitDiff(ctx, diff, options)
-	if err == nil {
-		return output, nil
+// DiffColorizer 是 diff 着色器。
+type DiffColorizer uint8
+
+const (
+	ColorizerSplitDiff DiffColorizer = iota // git-split-diffs
+	ColorizerDelta                          // git-delta
+)
+
+// detectDiffColorizers 按优先级探测 PATH 中可用的 diff 着色器。
+func detectDiffColorizers() []DiffColorizer {
+	var colorizers []DiffColorizer
+	if _, err := exec.LookPath("git-split-diffs"); err == nil {
+		colorizers = append(colorizers, ColorizerSplitDiff)
 	}
-	if ctx.Err() != nil {
-		return "", ctx.Err()
+	if _, err := exec.LookPath("delta"); err == nil {
+		colorizers = append(colorizers, ColorizerDelta)
+	}
+	return colorizers
+}
+
+// colorizeDiff 按 options.Colorizers 的顺序依次尝试为原始 diff 着色；
+// 全部不可用时返回原始 diff 和错误，由调用方决定如何展示。
+func colorizeDiff(ctx context.Context, diff string, options DiffOptions) (string, error) {
+	if len(options.Colorizers) == 0 {
+		return diff, errors.New("no diff colorizer available")
 	}
 
-	output, err = colorizeDeltaDiff(ctx, diff, options)
-	if err != nil {
+	var err error
+	for _, colorizer := range options.Colorizers {
+		var output string
+		switch colorizer {
+		case ColorizerSplitDiff:
+			output, err = colorizeSplitDiff(ctx, diff, options)
+		case ColorizerDelta:
+			output, err = colorizeDeltaDiff(ctx, diff, options)
+		default:
+			continue
+		}
+		if err == nil {
+			return output, nil
+		}
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		return diff, err
 	}
-	return output, nil
+	return diff, err
 }

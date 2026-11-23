@@ -2796,6 +2796,7 @@ func (t *TUI) requestHistoryDiff(commit core.Commit) {
 	options := core.DiffOptions{
 		IgnoreWhitespace: t.IgnoreWhitespace,
 		SideBySide:       t.SideBySide,
+		Colorizers:       t.Colorizers,
 		Width:            t.historyView.width,
 	}
 	t.tasks.fileHistoryDiff.Execute(historyDiffRequest{
@@ -2862,6 +2863,7 @@ func (t *TUI) diffOptions(view *tview.TextView) core.DiffOptions {
 	options := core.DiffOptions{
 		IgnoreWhitespace: t.IgnoreWhitespace,
 		SideBySide:       t.SideBySide,
+		Colorizers:       t.Colorizers,
 	}
 	if view != nil {
 		if _, _, width, _ := view.GetInnerRect(); width > 0 {
