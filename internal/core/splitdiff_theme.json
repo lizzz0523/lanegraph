@@ -32,7 +32,7 @@
         "modifiers": ["dim"]
     },
     "HUNK_HEADER_COLOR": {
-        "modifiers": ["dim"]
+        "color": "#ffdd99"
     },
     "DELETED_WORD_COLOR": {
         "color": "#ffcccc",
