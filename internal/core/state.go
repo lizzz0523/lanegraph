@@ -246,9 +246,9 @@ func (s *State) Files(ctx context.Context, commit Commit, compare *Commit) ([]Fi
 	return GitCommitFiles(ctx, s.Repo, commit, compare)
 }
 
-// Diff 返回单个文件的 diff，通常是 git-delta 的 ANSI 输出。
-// compare 为 nil 时相对第一个 parent；options 控制空白忽略和左右对照布局。
-// git-delta 不可用时返回原始 diff 和错误，由调用方决定如何展示。
+// Diff 返回单个文件的 diff，通常是着色后的 ANSI 输出。
+// compare 为 nil 时相对第一个 parent；options 控制空白忽略、布局和宽度。
+// 着色器都不可用时返回原始 diff 和错误，由调用方决定如何展示。
 func (s *State) Diff(ctx context.Context, commit Commit, compare *Commit, change FileChange, options DiffOptions) (string, error) {
 	return GitFileDiff(ctx, s.Repo, commit, compare, change, options)
 }
@@ -258,8 +258,8 @@ func (s *State) LocalFiles(ctx context.Context) ([]FileChange, error) {
 	return GitLocalChanges(ctx, s.Repo)
 }
 
-// LocalDiff 返回本地单个文件的 diff，通常是 git-delta 的 ANSI 输出。
-// options 控制空白忽略和左右对照布局。
+// LocalDiff 返回本地单个文件的 diff，通常是着色后的 ANSI 输出。
+// options 控制空白忽略、布局和宽度。
 func (s *State) LocalDiff(ctx context.Context, change FileChange, options DiffOptions) (string, error) {
 	return GitLocalFileDiff(ctx, s.Repo, change, options)
 }

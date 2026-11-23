@@ -854,7 +854,7 @@ type historyView struct {
 	view  *tview.Flex
 	list  *listView
 	diff  *tview.TextView
-	width int // side-by-side 时 diff 的渲染宽度
+	width int // diff 的渲染宽度
 }
 
 func newHistoryView(

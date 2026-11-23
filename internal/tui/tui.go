@@ -72,7 +72,7 @@ type TUI struct {
 
 	activeTab         string // 当前显示的主面板 tab
 	infoWidth         int
-	diffWidth         int               // 当前 diff 渲染使用的面板内宽（side-by-side 时有效）
+	diffWidth         int               // 当前 diff 渲染使用的面板内宽
 	refFolderExpanded map[string]bool   // 用户手动展开过的引用树目录，按目录 key 记录
 	pendingRef        string            // checkout 后等待 refs 刷新完成再选中的引用
 	pendingCommit     string            // history 跳转后等待 commits 刷新完成再选中的提交
@@ -472,7 +472,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		return event
 	})
 
-	// 在控件绘制前按当前内宽重渲染 side-by-side；此时 Flex 已设置本帧的 rect。
+	// 在控件绘制前按当前内宽重渲染 diff；此时 Flex 已设置本帧的 rect。
 	fileDiff.SetDrawFunc(func(_ tcell.Screen, _, _, _, _ int) (int, int, int, int) {
 		t.syncDiffViewWidth(fileDiff)
 		return fileDiff.GetInnerRect()
@@ -572,7 +572,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		return event
 	})
 
-	// 在控件绘制前按当前内宽重渲染 side-by-side；此时 Flex 已设置本帧的 rect。
+	// 在控件绘制前按当前内宽重渲染 diff；此时 Flex 已设置本帧的 rect。
 	changeDiff.SetDrawFunc(func(_ tcell.Screen, _, _, _, _ int) (int, int, int, int) {
 		t.syncDiffViewWidth(changeDiff)
 		return changeDiff.GetInnerRect()
@@ -2796,9 +2796,7 @@ func (t *TUI) requestHistoryDiff(commit core.Commit) {
 	options := core.DiffOptions{
 		IgnoreWhitespace: t.IgnoreWhitespace,
 		SideBySide:       t.SideBySide,
-	}
-	if options.SideBySide {
-		options.Width = t.historyView.width
+		Width:            t.historyView.width,
 	}
 	t.tasks.fileHistoryDiff.Execute(historyDiffRequest{
 		commit:  commit,
@@ -2820,9 +2818,9 @@ func (t *TUI) showHistoryDiff(req historyDiffRequest, text string, err error) {
 	t.historyView.SetDiff(req.change.Path, text)
 }
 
-// syncHistoryDiffWidth 在 side-by-side 模式下按弹窗内宽重新请求 diff。
+// syncHistoryDiffWidth 在弹窗内宽变化时按新宽度重新请求 diff。
 func (t *TUI) syncHistoryDiffWidth() {
-	if !t.historyVisible || !t.SideBySide || t.historyView == nil {
+	if !t.historyVisible || t.historyView == nil {
 		return
 	}
 	t.refreshHistoryDiff()
@@ -2865,7 +2863,7 @@ func (t *TUI) diffOptions(view *tview.TextView) core.DiffOptions {
 		IgnoreWhitespace: t.IgnoreWhitespace,
 		SideBySide:       t.SideBySide,
 	}
-	if t.SideBySide && view != nil {
+	if view != nil {
 		if _, _, width, _ := view.GetInnerRect(); width > 0 {
 			t.diffWidth = width
 		}
@@ -2906,12 +2904,9 @@ func (t *TUI) drawDiffBadges(screen tcell.Screen) {
 	}
 }
 
-// syncDiffViewWidth 在 side-by-side 模式下按当前面板内宽重新请求 diff。
+// syncDiffViewWidth 在面板内宽变化时按新宽度重新请求 diff。
 // 由 diff 面板的 DrawFunc 调用，此时 Flex 已设置好本帧的 rect。
 func (t *TUI) syncDiffViewWidth(view *tview.TextView) {
-	if !t.SideBySide {
-		return
-	}
 	_, _, width, _ := view.GetInnerRect()
 	if width <= 0 || width == t.diffWidth {
 		return

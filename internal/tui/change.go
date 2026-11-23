@@ -273,7 +273,7 @@ func folderPath(path []*tview.TreeNode) string {
 	return strings.Join(parts, "/")
 }
 
-// renderDiff 统一处理 git-delta 的输出；delta 不可用时退回到原始 diff。
+// renderDiff 统一处理着色器的输出；着色器都不可用时退回到原始 diff。
 func renderDiff(output string, err error) (string, error) {
 	switch {
 	case err != nil && output == "":
@@ -281,13 +281,13 @@ func renderDiff(output string, err error) (string, error) {
 	case err != nil:
 		return renderPlainDiff(output), nil
 	default:
-		return renderDeltaDiff(output), nil
+		return renderANSIDiff(output), nil
 	}
 }
 
-func renderDeltaDiff(output string) string {
+func renderANSIDiff(output string) string {
 	output = strings.ReplaceAll(output, "\r", "")
-	// delta 输出首尾可能带空行；末尾空行会在 TextView 中多出一行
+	// 着色输出首尾可能带空行；末尾空行会在 TextView 中多出一行
 	output = strings.Trim(output, "\n")
 
 	var out strings.Builder
@@ -325,7 +325,7 @@ func renderDeltaDiff(output string) string {
 	return out.String()
 }
 
-// renderPlainDiff 是 git-delta 不可用时的兜底着色。
+// renderPlainDiff 是着色器都不可用时的兜底着色。
 func renderPlainDiff(diff string) string {
 	if diff == "" {
 		return ""

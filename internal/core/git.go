@@ -970,7 +970,7 @@ func parseNameStatus(output string, scope ChangeScope) []FileChange {
 type DiffOptions struct {
 	IgnoreWhitespace bool
 	SideBySide       bool
-	// Width 是 side-by-side 布局的目标宽度（面板内宽）；<=0 时使用默认宽度。
+	// Width 是 diff 渲染的目标宽度（面板内宽）；<=0 时使用默认宽度。
 	Width int
 }
 
@@ -979,9 +979,9 @@ func (o DiffOptions) String() string {
 	return fmt.Sprintf("%t\x00%t\x00%d", o.IgnoreWhitespace, o.SideBySide, o.Width)
 }
 
-// GitFileDiff 相对 compare 计算单个文件的 diff，并交给 git-delta 着色。
+// GitFileDiff 相对 compare 计算单个文件的 diff，并交给 diff 着色器处理。
 // compare 为 nil 时相对第一个 parent；options.IgnoreWhitespace 为 true 时用 -w 忽略纯空白改动；
-// git-delta 失败时返回原始 diff，由调用方决定如何展示。
+// 着色器都不可用时返回原始 diff，由调用方决定如何展示。
 func GitFileDiff(ctx context.Context, repo string, commit Commit, compare *Commit, change FileChange, options DiffOptions) (string, error) {
 	var args []string
 	if base := commit.diffBase(compare); base != "" {
@@ -1235,10 +1235,78 @@ func gitOutput(ctx context.Context, repo string, env []string, args ...string) (
 	return string(output), nil
 }
 
-// colorizeDiff 把原始 diff 交给 git-delta 着色；
-// side-by-side 使用固定宽度（面板内宽）并无限折行以完整展示内容，其余情况保持 variable 宽度。
-// git-delta 失败时返回原始 diff，由调用方决定如何展示。
+// colorizeDiff 依次尝试 git-split-diffs 和 git-delta 为原始 diff 着色；
+// 两者都不可用时返回原始 diff，由调用方决定如何展示。
 func colorizeDiff(ctx context.Context, diff string, options DiffOptions) (string, error) {
+	output, err := colorizeSplitDiff(ctx, diff, options)
+	if err == nil {
+		return output, nil
+	}
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+
+	output, err = colorizeDeltaDiff(ctx, diff, options)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return diff, err
+	}
+	return output, nil
+}
+
+// colorizeSplitDiff 把原始 diff 交给 git-split-diffs 着色。
+// git-split-diffs 按终端尺寸排版，这里用 COLUMNS/LINES 固定成面板宽度；
+// 再用 min-line-width 强制布局与 side-by-side 开关一致：阈值 0 走左右对照，更大则走单栏。
+// 主题通过 git 配置注入，只覆盖 diff 背景色，不修改用户自己的 split 配置。
+func colorizeSplitDiff(ctx context.Context, diff string, options DiffOptions) (string, error) {
+	width := options.Width
+	if width <= 0 {
+		width = 80
+	}
+	minLineWidth := 100000
+	if options.SideBySide {
+		minLineWidth = 0
+	}
+
+	config := []string{
+		"split-diffs.min-line-width", fmt.Sprint(minLineWidth),
+	}
+	if dir := splitDiffThemeDir(); dir != "" {
+		config = append(config,
+			"split-diffs.theme-directory", dir,
+			"split-diffs.theme-name", splitDiffThemeName,
+		)
+	}
+	env := append(os.Environ(),
+		"COLUMNS="+fmt.Sprint(width),
+		"LINES=24",
+		"GIT_CONFIG_COUNT="+fmt.Sprint(len(config)/2),
+	)
+	for i := 0; i < len(config); i += 2 {
+		env = append(env,
+			fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", i/2, config[i]),
+			fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", i/2, config[i+1]),
+		)
+	}
+
+	cmd := exec.CommandContext(ctx, "git-split-diffs", "--color=truecolor")
+	cmd.Stdin = strings.NewReader(diff)
+	cmd.Env = env
+	output, err := cmd.Output()
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", fmt.Errorf("git-split-diffs error: %w", err)
+	}
+	return string(output), nil
+}
+
+// colorizeDeltaDiff 把原始 diff 交给 git-delta 着色。
+// side-by-side 使用固定宽度（面板内宽）并无限折行以完整展示内容，其余情况保持 variable 宽度。
+func colorizeDeltaDiff(ctx context.Context, diff string, options DiffOptions) (string, error) {
 	args := []string{
 		"--paging=never", "--no-gitconfig", "--true-color=always",
 		"--line-numbers", "--file-style=omit",
@@ -1274,7 +1342,7 @@ func colorizeDiff(ctx context.Context, diff string, options DiffOptions) (string
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		return diff, fmt.Errorf("git-delta error: %w", err)
+		return "", fmt.Errorf("git-delta error: %w", err)
 	}
 	return string(output), nil
 }
