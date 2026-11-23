@@ -1,6 +1,6 @@
-module lanegraph
+module github.com/lizzz0523/lanegraph
 
-go 1.27.2
+go 1.24
 
 require (
 	github.com/gdamore/tcell/v2 v2.8.1

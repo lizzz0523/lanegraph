@@ -3,7 +3,7 @@ package tui
 import (
 	"fmt"
 
-	"lanegraph/internal/core"
+	"github.com/lizzz0523/lanegraph/internal/core"
 )
 
 // rebaseActionOrder 是 ←/→ 切换时的动作循环顺序。

@@ -1,6 +1,6 @@
 package tui
 
-import "lanegraph/internal/core"
+import "github.com/lizzz0523/lanegraph/internal/core"
 
 // historyPopup 是文件历史弹窗的业务状态，视图由 TUI 持有的 historyView 负责。
 type historyPopup struct {

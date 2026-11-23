@@ -1,8 +1,8 @@
 package tui
 
 import (
-	"lanegraph/internal/async"
-	"lanegraph/internal/core"
+	"github.com/lizzz0523/lanegraph/internal/async"
+	"github.com/lizzz0523/lanegraph/internal/core"
 )
 
 type refsRequest struct{}

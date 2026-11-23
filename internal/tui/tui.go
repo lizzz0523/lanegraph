@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"lanegraph/internal/async"
-	"lanegraph/internal/core"
+	"github.com/lizzz0523/lanegraph/internal/async"
+	"github.com/lizzz0523/lanegraph/internal/core"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"

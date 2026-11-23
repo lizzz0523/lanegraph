@@ -6,7 +6,7 @@ import (
 	"time"
 	"unicode"
 
-	"lanegraph/internal/core"
+	"github.com/lizzz0523/lanegraph/internal/core"
 
 	"github.com/mattn/go-runewidth"
 	"github.com/rivo/tview"

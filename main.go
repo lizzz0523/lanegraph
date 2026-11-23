@@ -5,8 +5,8 @@ import (
 	"log"
 	"os"
 
-	"lanegraph/internal/core"
-	"lanegraph/internal/tui"
+	"github.com/lizzz0523/lanegraph/internal/core"
+	"github.com/lizzz0523/lanegraph/internal/tui"
 )
 
 func main() {
