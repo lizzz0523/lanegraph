@@ -871,8 +871,8 @@ func newRewordForm(
 		SetBorderStyle(frameStyle)
 	header.SetBackgroundColor(colorPopup.cell)
 
-	newTextArea := func(title, text string) *tview.TextArea {
-		area := tview.NewTextArea().SetText(text, true)
+	newTextArea := func(title, text string, cursorAtTheEnd bool) *tview.TextArea {
+		area := tview.NewTextArea().SetText(text, cursorAtTheEnd)
 		area.SetTitle(title).
 			SetTitleAlign(tview.AlignLeft).
 			SetBorder(true).
@@ -887,8 +887,9 @@ func newRewordForm(
 		area.SetBorderStyle(borderStyle)
 		return area
 	}
-	subject := newTextArea(" commit subject ", commit.Subject)
-	description := newTextArea(" description ", strings.Trim(commit.Body, "\r\n"))
+	subject := newTextArea(" commit subject ", commit.Subject, true)
+	// 多行 description 从开头显示；光标放在末尾会让文本框滚到最后一行，看起来像只取了一行。
+	description := newTextArea(" description ", strings.Trim(commit.Body, "\r\n"), false)
 
 	hint := tview.NewTextView().
 		SetDynamicColors(true).
