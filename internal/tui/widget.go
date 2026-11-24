@@ -359,20 +359,6 @@ func (v *listView) MouseHandler() func(action tview.MouseAction, event *tcell.Ev
 	})
 }
 
-// hoverAt 按鼠标位置更新悬停 item；返回是否发生变化。
-func (v *listView) hoverAt(posX, posY int) bool {
-	index := -1
-	if v.InInnerRect(posX, posY) {
-		_, innerY, _, _ := v.GetInnerRect()
-		index = v.itemAtLine(v.offset + posY - innerY)
-	}
-	if index == v.hover {
-		return false
-	}
-	v.hover = index
-	return true
-}
-
 // SetItems 替换全部 item，并重新计算每个 item 的起始行号。
 func (v *listView) SetItems(items [][]string) {
 	v.items = items
@@ -508,6 +494,20 @@ func (v *listView) itemAtLine(line int) int {
 		return index
 	}
 	return -1
+}
+
+// hoverAt 按鼠标位置更新悬停 item；返回是否发生变化。
+func (v *listView) hoverAt(posX, posY int) bool {
+	index := -1
+	if v.InInnerRect(posX, posY) {
+		_, innerY, _, _ := v.GetInnerRect()
+		index = v.itemAtLine(v.offset + posY - innerY)
+	}
+	if index == v.hover {
+		return false
+	}
+	v.hover = index
+	return true
 }
 
 func (v *listView) move(delta int) {
