@@ -1462,20 +1462,18 @@ func (t *TUI) jumpToParent() {
 	}
 }
 
-// jumpToChild 把选中项移动到列表上方最近的 child。
+// jumpToChild 把选中项移动到列表上方最近的第一个 child（当前 commit 是其 first parent）。
 func (t *TUI) jumpToChild() {
 	row := t.commitList.CurrentItem()
 	if row <= 0 || row >= len(t.Commits) {
 		return
 	}
 	hash := t.Commits[row].Hash
-	// topo-order 下 child 都在当前行上方，从近到远查找。
+	// topo-order 下 child 都在当前行上方，从近到远查找；只认 first-parent 以和 jumpToParent 对偶。
 	for i := row - 1; i >= 0; i-- {
-		for _, parent := range t.Commits[i].Parents {
-			if parent == hash {
-				t.commitList.SetCurrentItem(i)
-				return
-			}
+		if parents := t.Commits[i].Parents; len(parents) > 0 && parents[0] == hash {
+			t.commitList.SetCurrentItem(i)
+			return
 		}
 	}
 }

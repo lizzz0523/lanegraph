@@ -138,7 +138,7 @@ var keyBindings = []struct {
 		{keyLabel(keymap.commitBranch), "Create and checkout branch from selected commit"},
 		{keyLabel(keymap.commitTag), "Create tag from selected commit"},
 		{keyLabel(keymap.commitParent), "Jump to first parent of selected commit"},
-		{keyLabel(keymap.commitChild), "Jump to nearest child of selected commit"},
+		{keyLabel(keymap.commitChild), "Jump to first child of selected commit"},
 	}},
 	{"Interative Rebase", []keyBinding{
 		{"← / " + keyLabel(keymap.rebasePrev), "Previous rebase action"},
