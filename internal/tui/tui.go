@@ -278,6 +278,7 @@ const drawInterval = 16 * time.Millisecond
 // tuiScreen 限制整屏绘制的频率。tview 每处理一个鼠标事件都会同步整屏重绘，
 // 快速滚轮时事件产生得比绘制快，在队列里积压，反向滚动要等旧事件处理完才有反应。
 // 合并成每帧最多绘制一次后，积压的事件只改滚动位置，队列很快就能排空。
+// 刷新前还会修正压在弹窗边框上的宽字符，见 fixWideOverlaps。
 type tuiScreen struct {
 	tcell.Screen
 
@@ -310,7 +311,27 @@ func (s *tuiScreen) Show() {
 		s.skipped = false
 		return
 	}
+	s.fixWideOverlaps()
 	s.Screen.Show()
+}
+
+// fixWideOverlaps 让被弹窗压住半个格子的宽字符让位。
+// tcell 画宽字符时会连它的第二格一起跳过（tScreen.draw 里 x += width-1），
+// 第二格如果被后画的弹窗边框占用，这一格就永远发不到终端，看起来像边框缺了一段。
+// tview 画出来的宽字符第二格都是空格，所以第二格不是空格时就是被上层控件覆盖了。
+func (s *tuiScreen) fixWideOverlaps() {
+	width, height := s.Size()
+	for y := 0; y < height; y++ {
+		for x := 0; x < width-1; x++ {
+			_, _, style, cellWidth := s.GetContent(x, y)
+			if cellWidth < 2 {
+				continue
+			}
+			if mainc, _, _, _ := s.GetContent(x+1, y); mainc != ' ' {
+				s.SetContent(x, y, ' ', nil, style)
+			}
+		}
+	}
 }
 
 /** SETUP */
