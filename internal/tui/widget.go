@@ -212,8 +212,9 @@ type listView struct {
 	starts []int // 每个 item 第一行的绝对行号
 	gap    int   // 相邻 item 之间的空行数
 
-	offset         int
 	hover          int
+	hoverEnabled   bool
+	offset         int
 	marked         int
 	current        int
 	pendingVisible bool
@@ -229,6 +230,7 @@ func newListView(selectedStyle, highlightStyle tcell.Style) *listView {
 	return &listView{
 		Box:            tview.NewBox(),
 		hover:          -1,
+		hoverEnabled:   true,
 		marked:         -1,
 		selectedStyle:  selectedStyle,
 		highlightStyle: highlightStyle,
@@ -315,7 +317,7 @@ func (v *listView) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 
 func (v *listView) MouseHandler() func(action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive)) (consumed bool, capture tview.Primitive) {
 	return v.Box.WrapMouseHandler(func(action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive)) (consumed bool, capture tview.Primitive) {
-		if action == tview.MouseMove && v.hoverAt(event.Position()) {
+		if v.hoverEnabled && action == tview.MouseMove && v.hoverAt(event.Position()) {
 			return true, nil
 		}
 		if !v.InRect(event.Position()) {
@@ -396,6 +398,14 @@ func (v *listView) SetGap(gap int) {
 	}
 	v.gap = gap
 	v.SetItems(v.items)
+}
+
+// SetHoverEnabled 控制鼠标悬停是否高亮 item。
+func (v *listView) SetHoverEnabled(enabled bool) {
+	v.hoverEnabled = enabled
+	if !enabled {
+		v.hover = -1
+	}
 }
 
 // SetMarkedItem 标记对比基准所在 item；index 越界时清除标记。
@@ -525,8 +535,9 @@ func (v *listView) move(delta int) {
 type diffView struct {
 	*tview.TextView
 
-	hover     int
-	hunkLines []bool // 按逻辑行记录是否跳过悬停（hunk 标题及分隔线）
+	hover        int
+	hoverEnabled bool
+	hunkLines    []bool // 按逻辑行记录是否跳过悬停（hunk 标题及分隔线）
 }
 
 func newDiffView() *diffView {
@@ -535,7 +546,8 @@ func newDiffView() *diffView {
 			SetDynamicColors(true).
 			SetScrollable(true).
 			SetWrap(false),
-		hover: -1,
+		hover:        -1,
+		hoverEnabled: true,
 	}
 }
 
@@ -564,13 +576,21 @@ func (v *diffView) MouseHandler() func(action tview.MouseAction, event *tcell.Ev
 	return func(action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive)) (consumed bool, capture tview.Primitive) {
 		switch action {
 		case tview.MouseMove:
-			if v.hoverAt(event.Position()) {
+			if v.hoverEnabled && v.hoverAt(event.Position()) {
 				return true, nil
 			}
 		case tview.MouseScrollUp, tview.MouseScrollDown, tview.MouseScrollLeft, tview.MouseScrollRight:
 			v.hover = -1
 		}
 		return next(action, event, setFocus)
+	}
+}
+
+// SetHoverEnabled 控制鼠标悬停是否高亮整行。
+func (v *diffView) SetHoverEnabled(enabled bool) {
+	v.hoverEnabled = enabled
+	if !enabled {
+		v.hover = -1
 	}
 }
 
@@ -989,6 +1009,7 @@ func newHistoryView(
 	}
 
 	list := newListView(selectedStyle, tcell.StyleDefault)
+	list.SetHoverEnabled(false)
 	// item 之间留一个空行，选中背景只覆盖 item 自身。
 	list.SetGap(1)
 
