@@ -101,7 +101,17 @@ func New(st *core.State) *TUI {
 /** RUN */
 
 func (t *TUI) Run() error {
-	app := tview.NewApplication().
+	app := tview.NewApplication()
+
+	base, err := tcell.NewScreen()
+	if err != nil {
+		return err
+	}
+	screen := &tuiScreen{Screen: base, app: app}
+
+	// SetScreen 必须在 EnableMouse 之前：预先设置的 screen 不会在 Run 中再开启鼠标。
+	app.SetScreen(screen).
+		SetBeforeDrawFunc(screen.beforeDraw).
 		SetRoot(t.setupUI(), true).
 		EnableMouse(true)
 
@@ -260,6 +270,47 @@ func (t *TUI) Run() error {
 	t.refreshCommit(true)
 
 	return app.Run()
+}
+
+// drawInterval 是两次整屏绘制之间的最短间隔，约一帧。
+const drawInterval = 16 * time.Millisecond
+
+// tuiScreen 限制整屏绘制的频率。tview 每处理一个鼠标事件都会同步整屏重绘，
+// 快速滚轮时事件产生得比绘制快，在队列里积压，反向滚动要等旧事件处理完才有反应。
+// 合并成每帧最多绘制一次后，积压的事件只改滚动位置，队列很快就能排空。
+type tuiScreen struct {
+	tcell.Screen
+
+	app     *tview.Application
+	pending bool      // 已安排补画，期间不再重复排队
+	skipped bool      // 本次绘制被跳过，紧接着的 Show 也要跳过
+	last    time.Time // 上次整屏绘制的时间
+}
+
+// beforeDraw 作为 BeforeDrawFunc：距上次绘制不足一帧时跳过本次绘制，并安排到期后补画。
+// 它和 Show 都只在主循环里调用，字段无需加锁。
+func (s *tuiScreen) beforeDraw(tcell.Screen) bool {
+	if wait := drawInterval - time.Since(s.last); wait > 0 {
+		s.skipped = true
+		if !s.pending {
+			s.pending = true
+			time.AfterFunc(wait, func() {
+				s.app.QueueUpdateDraw(func() { s.pending = false })
+			})
+		}
+		return true
+	}
+	s.last = time.Now()
+	return false
+}
+
+// Show 在跳过绘制时不刷新：tview 绘制前已清空缓冲，此时刷新会闪出空白。
+func (s *tuiScreen) Show() {
+	if s.skipped {
+		s.skipped = false
+		return
+	}
+	s.Screen.Show()
 }
 
 /** SETUP */
