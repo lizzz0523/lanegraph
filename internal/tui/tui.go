@@ -1626,11 +1626,12 @@ func (t *TUI) confirmRebaseInteractive() {
 		return
 	}
 	popup, form := t.rebasePopup, t.rebaseForm
-	if message := popup.validationError(); message != "" {
-		form.SetErrorHint(message)
+	actions, err := popup.validateActions()
+	if err != nil {
+		form.SetErrorHint(err.Error())
 		return
 	}
-	base, actions := popup.base, popup.actionMap()
+	base := popup.base
 	t.closeRebaseInteractive()
 	t.executeRebaseInteractive(base, actions)
 }

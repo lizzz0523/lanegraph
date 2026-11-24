@@ -38,29 +38,24 @@ func (p *rebasePopup) cycleAction(row, delta int) {
 	p.actions[row] = rebaseActionOrder[index]
 }
 
-// validationError 返回第一个无法执行的 squash / fixup：
-// 排除 drop 后最旧的提交没有可供合并的前一个提交。
-func (p *rebasePopup) validationError() string {
+// validateActions 校验动作并汇总为 full hash → action 的映射。
+// 排除 drop 后最旧的提交必须可被 pick，否则它前面没有可供合并的提交。
+func (p *rebasePopup) validateActions() (map[string]core.RebaseAction, error) {
 	for i := len(p.actions) - 1; i >= 0; i-- {
-		switch p.actions[i] {
-		case core.RebaseDrop:
+		if p.actions[i] == core.RebaseDrop {
 			continue
-		case core.RebaseSquash, core.RebaseFixup:
-			return fmt.Sprintf("cannot %s %s without a previous commit", p.actions[i], p.commits[i].ShortHash())
-		default:
-			return ""
 		}
+		if p.actions[i] == core.RebaseSquash || p.actions[i] == core.RebaseFixup {
+			return nil, fmt.Errorf("cannot %s %s without a previous commit", p.actions[i], p.commits[i].ShortHash())
+		}
+		break
 	}
-	return ""
-}
 
-// actionMap 把列表中的动作按完整 hash 汇总给 core。
-func (p *rebasePopup) actionMap() map[string]core.RebaseAction {
 	actions := make(map[string]core.RebaseAction, len(p.actions))
 	for i, action := range p.actions {
 		actions[p.commits[i].Hash] = action
 	}
-	return actions
+	return actions, nil
 }
 
 // rebaseCommits 返回 base..HEAD 中会被 interactive rebase 重放的提交，
