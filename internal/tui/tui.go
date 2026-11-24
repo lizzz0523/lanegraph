@@ -335,6 +335,12 @@ func (t *TUI) setupUI() tview.Primitive {
 	commitList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyRune {
 			switch event.Rune() {
+			case keymap.commitParent:
+				t.jumpToParent()
+				return nil
+			case keymap.commitChild:
+				t.jumpToChild()
+				return nil
 			case keymap.commitReset:
 				t.resetCommit()
 				return nil
@@ -1439,6 +1445,39 @@ func (t *TUI) compareCommit(row int) {
 	}
 
 	t.applyCompare(&compare)
+}
+
+// jumpToParent 把选中项移动到当前 commit 的第一个 parent。
+func (t *TUI) jumpToParent() {
+	row := t.commitList.CurrentItem()
+	if row < 0 || row >= len(t.Commits) {
+		return
+	}
+	parents := t.Commits[row].Parents
+	if len(parents) == 0 {
+		return
+	}
+	if parent := t.commitRow(parents[0]); parent >= 0 {
+		t.commitList.SetCurrentItem(parent)
+	}
+}
+
+// jumpToChild 把选中项移动到列表上方最近的 child。
+func (t *TUI) jumpToChild() {
+	row := t.commitList.CurrentItem()
+	if row <= 0 || row >= len(t.Commits) {
+		return
+	}
+	hash := t.Commits[row].Hash
+	// topo-order 下 child 都在当前行上方，从近到远查找。
+	for i := row - 1; i >= 0; i-- {
+		for _, parent := range t.Commits[i].Parents {
+			if parent == hash {
+				t.commitList.SetCurrentItem(i)
+				return
+			}
+		}
+	}
 }
 
 // resetCommit 先弹窗选择 reset 模式，确认后把当前分支重置到选中的 commit。

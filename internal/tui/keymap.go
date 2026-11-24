@@ -26,6 +26,8 @@ var keymap = struct {
 	commitCherryPick        rune
 	commitBranch            rune
 	commitTag               rune
+	commitParent            rune
+	commitChild             rune
 	commitInfo              rune
 
 	fileOpen    rune
@@ -67,6 +69,8 @@ var keymap = struct {
 	commitCherryPick:        'c',
 	commitBranch:            'b',
 	commitTag:               't',
+	commitParent:            'n',
+	commitChild:             'N',
 	commitInfo:              ' ',
 
 	fileOpen:    'o',
@@ -133,6 +137,8 @@ var keyBindings = []struct {
 		{keyLabel(keymap.commitCherryPick), "Cherry-pick selected commit onto current branch"},
 		{keyLabel(keymap.commitBranch), "Create and checkout branch from selected commit"},
 		{keyLabel(keymap.commitTag), "Create tag from selected commit"},
+		{keyLabel(keymap.commitParent), "Jump to first parent of selected commit"},
+		{keyLabel(keymap.commitChild), "Jump to nearest child of selected commit"},
 	}},
 	{"Interative Rebase", []keyBinding{
 		{"← / " + keyLabel(keymap.rebasePrev), "Previous rebase action"},
