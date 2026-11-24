@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -497,6 +498,92 @@ func (v *listView) move(delta int) {
 	v.SetCurrentItem(index)
 }
 
+// diffView 在 TextView 之上增加鼠标悬停时的整行高亮。
+// hoverLine 是逻辑行号，-1 表示当前没有高亮。
+type diffView struct {
+	*tview.TextView
+
+	hoverLine int
+	hunkLines []bool // 按逻辑行记录是否跳过悬停（hunk 标题及分隔线）
+}
+
+func newDiffView() *diffView {
+	return &diffView{
+		TextView: tview.NewTextView().
+			SetDynamicColors(true).
+			SetScrollable(true).
+			SetWrap(false),
+		hoverLine: -1,
+	}
+}
+
+// Draw 在 TextView 画完文本后叠加悬停行背景，保留每行原有的前景色和属性。
+func (v *diffView) Draw(screen tcell.Screen) {
+	v.TextView.Draw(screen)
+	if v.hoverLine < 0 {
+		return
+	}
+
+	x, y, width, height := v.GetInnerRect()
+	offset, _ := v.GetScrollOffset()
+	row := y + v.hoverLine - offset
+	if row < y || row >= y+height {
+		return
+	}
+	for column := x; column < x+width; column++ {
+		mainc, combc, style, _ := screen.GetContent(column, row)
+		screen.SetContent(column, row, mainc, combc, style.Background(colorSelection.cell))
+	}
+}
+
+// MouseHandler 跟踪悬停行；只有行号变化时消费事件，让 tview 重绘一次。
+func (v *diffView) MouseHandler() func(action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive)) (consumed bool, capture tview.Primitive) {
+	next := v.TextView.MouseHandler()
+	return func(action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive)) (consumed bool, capture tview.Primitive) {
+		switch action {
+		case tview.MouseMove:
+			if v.hover(event.Position()) {
+				return true, nil
+			}
+		case tview.MouseScrollUp, tview.MouseScrollDown, tview.MouseScrollLeft, tview.MouseScrollRight:
+			v.hoverLine = -1
+		}
+		return next(action, event, setFocus)
+	}
+}
+
+// diffHunkLinePattern 匹配悬停时需要跳过的行：hunk 标题、横线分隔，以及 delta 的 box 标题。
+var diffHunkLinePattern = regexp.MustCompile(`^(?:@@|─|-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?|\d+:.*│$)`)
+
+// SetText 更新 diff 文本，并重新标记 hunk 标题；旧的高亮行不能沿用到新内容。
+func (v *diffView) SetText(text string) *diffView {
+	v.TextView.SetText(text)
+	v.hoverLine = -1
+	lines := strings.Split(v.TextView.GetText(true), "\n")
+	v.hunkLines = make([]bool, len(lines))
+	for i, line := range lines {
+		v.hunkLines[i] = diffHunkLinePattern.MatchString(strings.TrimSpace(line))
+	}
+	return v
+}
+
+// hover 按鼠标位置更新悬停行；返回是否发生变化。
+func (v *diffView) hover(posX, posY int) bool {
+	line := -1
+	if v.InInnerRect(posX, posY) {
+		_, innerY, _, _ := v.GetInnerRect()
+		offset, _ := v.GetScrollOffset()
+		if candidate := offset + posY - innerY; candidate >= 0 && candidate < len(v.hunkLines) && !v.hunkLines[candidate] {
+			line = candidate
+		}
+	}
+	if line == v.hoverLine {
+		return false
+	}
+	v.hoverLine = line
+	return true
+}
+
 // rebaseForm 是 interactive rebase 弹窗，布局为说明、动作列表、提示和按钮三段。
 // 动作状态和 rebase 规则由调用方维护，这里只负责展示和交互转发。
 type rebaseForm struct {
@@ -853,7 +940,7 @@ func (f *rewordForm) focusables() []tview.Primitive {
 type historyView struct {
 	view  *tview.Flex
 	list  *listView
-	diff  *tview.TextView
+	diff  *diffView
 	width int // diff 的渲染宽度
 }
 
@@ -895,11 +982,8 @@ func newHistoryView(
 	list.SetSelectedFunc(onSelect)
 	list.SetActivatedFunc(onActivate)
 
-	diff := tview.NewTextView().
-		SetDynamicColors(true).
-		SetScrollable(true).
-		SetWrap(false).
-		SetText(colorMuted.markup("loading…"))
+	diff := newDiffView()
+	diff.SetText(colorMuted.markup("loading…"))
 
 	diff.SetTitle(" file diff: "+tview.Escape(path)+" ").
 		SetTitleAlign(tview.AlignLeft).

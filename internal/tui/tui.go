@@ -47,11 +47,11 @@ type TUI struct {
 	commitList  *listView
 	commitInfo  *tview.TextView
 	fileList    *tview.TreeView
-	fileDiff    *tview.TextView
+	fileDiff    *diffView
 
 	changePanel       *tview.Flex
 	changeList        *tview.TreeView
-	changeDiff        *tview.TextView
+	changeDiff        *diffView
 	commitSubject     *tview.TextArea
 	commitDescription *tview.TextArea
 	commitButton      *tview.Button
@@ -450,11 +450,8 @@ func (t *TUI) setupUI() tview.Primitive {
 		t.selectFile(node)
 	})
 
-	fileDiff := tview.NewTextView().
-		SetDynamicColors(true).
-		SetScrollable(true).
-		SetWrap(false).
-		SetText(colorMuted.markup("select a file"))
+	fileDiff := newDiffView()
+	fileDiff.SetText(colorMuted.markup("select a file"))
 
 	fileDiff.SetTitle(" file diff ").
 		SetTitleAlign(tview.AlignLeft).
@@ -550,11 +547,8 @@ func (t *TUI) setupUI() tview.Primitive {
 		t.selectLocalFile(node)
 	})
 
-	changeDiff := tview.NewTextView().
-		SetDynamicColors(true).
-		SetScrollable(true).
-		SetWrap(false).
-		SetText(colorMuted.markup("select a file"))
+	changeDiff := newDiffView()
+	changeDiff.SetText(colorMuted.markup("select a file"))
 
 	changeDiff.SetTitle(" file diff ").
 		SetTitleAlign(tview.AlignLeft).
@@ -2867,14 +2861,14 @@ func (t *TUI) syncHistoryDiffWidth() {
 
 /** DIFF */
 
-func (t *TUI) setDiff(view *tview.TextView, slot string, change core.FileChange, text, message string) {
+func (t *TUI) setDiff(view *diffView, slot string, change core.FileChange, text, message string) {
 	t.statusDone(slot, message)
 	view.SetTitle(" file diff: " + tview.Escape(change.Path) + " ")
 	view.SetText(text)
 	view.ScrollToBeginning()
 }
 
-func (t *TUI) clearDiff(view *tview.TextView, slot, message string) {
+func (t *TUI) clearDiff(view *diffView, slot, message string) {
 	t.statusDone(slot, message)
 	view.SetTitle(" file diff ")
 	if message == "" {
@@ -2886,7 +2880,7 @@ func (t *TUI) clearDiff(view *tview.TextView, slot, message string) {
 }
 
 // diffView 返回当前显示的 diff 面板；history 弹窗打开时返回弹窗内的 diff。
-func (t *TUI) diffView() *tview.TextView {
+func (t *TUI) diffView() *diffView {
 	if t.historyVisible {
 		return t.historyView.diff
 	}
@@ -2897,7 +2891,7 @@ func (t *TUI) diffView() *tview.TextView {
 }
 
 // diffOptions 按当前状态和 diff 面板宽度动态组装展示选项。
-func (t *TUI) diffOptions(view *tview.TextView) core.DiffOptions {
+func (t *TUI) diffOptions(view *diffView) core.DiffOptions {
 	options := core.DiffOptions{
 		IgnoreWhitespace: t.IgnoreWhitespace,
 		SideBySide:       t.SideBySide,
@@ -2946,7 +2940,7 @@ func (t *TUI) drawDiffBadges(screen tcell.Screen) {
 
 // syncDiffViewWidth 在面板内宽变化时按新宽度重新请求 diff。
 // 由 diff 面板的 DrawFunc 调用，此时 Flex 已设置好本帧的 rect。
-func (t *TUI) syncDiffViewWidth(view *tview.TextView) {
+func (t *TUI) syncDiffViewWidth(view *diffView) {
 	_, _, width, _ := view.GetInnerRect()
 	if width <= 0 || width == t.diffWidth {
 		return
