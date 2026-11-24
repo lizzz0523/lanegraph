@@ -203,7 +203,7 @@ func (m *formText) SetFormAttributes(_ int, labelColor, bgColor, fieldTextColor,
 
 // listView 把视口偏移和选中项分开，使滚轮只滚动内容。
 // tview.List 的 Draw 会强制让选中项保持可见，无法做到这一点。
-// 每个 item 可以包含多行，选中和高亮按 item 生效。
+// 每个 item 可以包含多行，选中、对比高亮和悬停按 item 生效。
 type listView struct {
 	*tview.Box
 
@@ -213,6 +213,7 @@ type listView struct {
 	gap    int   // 相邻 item 之间的空行数
 
 	offset         int
+	hover          int
 	marked         int
 	current        int
 	pendingVisible bool
@@ -227,6 +228,7 @@ type listView struct {
 func newListView(selectedStyle, highlightStyle tcell.Style) *listView {
 	return &listView{
 		Box:            tview.NewBox(),
+		hover:          -1,
 		marked:         -1,
 		selectedStyle:  selectedStyle,
 		highlightStyle: highlightStyle,
@@ -263,7 +265,7 @@ func (v *listView) Draw(screen tcell.Screen) {
 			if i == v.marked && i != v.current {
 				style = v.highlightStyle
 			}
-			if i == v.current || i == v.marked {
+			if i == v.current || i == v.marked || i == v.hover {
 				for bx := 0; bx < width; bx++ {
 					screen.SetContent(x+bx, y+row, ' ', nil, style)
 				}
@@ -313,6 +315,9 @@ func (v *listView) InputHandler() func(event *tcell.EventKey, setFocus func(p tv
 
 func (v *listView) MouseHandler() func(action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive)) (consumed bool, capture tview.Primitive) {
 	return v.Box.WrapMouseHandler(func(action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive)) (consumed bool, capture tview.Primitive) {
+		if action == tview.MouseMove && v.hoverAt(event.Position()) {
+			return true, nil
+		}
 		if !v.InRect(event.Position()) {
 			return false, nil
 		}
@@ -339,17 +344,33 @@ func (v *listView) MouseHandler() func(action tview.MouseAction, event *tcell.Ev
 			consumed = true
 		case tview.MouseScrollUp:
 			setFocus(v)
+			v.hover = -1
 			v.offset--
 			v.clampOffset()
 			consumed = true
 		case tview.MouseScrollDown:
 			setFocus(v)
+			v.hover = -1
 			v.offset++
 			v.clampOffset()
 			consumed = true
 		}
 		return
 	})
+}
+
+// hoverAt 按鼠标位置更新悬停 item；返回是否发生变化。
+func (v *listView) hoverAt(posX, posY int) bool {
+	index := -1
+	if v.InInnerRect(posX, posY) {
+		_, innerY, _, _ := v.GetInnerRect()
+		index = v.itemAtLine(v.offset + posY - innerY)
+	}
+	if index == v.hover {
+		return false
+	}
+	v.hover = index
+	return true
 }
 
 // SetItems 替换全部 item，并重新计算每个 item 的起始行号。
@@ -369,6 +390,7 @@ func (v *listView) SetItems(items [][]string) {
 	if v.marked >= len(items) {
 		v.marked = -1
 	}
+	v.hover = -1
 	v.clampOffset()
 }
 
@@ -499,11 +521,11 @@ func (v *listView) move(delta int) {
 }
 
 // diffView 在 TextView 之上增加鼠标悬停时的整行高亮。
-// hoverLine 是逻辑行号，-1 表示当前没有高亮。
+// hover 是逻辑行号，-1 表示当前没有高亮。
 type diffView struct {
 	*tview.TextView
 
-	hoverLine int
+	hover     int
 	hunkLines []bool // 按逻辑行记录是否跳过悬停（hunk 标题及分隔线）
 }
 
@@ -513,20 +535,20 @@ func newDiffView() *diffView {
 			SetDynamicColors(true).
 			SetScrollable(true).
 			SetWrap(false),
-		hoverLine: -1,
+		hover: -1,
 	}
 }
 
 // Draw 在 TextView 画完文本后叠加悬停行背景，保留每行原有的前景色和属性。
 func (v *diffView) Draw(screen tcell.Screen) {
 	v.TextView.Draw(screen)
-	if v.hoverLine < 0 {
+	if v.hover < 0 {
 		return
 	}
 
 	x, y, width, height := v.GetInnerRect()
 	offset, _ := v.GetScrollOffset()
-	row := y + v.hoverLine - offset
+	row := y + v.hover - offset
 	if row < y || row >= y+height {
 		return
 	}
@@ -542,11 +564,11 @@ func (v *diffView) MouseHandler() func(action tview.MouseAction, event *tcell.Ev
 	return func(action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive)) (consumed bool, capture tview.Primitive) {
 		switch action {
 		case tview.MouseMove:
-			if v.hover(event.Position()) {
+			if v.hoverAt(event.Position()) {
 				return true, nil
 			}
 		case tview.MouseScrollUp, tview.MouseScrollDown, tview.MouseScrollLeft, tview.MouseScrollRight:
-			v.hoverLine = -1
+			v.hover = -1
 		}
 		return next(action, event, setFocus)
 	}
@@ -558,7 +580,7 @@ var diffHunkLinePattern = regexp.MustCompile(`^(?:@@|─|-\d+(?:,\d+)?\s+\+\d+(?
 // SetText 更新 diff 文本，并重新标记 hunk 标题；旧的高亮行不能沿用到新内容。
 func (v *diffView) SetText(text string) *diffView {
 	v.TextView.SetText(text)
-	v.hoverLine = -1
+	v.hover = -1
 	lines := strings.Split(v.TextView.GetText(true), "\n")
 	v.hunkLines = make([]bool, len(lines))
 	for i, line := range lines {
@@ -567,8 +589,8 @@ func (v *diffView) SetText(text string) *diffView {
 	return v
 }
 
-// hover 按鼠标位置更新悬停行；返回是否发生变化。
-func (v *diffView) hover(posX, posY int) bool {
+// hoverAt 按鼠标位置更新悬停行；返回是否发生变化。
+func (v *diffView) hoverAt(posX, posY int) bool {
 	line := -1
 	if v.InInnerRect(posX, posY) {
 		_, innerY, _, _ := v.GetInnerRect()
@@ -577,10 +599,10 @@ func (v *diffView) hover(posX, posY int) bool {
 			line = candidate
 		}
 	}
-	if line == v.hoverLine {
+	if line == v.hover {
 		return false
 	}
-	v.hoverLine = line
+	v.hover = line
 	return true
 }
 
