@@ -89,9 +89,11 @@ type cell struct {
 	vColor, hColor themeColor
 }
 
-// kitty、Ghostty 会自己绘制私有区（PUA）U+F5D0–U+F60D 的 branch drawing symbols，
+// kitty、Ghostty、Rex 会自己绘制私有区（PUA）U+F5D0–U+F60D 的 branch drawing symbols，
 // 其中的节点字符带有通向格子边缘的线段，能和相邻的线条连在一起
-var branchDrawing = os.Getenv("TERM_PROGRAM") == "ghostty" || os.Getenv("KITTY_WINDOW_ID") != ""
+var branchDrawing = os.Getenv("TERM_PROGRAM") == "ghostty" ||
+	os.Getenv("TERM_PROGRAM") == "rex" ||
+	os.Getenv("KITTY_WINDOW_ID") != ""
 
 // glyphs 返回 cell 的线条字符和其右侧的连接字符，规则参考 lazygit：横线穿过竖线时竖线优先；
 // 边汇入一条已存在的 lane 时用 ┤/├ 表示汇合点，汇合点同时被横线穿过时用 ┼。
