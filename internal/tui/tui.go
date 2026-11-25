@@ -2433,7 +2433,7 @@ func (t *TUI) hoverRef(x, y int) {
 	if node == nil || t.popupVisible() {
 		return
 	}
-	prefix, name, ok := refMarqueeLabel(node, t.HeadRef, t.syncFrame)
+	prefix, name, ok := t.refMarqueeLabel(node)
 	if !ok {
 		return
 	}
@@ -2645,6 +2645,19 @@ func (t *TUI) stopRefMarquee() {
 	t.refMarquee = nil
 	m.anim.stop()
 	m.node.SetText(m.base())
+}
+
+// refMarqueeLabel 返回引用节点固定不动的图标 markup 和需要滚动的纯文本名字；
+// 分组标题和目录没有可滚动的名字。
+func (t *TUI) refMarqueeLabel(node *tview.TreeNode) (prefix, name string, ok bool) {
+	switch ref := node.GetReference().(type) {
+	case core.Branch:
+		name = ref.LocalName()
+		return strings.TrimSuffix(branchLabel(ref, t.HeadRef, t.syncFrame), tview.Escape(name)), name, true
+	case core.Tag:
+		return "", ref.Name, true
+	}
+	return "", "", false
 }
 
 // refMarqueeWidth 返回引用列表里层级为 level 的节点可用的文本宽度。

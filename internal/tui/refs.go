@@ -40,19 +40,6 @@ func branchLabel(b core.Branch, headRef string, syncFrame int) string {
 	return label
 }
 
-// refMarqueeLabel 返回引用节点固定不动的图标 markup 和需要滚动的纯文本名字；
-// 分组标题和目录没有可滚动的名字。
-func refMarqueeLabel(node *tview.TreeNode, headRef string, syncFrame int) (prefix, name string, ok bool) {
-	switch ref := node.GetReference().(type) {
-	case core.Branch:
-		name = ref.LocalName()
-		return strings.TrimSuffix(branchLabel(ref, headRef, syncFrame), tview.Escape(name)), name, true
-	case core.Tag:
-		return "", ref.Name, true
-	}
-	return "", "", false
-}
-
 // buildRefTree 根据分支和标签列表构建引用树。
 // remote 目录和 tags 目录默认折叠，refFolderExpanded 记录用户手动展开过的目录；
 // 过滤激活时临时展开所有目录，让匹配的引用可见。
