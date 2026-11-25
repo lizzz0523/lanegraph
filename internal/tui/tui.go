@@ -73,7 +73,7 @@ type TUI struct {
 	activeTab         string // 当前显示的主面板 tab
 	infoWidth         int
 	diffWidth         int               // 当前 diff 渲染使用的面板内宽
-	pendingHead       bool              // pull 后等待 refs 刷新拿到新 HeadHash 再选中 HEAD 提交
+	pendingHead       bool              // pull/checkout 后等待 refs 刷新拿到新 HeadHash 再选中 HEAD 提交
 	pendingRef        string            // checkout 后等待 refs 刷新完成再选中的引用
 	pendingCommit     string            // history 跳转后等待 commits 刷新完成再选中的提交
 	refFolderExpanded map[string]bool   // 用户手动展开过的引用树目录，按目录 key 记录
@@ -2516,8 +2516,8 @@ func (t *TUI) showRefs(_ refsRequest, refs core.Refs, err error) {
 	}
 	t.refreshRefs(selected)
 
-	// pull 后 HEAD 已前进，用 refs 里的新 HeadHash 选中当前分支最新提交。
-	// commits 刷新已由 refreshTab 发起，这里只应用选择。
+	// pull/checkout 后 HEAD 已变化，用 refs 里的新 HeadHash 定位到 HEAD 提交。
+	// commits 刷新已由 refreshTab 或调用方发起，这里只应用选择。
 	if t.pendingHead {
 		t.pendingHead = false
 		if row := t.commitRow(t.HeadHash); row >= 0 {
@@ -3058,13 +3058,16 @@ func (t *TUI) showCheckout(_ checkoutRequest, ref string, err error) {
 	}
 	t.statusDone("checkout", "checkout "+ref)
 
-	// refs 刷新后选中刚检出的引用；commit 列表里的 HEAD 标记也随 checkout 变化。
+	// refs 刷新后选中刚检出的引用并定位到新的 HEAD 提交；
+	// commit 列表里的 HEAD 标记也随 checkout 变化。
 	t.pendingRef = ref
-	t.reloadRefs()
-	t.reloadCommits()
+	t.pendingHead = true
 	// commit list 只在 All Commits tab 里可见，checkout 后切过去并聚焦。
 	if t.activeTab != tabCommit {
 		t.switchTab(tabCommit)
+	} else {
+		t.reloadRefs()
+		t.reloadCommits()
 	}
 	t.app.SetFocus(t.commitList)
 }
