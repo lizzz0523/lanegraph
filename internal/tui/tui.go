@@ -77,6 +77,7 @@ type TUI struct {
 	pendingRef        string            // checkout 后等待 refs 刷新完成再选中的引用
 	pendingCommit     string            // history 跳转后等待 commits 刷新完成再选中的提交
 	refFolderExpanded map[string]bool   // 用户手动展开过的引用树目录，按目录 key 记录
+	refMarquee        *refMarquee       // 引用列表当前的跑马灯状态；nil 表示没有
 	rebasePopup       *rebasePopup      // interactive rebase 的业务状态
 	rewordPopup       *rewordPopup      // 单条 commit reword 的业务状态
 	historyPopup      *historyPopup     // 文件历史弹窗的业务状态
@@ -115,6 +116,15 @@ func (t *TUI) Run() error {
 		SetBeforeDrawFunc(screen.beforeDraw).
 		SetRoot(t.setupUI(), true).
 		EnableMouse(true)
+
+	// 鼠标移动只用来驱动引用列表的跑马灯，其它鼠标事件原样放行。
+	app.SetMouseCapture(func(event *tcell.EventMouse, action tview.MouseAction) (*tcell.EventMouse, tview.MouseAction) {
+		if action == tview.MouseMove {
+			x, y := event.Position()
+			t.hoverRef(x, y)
+		}
+		return event, action
+	})
 
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		// 弹窗显示时，Esc/q 只关闭弹窗；Ctrl+Q 仍然随时可退出。
@@ -1295,6 +1305,7 @@ func (t *TUI) quit() {
 
 	// 先停掉动画，避免 ticker 在 app.Stop 之后继续投递更新。
 	t.stopSyncSpinner()
+	t.stopRefMarquee()
 
 	// Close 是非阻塞的，先阻止新的请求并取消在途 Run。
 	t.tasks.close()
@@ -1435,6 +1446,7 @@ func (t *TUI) refreshRefs(selected string) {
 	if t.refList == nil {
 		return
 	}
+	t.stopRefMarquee()
 
 	filter := ""
 	if t.filterText != nil {
@@ -2399,6 +2411,41 @@ func (t *TUI) deleteRef(node *tview.TreeNode) {
 	t.setupPrompt(page, prompt)
 }
 
+// hoverRef 按鼠标位置更新引用列表的跑马灯：同一行内移动不重启，换行或离开引用树时停止。
+func (t *TUI) hoverRef(x, y int) {
+	if t.refMarquee != nil && t.refMarquee.x == x && t.refMarquee.y == y {
+		return
+	}
+
+	node, level := t.refNodeAt(x, y)
+	if t.refMarquee != nil && t.refMarquee.node == node {
+		t.refMarquee.x, t.refMarquee.y = x, y
+		return
+	}
+
+	// 鼠标移动不会让 tview 自动重绘，停止后要主动刷一次才能恢复未滚动的文本。
+	stopped := t.refMarquee != nil
+	t.stopRefMarquee()
+	if stopped {
+		t.app.ForceDraw()
+	}
+
+	if node == nil || t.popupVisible() {
+		return
+	}
+	prefix, name, ok := refMarqueeLabel(node, t.HeadRef, t.syncFrame)
+	if !ok {
+		return
+	}
+	m := &refMarquee{node: node, x: x, y: y}
+	m.reset(prefix, name)
+	if !m.fits(t.refMarqueeWidth(level)) {
+		return
+	}
+	t.refMarquee = m
+	m.anim = startAnim(t.app, marqueeInterval, t.tickRefMarquee)
+}
+
 // openHelp 弹出快捷键帮助窗口。
 func (t *TUI) openHelp() {
 	if t.root == nil || t.popupVisible() {
@@ -2524,14 +2571,6 @@ func (t *TUI) showRefs(_ refsRequest, refs core.Refs, err error) {
 	}
 }
 
-// refNode 返回引用 name 对应的节点，分支和标签都会匹配；name 为空或不存在时返回 nil。
-func (t *TUI) refNode(name string) *tview.TreeNode {
-	if t.refList == nil {
-		return nil
-	}
-	return findRefNode(t.refList.GetRoot(), name)
-}
-
 // refName 返回引用列表当前选中节点的名字；分组标题和目录返回空。
 func (t *TUI) refName() string {
 	if t.refList == nil {
@@ -2542,6 +2581,77 @@ func (t *TUI) refName() string {
 		return ""
 	}
 	return refName(node)
+}
+
+// refNode 返回引用 name 对应的节点，分支和标签都会匹配；name 为空或不存在时返回 nil。
+func (t *TUI) refNode(name string) *tview.TreeNode {
+	if t.refList == nil {
+		return nil
+	}
+	return findRefNode(t.refList.GetRoot(), name)
+}
+
+// refNodeAt 返回引用列表内坐标对应的节点和层级；不在列表内或行越界时返回 nil。
+func (t *TUI) refNodeAt(x, y int) (*tview.TreeNode, int) {
+	innerX, innerY, width, height := t.refList.GetInnerRect()
+	if x < innerX || x >= innerX+width || y < innerY || y >= innerY+height {
+		return nil, 0
+	}
+	root := t.refList.GetRoot()
+	if root == nil {
+		return nil, 0
+	}
+	row := t.refList.GetScrollOffset() + y - innerY
+	if row < 0 {
+		return nil, 0
+	}
+	return visibleRefNode(root, row)
+}
+
+// tickRefMarquee 是跑马灯的一帧：按鼠标位置重新确认节点后滚动一格。
+func (t *TUI) tickRefMarquee() bool {
+	m := t.refMarquee
+	if m == nil {
+		return false
+	}
+
+	node, level := t.refNodeAt(m.x, m.y)
+	if node != m.node || t.popupVisible() {
+		t.stopRefMarquee()
+		return false
+	}
+	width := t.refMarqueeWidth(level)
+	if !m.fits(width) {
+		t.stopRefMarquee()
+		return false
+	}
+
+	if !m.advance() {
+		// 一轮播完就停在原文：保留 t.refMarquee 作为“这一行已经播过”的标记，
+		// 这样指针在同一行内移动不会重播，离开该行时再由 stopRefMarquee 清除。
+		m.node.SetText(m.base())
+		return false
+	}
+	m.node.SetText(m.frame(width))
+	return true
+}
+
+// stopRefMarquee 停止跑马灯并把节点文本恢复成未滚动的样子。
+func (t *TUI) stopRefMarquee() {
+	m := t.refMarquee
+	if m == nil {
+		return
+	}
+	t.refMarquee = nil
+	m.anim.stop()
+	m.node.SetText(m.base())
+}
+
+// refMarqueeWidth 返回引用列表里层级为 level 的节点可用的文本宽度。
+// 树关闭了 graphics，节点按 tview 默认缩进，每深一层少 2 列。
+func (t *TUI) refMarqueeWidth(level int) int {
+	_, _, width, _ := t.refList.GetInnerRect()
+	return width - (level-1)*2
 }
 
 /** COMMIT */
@@ -3308,6 +3418,9 @@ func (t *TUI) renderSyncIndicator() {
 	branch, ok := node.GetReference().(core.Branch)
 	if !ok {
 		return
+	}
+	if t.refMarquee != nil && t.refMarquee.node == node {
+		t.stopRefMarquee()
 	}
 	node.SetText(branchLabel(branch, t.HeadRef, t.syncFrame))
 }

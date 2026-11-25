@@ -12,6 +12,15 @@ import (
 // syncFrames 是 pull/push/fetch 期间代替 HEAD 对勾显示的点阵动画帧。
 var syncFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
+// refMarquee 是引用列表当前的跑马灯状态。
+type refMarquee struct {
+	marquee
+
+	node *tview.TreeNode
+	x, y int
+	anim *anim
+}
+
 // branchLabel 返回分支在列表中的显示文本；syncFrame >= 0 时用动画帧代替 HEAD 对勾。
 func branchLabel(b core.Branch, headRef string, syncFrame int) string {
 	// remote 目录已经体现了 remote 名，分支节点只显示后面的部分。
@@ -29,6 +38,19 @@ func branchLabel(b core.Branch, headRef string, syncFrame int) string {
 		return colorMuted.markup("↘") + " " + label
 	}
 	return label
+}
+
+// refMarqueeLabel 返回引用节点固定不动的图标 markup 和需要滚动的纯文本名字；
+// 分组标题和目录没有可滚动的名字。
+func refMarqueeLabel(node *tview.TreeNode, headRef string, syncFrame int) (prefix, name string, ok bool) {
+	switch ref := node.GetReference().(type) {
+	case core.Branch:
+		name = ref.LocalName()
+		return strings.TrimSuffix(branchLabel(ref, headRef, syncFrame), tview.Escape(name)), name, true
+	case core.Tag:
+		return "", ref.Name, true
+	}
+	return "", "", false
 }
 
 // buildRefTree 根据分支和标签列表构建引用树。
@@ -172,4 +194,37 @@ func findRefNode(root *tview.TreeNode, name string) *tview.TreeNode {
 		return true
 	})
 	return found
+}
+
+// visibleRefNode 返回引用树中第 row 个可见节点及其层级。
+// root 本身不显示（SetTopLevel(1)），所以从它的子节点开始按层级 1 计数；
+// 行越界时返回 nil。
+func visibleRefNode(root *tview.TreeNode, row int) (*tview.TreeNode, int) {
+	var found *tview.TreeNode
+	var level int
+
+	var walk func(node *tview.TreeNode, depth int) bool
+	walk = func(node *tview.TreeNode, depth int) bool {
+		if row == 0 {
+			found, level = node, depth
+			return false
+		}
+		row--
+		if !node.IsExpanded() {
+			return true
+		}
+		for _, child := range node.GetChildren() {
+			if !walk(child, depth+1) {
+				return false
+			}
+		}
+		return true
+	}
+
+	for _, node := range root.GetChildren() {
+		if !walk(node, 1) {
+			break
+		}
+	}
+	return found, level
 }
