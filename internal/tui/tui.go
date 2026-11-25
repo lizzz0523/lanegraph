@@ -1412,10 +1412,6 @@ func (t *TUI) refreshTab(tag string) {
 	} else {
 		t.reloadCommits()
 	}
-
-	// 数据可能命中 Task 缓存而不会触发 changed 回调，
-	// 这里主动按当前 tab 和最新 options 重渲染 diff。
-	t.refreshActiveDiff()
 }
 
 func (t *TUI) refreshTabStyles() {
@@ -2668,6 +2664,10 @@ func (t *TUI) syncCommitInfoWidth(view *tview.TextView) {
 // requestFiles 请求 commit 相对 compare 的文件列表；相同 commit+compare 的重复请求由 Task 去重。
 func (t *TUI) requestFiles(commit core.Commit, compare *core.Commit) {
 	t.tasks.files.Execute(filesRequest{commit: commit, compare: compare})
+	// 命中缓存时文件树可能不重建，树的 changed 不会发 diff，按当前选项补一次。
+	if t.activeTab == tabCommit && !t.tasks.files.Running() {
+		t.refreshActiveDiff()
+	}
 }
 
 // showFilesRunning 保留旧文件树，只通过 statusBar 提示加载。
@@ -2699,9 +2699,12 @@ func (t *TUI) showFiles(_ filesRequest, changes []core.FileChange, err error) {
 
 	switch {
 	case err != nil:
+		// SetRoot 不会重置选中项，指向占位节点，避免后续按旧树的文件请求 diff。
+		t.fileList.SetCurrentNode(fileRoot.GetChildren()[0])
 		// 失败由 Task 记录，下次请求同一 commit 时会重试。
 		t.clearFileDiff("failed to load commit files")
 	case len(changes) == 0:
+		t.fileList.SetCurrentNode(fileRoot.GetChildren()[0])
 		t.clearFileDiff("no changes")
 	default:
 		node := firstFileNode(fileRoot)
@@ -2907,6 +2910,10 @@ func (t *TUI) showHistory(_ historyRequest, commits []core.Commit, err error) {
 
 func (t *TUI) requestHistoryDiff(commit core.Commit) {
 	if t.historyPopup == nil || t.historyView == nil {
+		return
+	}
+	// 弹窗还没画过时宽度是 0；DrawFunc 量到宽度后会再请求。
+	if t.historyView.width <= 0 {
 		return
 	}
 	options := core.DiffOptions{
