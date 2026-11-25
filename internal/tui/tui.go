@@ -73,9 +73,10 @@ type TUI struct {
 	activeTab         string // 当前显示的主面板 tab
 	infoWidth         int
 	diffWidth         int               // 当前 diff 渲染使用的面板内宽
-	refFolderExpanded map[string]bool   // 用户手动展开过的引用树目录，按目录 key 记录
+	pendingHead       bool              // pull 后等待 refs 刷新拿到新 HeadHash 再选中 HEAD 提交
 	pendingRef        string            // checkout 后等待 refs 刷新完成再选中的引用
 	pendingCommit     string            // history 跳转后等待 commits 刷新完成再选中的提交
+	refFolderExpanded map[string]bool   // 用户手动展开过的引用树目录，按目录 key 记录
 	rebasePopup       *rebasePopup      // interactive rebase 的业务状态
 	rewordPopup       *rewordPopup      // 单条 commit reword 的业务状态
 	historyPopup      *historyPopup     // 文件历史弹窗的业务状态
@@ -2514,6 +2515,17 @@ func (t *TUI) showRefs(_ refsRequest, refs core.Refs, err error) {
 		t.repoHead.SetText(t.HeadRef)
 	}
 	t.refreshRefs(selected)
+
+	// pull 后 HEAD 已前进，用 refs 里的新 HeadHash 选中当前分支最新提交。
+	// commits 刷新已由 refreshTab 发起，这里只应用选择。
+	if t.pendingHead {
+		t.pendingHead = false
+		if row := t.commitRow(t.HeadHash); row >= 0 {
+			t.commitList.SetCurrentItem(row)
+		} else {
+			t.pendingCommit = t.HeadHash
+		}
+	}
 }
 
 // refNode 返回引用 name 对应的节点，分支和标签都会匹配；name 为空或不存在时返回 nil。
@@ -3050,6 +3062,11 @@ func (t *TUI) showCheckout(_ checkoutRequest, ref string, err error) {
 	t.pendingRef = ref
 	t.reloadRefs()
 	t.reloadCommits()
+	// commit list 只在 All Commits tab 里可见，checkout 后切过去并聚焦。
+	if t.activeTab != tabCommit {
+		t.switchTab(tabCommit)
+	}
+	t.app.SetFocus(t.commitList)
 }
 
 /** CREATE */
@@ -3164,6 +3181,11 @@ func (t *TUI) showSync(req syncOpRequest, _ string, err error) {
 		}
 	}
 	t.statusDone("sync", message)
+
+	// pull 成功后 HEAD 会前进，等 refs 刷新拿到新的 HeadHash 再选中它。
+	if req.op == opPull && err == nil {
+		t.pendingHead = true
+	}
 
 	// pull 失败也可能留下冲突或已更新的 refs，统一按当前 tab 刷新。
 	t.refreshTab(t.activeTab)
