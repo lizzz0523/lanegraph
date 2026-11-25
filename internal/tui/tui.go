@@ -1149,15 +1149,15 @@ func (t *TUI) setupTasks() {
 	})
 
 	t.tasks.sync = async.New(async.Config[string, syncOpRequest]{
-		Key: func(req syncOpRequest) string { return fmt.Sprintf("%d", req.op) },
+		Key: func(req syncOpRequest) string { return fmt.Sprintf("%d\x00%t", req.op, req.track) },
 		Run: func(ctx context.Context, req syncOpRequest) (string, error) {
 			switch req.op {
 			case opPull:
 				return t.Pull(ctx)
 			case opPush:
-				return t.Push(ctx, false)
+				return t.Push(ctx, false, req.track)
 			case opPushForce:
-				return t.Push(ctx, true)
+				return t.Push(ctx, true, req.track)
 			default:
 				return t.Fetch(ctx)
 			}
@@ -2295,7 +2295,7 @@ func (t *TUI) syncBranch(op syncOp) {
 	if t.tasks.sync == nil || t.tasks.sync.Running() {
 		return
 	}
-	t.executeSync(op)
+	t.executeSync(op, false)
 }
 
 // createRefFromCommit 从选中的 commit 创建引用。
@@ -3288,8 +3288,9 @@ func (t *TUI) deleteOpLabel(req deleteRequest, done bool) string {
 /** SYNC OP */
 
 // executeSync 通过 Execute 强制执行，保证每次按键都真正执行 git 命令。
-func (t *TUI) executeSync(op syncOp) {
-	t.tasks.sync.Execute(syncOpRequest{op: op})
+// track 仅对 push 生效，表示同时把远端分支设为 upstream。
+func (t *TUI) executeSync(op syncOp, track bool) {
+	t.tasks.sync.Execute(syncOpRequest{op: op, track: track})
 }
 
 func (t *TUI) showSyncRunning(req syncOpRequest) {
@@ -3325,7 +3326,12 @@ func (t *TUI) showSync(req syncOpRequest, _ string, err error) {
 
 	// rebase / amend 后历史分叉，push 会因非快进而被拒；提示改用 force push。
 	if req.op == opPush && errors.Is(err, core.ErrNonFastForward) {
-		t.promptForcePush()
+		t.promptForcePush(req.track)
+	}
+
+	// 纯本地分支没有 upstream，push 会被拒；提示推送并设置 upstream。
+	if req.op == opPush && !req.track && errors.Is(err, core.ErrNoUpstream) {
+		t.promptSetUpstream()
 	}
 }
 
@@ -3351,7 +3357,8 @@ func (t *TUI) syncOpLabel(req syncOpRequest, done bool) string {
 }
 
 // promptForcePush 在 push 因非快进被拒后弹窗确认，确认后用 force push 重推当前分支。
-func (t *TUI) promptForcePush() {
+// track 表示这次 push 同时要设置 upstream，force push 需要沿用，否则会再次因没有 upstream 被拒。
+func (t *TUI) promptForcePush(track bool) {
 	// 已有弹窗时只保留 statusBar 的错误信息，避免叠出多个弹窗。
 	if t.root == nil || t.popupVisible() {
 		return
@@ -3371,7 +3378,34 @@ func (t *TUI) promptForcePush() {
 			t.promptVisible = false
 			t.closePopup(page)
 			if buttonIndex == 1 {
-				t.executeSync(opPushForce)
+				t.executeSync(opPushForce, track)
+			}
+		})
+
+	t.setupPrompt(page, prompt)
+}
+
+// promptSetUpstream 在 push 因分支没有 upstream 被拒后弹窗确认，
+// 确认后推送当前分支并把远端分支设为它的 upstream。
+func (t *TUI) promptSetUpstream() {
+	// 已有弹窗时只保留 statusBar 的错误信息，避免叠出多个弹窗。
+	if t.root == nil || t.popupVisible() {
+		return
+	}
+
+	message := fmt.Sprintf("Branch %s has no upstream branch.\n\nPush it to the remote and set the upstream?",
+		tview.Escape(t.HeadRef))
+
+	const page = "set-upstream"
+
+	prompt := tview.NewModal().
+		SetText(message).
+		AddButtons([]string{"Cancel", "Push"}).
+		SetDoneFunc(func(buttonIndex int, _ string) {
+			t.promptVisible = false
+			t.closePopup(page)
+			if buttonIndex == 1 {
+				t.executeSync(opPush, true)
 			}
 		})
 

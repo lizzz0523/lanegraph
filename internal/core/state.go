@@ -158,9 +158,10 @@ func (s *State) Pull(ctx context.Context) (string, error) {
 	return GitPull(ctx, s.Repo)
 }
 
-// Push 推送当前分支到它的上游远端；force 为 true 时使用 --force-with-lease。
-func (s *State) Push(ctx context.Context, force bool) (string, error) {
-	return GitPush(ctx, s.Repo, force)
+// Push 推送当前分支到它的上游远端；force 为 true 时使用 --force-with-lease，
+// track 为 true 时把远端分支设为当前分支的 upstream。
+func (s *State) Push(ctx context.Context, force, track bool) (string, error) {
+	return GitPush(ctx, s.Repo, force, track)
 }
 
 // Fetch 拉取远端引用。

@@ -338,19 +338,38 @@ func GitPull(ctx context.Context, repo string) (string, error) {
 // 常见于 rebase / amend 之后，需要 force push。
 var ErrNonFastForward = errors.New("push rejected: non-fast-forward")
 
+// ErrNoUpstream 表示 push 因当前分支没有 upstream 被拒绝，
+// 常见于纯本地分支，需要先指定远端并设置 upstream。
+var ErrNoUpstream = errors.New("push rejected: no upstream branch")
+
 // GitPush 推送当前分支到它的上游远端，返回 git 的输出。
 // force 为 true 时使用 --force-with-lease，避免覆盖别人刚推上去的提交。
-func GitPush(ctx context.Context, repo string, force bool) (string, error) {
+// track 为 true 时显式指定远端和分支，并把远端分支设为当前分支的 upstream。
+func GitPush(ctx context.Context, repo string, force, track bool) (string, error) {
 	args := []string{"push"}
 	if force {
 		args = append(args, "--force-with-lease")
 	}
+	if track {
+		remote, err := gitRemote(ctx, repo)
+		if err != nil {
+			return "", err
+		}
+		branch, err := gitOutputTrimmed(ctx, repo, "symbolic-ref", "--short", "-q", "HEAD")
+		if err != nil || branch == "" {
+			return "", errors.New("git push error: HEAD is not on a branch")
+		}
+		args = append(args, "--set-upstream", remote, branch)
+	}
 	output, err := gitOutput(ctx, repo, gitRemoteEnv(), args...)
 	if err != nil {
 		err = gitStderr(err)
+		switch {
 		// 只有非快进才提示 force push；本地落后（fetch first）时强制推送会丢掉远端提交。
-		if strings.Contains(err.Error(), "(non-fast-forward)") {
+		case strings.Contains(err.Error(), "(non-fast-forward)"):
 			return "", ErrNonFastForward
+		case strings.Contains(err.Error(), "has no upstream branch"):
+			return "", ErrNoUpstream
 		}
 		return "", fmt.Errorf("git push error: %w", err)
 	}
@@ -364,6 +383,29 @@ func GitFetch(ctx context.Context, repo string) (string, error) {
 		return "", fmt.Errorf("git fetch error: %w", gitStderr(err))
 	}
 	return output, nil
+}
+
+// gitRemote 返回 push --set-upstream 使用的远端：优先 origin，
+// 没有 origin 时只在恰好一个远端的情况下使用它，避免把分支推到错误的远端。
+func gitRemote(ctx context.Context, repo string) (string, error) {
+	remotes, err := gitOutputTrimmed(ctx, repo, "remote")
+	if err != nil {
+		return "", fmt.Errorf("git remote error: %w", err)
+	}
+	names := strings.Fields(remotes)
+	if len(names) == 0 {
+		return "", errors.New("git push error: no remote configured")
+	}
+	for _, name := range names {
+		if name == "origin" {
+			return name, nil
+		}
+	}
+	if len(names) == 1 {
+		return names[0], nil
+	}
+	return "", fmt.Errorf("git push error: multiple remotes configured, cannot determine upstream: %s",
+		strings.Join(names, ", "))
 }
 
 // gitRemoteEnv 返回访问远端时使用的非交互环境：

@@ -91,7 +91,8 @@ const (
 )
 
 type syncOpRequest struct {
-	op syncOp
+	op    syncOp
+	track bool // 仅 push 使用：同时把远端分支设为 upstream
 }
 
 // commitOp 是 commit 列表上的操作类型。
