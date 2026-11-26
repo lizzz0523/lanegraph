@@ -19,9 +19,10 @@ type refMarquee struct {
 	width int
 }
 
-// begin 绑定节点并开始滚动；内容在 width 列内放得下时返回 false。
-func (m *refMarquee) begin(t *TUI, prefix, text string, width int) bool {
+// begin 绑定节点并开始滚动；内容在 level 层对应的宽度内放得下时返回 false。
+func (m *refMarquee) begin(t *TUI, prefix, text string, level int) bool {
 	m.reset(prefix, text)
+	width := t.refMarqueeWidth(level)
 	if !m.fits(width) {
 		return false
 	}

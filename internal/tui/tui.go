@@ -2602,29 +2602,6 @@ func (t *TUI) refNodeAt(x, y int) (*tview.TreeNode, int) {
 	return visibleRefNode(root, row)
 }
 
-// startRefMarquee 在节点上启动跑马灯；内容在宽度内放得下时不启动。
-func (t *TUI) startRefMarquee(node *tview.TreeNode, x, y, level int) {
-	prefix, name, ok := t.refMarqueeLabel(node)
-	if !ok {
-		return
-	}
-	m := &refMarquee{node: node, x: x, y: y}
-	if !m.begin(t, prefix, name, t.refMarqueeWidth(level)) {
-		return
-	}
-	t.refMarquee = m
-}
-
-// stopRefMarquee 停止跑马灯并把节点文本恢复成未滚动的样子。
-func (t *TUI) stopRefMarquee() {
-	m := t.refMarquee
-	if m == nil {
-		return
-	}
-	t.refMarquee = nil
-	m.stop()
-}
-
 // refMarqueeLabel 返回引用节点固定不动的图标 markup 和需要滚动的纯文本名字；
 // 分组标题和目录没有可滚动的名字。
 func (t *TUI) refMarqueeLabel(node *tview.TreeNode) (prefix, name string, ok bool) {
@@ -2643,6 +2620,29 @@ func (t *TUI) refMarqueeLabel(node *tview.TreeNode) (prefix, name string, ok boo
 func (t *TUI) refMarqueeWidth(level int) int {
 	_, _, width, _ := t.refList.GetInnerRect()
 	return width - (level-1)*2
+}
+
+// startRefMarquee 在节点上启动跑马灯；内容在宽度内放得下时不启动。
+func (t *TUI) startRefMarquee(node *tview.TreeNode, x, y, level int) {
+	prefix, name, ok := t.refMarqueeLabel(node)
+	if !ok {
+		return
+	}
+	m := &refMarquee{node: node, x: x, y: y}
+	if !m.begin(t, prefix, name, level) {
+		return
+	}
+	t.refMarquee = m
+}
+
+// stopRefMarquee 停止跑马灯并把节点文本恢复成未滚动的样子。
+func (t *TUI) stopRefMarquee() {
+	m := t.refMarquee
+	if m == nil {
+		return
+	}
+	t.refMarquee = nil
+	m.stop()
 }
 
 /** COMMIT */
