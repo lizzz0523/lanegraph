@@ -26,6 +26,65 @@ func folderLabel(folder folder, expanded bool) string {
 	return "▶ " + tview.Escape(folder.name)
 }
 
+// folderPath 把目录层级拼成完整路径。
+// compactFolders 合并后的目录节点 name 已经是 a/b/c，未合并时只是单段名，两种都能拼对。
+func folderPath(path []*tview.TreeNode) string {
+	parts := make([]string, 0, len(path))
+	for _, node := range path {
+		if folder, ok := node.GetReference().(folder); ok {
+			parts = append(parts, folder.name)
+		}
+	}
+	return strings.Join(parts, "/")
+}
+
+// compactFolders 把只有一个子目录的连续目录链合并成一个节点，
+// 例如 a > b > c 显示为 a/b/c，类似 IDE 的紧凑中间目录。
+func compactFolders(node *tview.TreeNode) {
+	for _, child := range node.GetChildren() {
+		current, ok := child.GetReference().(folder)
+		if !ok {
+			continue
+		}
+
+		for {
+			children := child.GetChildren()
+			if len(children) != 1 {
+				break
+			}
+			sub, ok := children[0].GetReference().(folder)
+			if !ok {
+				break
+			}
+
+			current = folder{
+				key:  current.key + "/" + sub.key,
+				name: current.name + "/" + sub.name,
+			}
+			child.SetReference(current).
+				SetText(folderLabel(current, child.IsExpanded())).
+				SetChildren(children[0].GetChildren())
+		}
+
+		compactFolders(child)
+	}
+}
+
+// sortFoldersFirst 使用稳定排序，保证同一层内的原有顺序不变。
+func sortFoldersFirst(node *tview.TreeNode) {
+	children := node.GetChildren()
+	sort.SliceStable(children, func(i, j int) bool {
+		iFolder := len(children[i].GetChildren()) > 0
+		jFolder := len(children[j].GetChildren()) > 0
+		return iFolder && !jFolder
+	})
+	node.SetChildren(children)
+
+	for _, child := range children {
+		sortFoldersFirst(child)
+	}
+}
+
 // setFolderExpanded 同步目录节点的展开状态和箭头图标。
 func setFolderExpanded(node *tview.TreeNode, expanded bool) {
 	node.SetExpanded(expanded)
