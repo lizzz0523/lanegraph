@@ -2,7 +2,6 @@ package tui
 
 import (
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mattn/go-runewidth"
@@ -23,17 +22,22 @@ type marquee struct {
 	offset int
 }
 
+// fits 表示内容在 width 列内放不下，需要滚动。
+func (m *marquee) fits(width int) bool {
+	avail := width - tview.TaggedStringWidth(m.prefix)
+	return avail > 0 && runewidth.StringWidth(m.text) > avail
+}
+
+// base 返回未滚动的完整文本。
+func (m *marquee) base() string {
+	return m.prefix + tview.Escape(m.text)
+}
+
 // reset 替换滚动内容并回到起点。
 func (m *marquee) reset(prefix, text string) {
 	m.prefix = prefix
 	m.text = text
 	m.offset = 0
-}
-
-// fits 表示内容在 width 列内放不下，需要滚动。
-func (m *marquee) fits(width int) bool {
-	avail := width - tview.TaggedStringWidth(m.prefix)
-	return avail > 0 && runewidth.StringWidth(m.text) > avail
 }
 
 // advance 前进一格并返回是否还有下一格；
@@ -45,11 +49,6 @@ func (m *marquee) advance() bool {
 	}
 	m.offset = 0
 	return false
-}
-
-// base 返回未滚动的完整文本。
-func (m *marquee) base() string {
-	return m.prefix + tview.Escape(m.text)
 }
 
 // frame 返回 width 列宽的当前帧文本。
@@ -107,9 +106,9 @@ type spin struct {
 	index int
 }
 
-// frame 返回当前帧字符。
-func (s *spin) frame() string {
-	return spinFrames[s.index]
+// reset 回到第一帧。
+func (s *spin) reset() {
+	s.index = 0
 }
 
 // advance 前进一帧。
@@ -117,41 +116,68 @@ func (s *spin) advance() {
 	s.index = (s.index + 1) % len(spinFrames)
 }
 
-// anim 按固定间隔在主循环里执行一帧。frame 返回 false 时自动停止。
-type anim struct {
-	stopCh chan struct{}
-	once   sync.Once
+// frame 返回当前帧字符。
+func (s *spin) frame() string {
+	return spinFrames[s.index]
 }
 
-// startAnim 启动逐帧动画；frame 每帧在主循环中调用，返回 false 表示结束。
-func startAnim(app *tview.Application, interval time.Duration, frame func() bool) *anim {
-	a := &anim{stopCh: make(chan struct{})}
+// anim 驱动一段逐帧动画：自己持有时钟，按 interval 调用 next 推进状态，
+// 用 render / restore 分别画出当前帧和静止状态。每次 start 新建时钟，
+// stop 可重复调用；一律以指针方式使用。
+type anim struct {
+	app      *tview.Application
+	interval time.Duration
+	next     func() bool
+	render   func()
+	restore  func()
+
+	stopCh chan struct{}
+}
+
+// start 启动动画；已在运行时直接返回。
+func (a *anim) start() {
+	if a.stopCh != nil || a.app == nil {
+		return
+	}
+
+	stopCh := make(chan struct{})
+	a.stopCh = stopCh
+	a.render()
 
 	go func() {
-		ticker := time.NewTicker(interval)
+		ticker := time.NewTicker(a.interval)
 		defer ticker.Stop()
 		for {
 			select {
-			case <-a.stopCh:
+			case <-stopCh:
 				return
 			case <-ticker.C:
-				app.QueueUpdateDraw(func() {
+				a.app.QueueUpdateDraw(func() {
 					select {
-					case <-a.stopCh:
+					case <-stopCh:
 					default:
-						if !frame() {
+						if !a.next() {
 							a.stop()
+							return
 						}
+						a.render()
 					}
 				})
 			}
 		}
 	}()
-
-	return a
 }
 
-// stop 停止动画，可重复调用。
+// stop 停止动画并恢复静止状态，可重复调用。
 func (a *anim) stop() {
-	a.once.Do(func() { close(a.stopCh) })
+	if a.stopCh != nil {
+		close(a.stopCh)
+		a.stopCh = nil
+	}
+	a.restore()
+}
+
+// playing 表示动画是否正在运行。
+func (a *anim) playing() bool {
+	return a.stopCh != nil
 }

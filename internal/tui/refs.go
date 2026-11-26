@@ -12,17 +12,90 @@ import (
 // refMarquee 是引用列表当前的跑马灯状态。
 type refMarquee struct {
 	marquee
+	anim
 
-	node *tview.TreeNode
-	x, y int
-	anim *anim
+	node  *tview.TreeNode
+	x, y  int
+	width int
 }
 
-// syncSpinner 是 pull/push/fetch 期间 HEAD 标记的点阵动画。
+// begin 绑定节点并开始滚动；内容在 width 列内放得下时返回 false。
+func (m *refMarquee) begin(t *TUI, prefix, text string, width int) bool {
+	m.reset(prefix, text)
+	if !m.fits(width) {
+		return false
+	}
+	m.width = width
+	m.anim = anim{
+		app:      t.app,
+		interval: marqueeInterval,
+		next:     func() bool { return m.step(t) },
+		render:   func() { m.node.SetText(m.frame(m.width)) },
+		restore:  func() { m.node.SetText(m.base()) },
+	}
+	m.start()
+	return true
+}
+
+// step 重新确认鼠标仍在同一节点后前进一帧；目标失效或一轮播完时结束。
+func (m *refMarquee) step(t *TUI) bool {
+	node, level := t.refNodeAt(m.x, m.y)
+	if node != m.node || t.popupVisible() {
+		return m.drop(t)
+	}
+	width := t.refMarqueeWidth(level)
+	if !m.fits(width) {
+		return m.drop(t)
+	}
+	m.width = width
+	// 一轮播完只停在原文，不解除会话：t.refMarquee 留作“这一行已经播过”的标记，
+	// 这样指针在同一行内移动不会重播，离开该行时再由 stopRefMarquee 清除。
+	return m.advance()
+}
+
+// drop 在目标失效时解除会话；anim 随后会把原文画回旧节点。
+func (m *refMarquee) drop(t *TUI) bool {
+	if t.refMarquee == m {
+		t.refMarquee = nil
+	}
+	return false
+}
+
+// syncSpinner 把点阵动画绑定到 HEAD 分支前的标记。
 type syncSpinner struct {
 	spin
+	anim
+}
 
-	anim *anim
+func (s *syncSpinner) init(t *TUI) {
+	s.anim = anim{
+		app:      t.app,
+		interval: spinInterval,
+		next: func() bool {
+			s.advance()
+			return true
+		},
+		render:  t.renderSyncIndicator,
+		restore: t.renderSyncIndicator,
+	}
+}
+
+// frame 返回当前应显示的动画帧；未播放时返回空串。
+// 这里遮蔽了内嵌 spin 的 frame，取原始帧要显式走 s.spin.frame()。
+func (s *syncSpinner) frame() string {
+	if !s.playing() {
+		return ""
+	}
+	return s.spin.frame()
+}
+
+// start 从头开始播放点阵动画。
+func (s *syncSpinner) start() {
+	if s.playing() {
+		return
+	}
+	s.reset()
+	s.anim.start()
 }
 
 // branchLabel 返回分支在列表中的显示文本；spinFrame 非空时用动画帧代替 HEAD 对勾。

@@ -78,7 +78,7 @@ type TUI struct {
 	pendingCommit     string            // history 跳转后等待 commits 刷新完成再选中的提交
 	refFolderExpanded map[string]bool   // 用户手动展开过的引用树目录，按目录 key 记录
 	refMarquee        *refMarquee       // 引用列表当前的跑马灯状态；nil 表示没有
-	syncSpinner       *syncSpinner      // 分支同步动画状态；nil 表示没有在执行同步操作
+	syncSpinner       syncSpinner       // 分支同步动画状态；未播放时 frame 返回空串
 	rebasePopup       *rebasePopup      // interactive rebase 的业务状态
 	rewordPopup       *rewordPopup      // 单条 commit reword 的业务状态
 	historyPopup      *historyPopup     // 文件历史弹窗的业务状态
@@ -272,6 +272,7 @@ func (t *TUI) Run() error {
 
 	t.app = app
 
+	t.setupAnim()
 	t.setupTasks()
 	defer t.tasks.close()
 
@@ -1234,6 +1235,11 @@ func (t *TUI) setupTasks() {
 	})
 }
 
+// setupAnim 在 app 就绪后绑定同步动画。
+func (t *TUI) setupAnim() {
+	t.syncSpinner.init(t)
+}
+
 // scrollFocusable 是内嵌 *tview.Box 的控件（TextView / TreeView / List 都满足）。
 type scrollFocusable interface {
 	tview.Primitive
@@ -1451,7 +1457,7 @@ func (t *TUI) refreshRefs(selected string) {
 		filter = strings.ToLower(strings.TrimSpace(t.filterText.GetText()))
 	}
 
-	refRoot := buildRefTree(t.Branches, t.Tags, filter, t.HeadRef, t.syncSpinFrame(), t.refFolderExpanded, t.headerStyle, t.headerSelectedStyle, t.selectedStyle)
+	refRoot := buildRefTree(t.Branches, t.Tags, filter, t.HeadRef, t.syncSpinner.frame(), t.refFolderExpanded, t.headerStyle, t.headerSelectedStyle, t.selectedStyle)
 	t.refList.SetRoot(refRoot)
 
 	if node := t.refNode(selected); node != nil {
@@ -2431,17 +2437,7 @@ func (t *TUI) hoverRef(x, y int) {
 	if node == nil || t.popupVisible() {
 		return
 	}
-	prefix, name, ok := t.refMarqueeLabel(node)
-	if !ok {
-		return
-	}
-	m := &refMarquee{node: node, x: x, y: y}
-	m.reset(prefix, name)
-	if !m.fits(t.refMarqueeWidth(level)) {
-		return
-	}
-	t.refMarquee = m
-	m.anim = startAnim(t.app, marqueeInterval, t.tickRefMarquee)
+	t.startRefMarquee(node, x, y, level)
 }
 
 // openHelp 弹出快捷键帮助窗口。
@@ -2606,32 +2602,17 @@ func (t *TUI) refNodeAt(x, y int) (*tview.TreeNode, int) {
 	return visibleRefNode(root, row)
 }
 
-// tickRefMarquee 是跑马灯的一帧：按鼠标位置重新确认节点后滚动一格。
-func (t *TUI) tickRefMarquee() bool {
-	m := t.refMarquee
-	if m == nil {
-		return false
+// startRefMarquee 在节点上启动跑马灯；内容在宽度内放得下时不启动。
+func (t *TUI) startRefMarquee(node *tview.TreeNode, x, y, level int) {
+	prefix, name, ok := t.refMarqueeLabel(node)
+	if !ok {
+		return
 	}
-
-	node, level := t.refNodeAt(m.x, m.y)
-	if node != m.node || t.popupVisible() {
-		t.stopRefMarquee()
-		return false
+	m := &refMarquee{node: node, x: x, y: y}
+	if !m.begin(t, prefix, name, t.refMarqueeWidth(level)) {
+		return
 	}
-	width := t.refMarqueeWidth(level)
-	if !m.fits(width) {
-		t.stopRefMarquee()
-		return false
-	}
-
-	if !m.advance() {
-		// 一轮播完就停在原文：保留 t.refMarquee 作为“这一行已经播过”的标记，
-		// 这样指针在同一行内移动不会重播，离开该行时再由 stopRefMarquee 清除。
-		m.node.SetText(m.base())
-		return false
-	}
-	m.node.SetText(m.frame(width))
-	return true
+	t.refMarquee = m
 }
 
 // stopRefMarquee 停止跑马灯并把节点文本恢复成未滚动的样子。
@@ -2641,8 +2622,7 @@ func (t *TUI) stopRefMarquee() {
 		return
 	}
 	t.refMarquee = nil
-	m.anim.stop()
-	m.node.SetText(m.base())
+	m.stop()
 }
 
 // refMarqueeLabel 返回引用节点固定不动的图标 markup 和需要滚动的纯文本名字；
@@ -2651,7 +2631,7 @@ func (t *TUI) refMarqueeLabel(node *tview.TreeNode) (prefix, name string, ok boo
 	switch ref := node.GetReference().(type) {
 	case core.Branch:
 		name = ref.LocalName()
-		return strings.TrimSuffix(branchLabel(ref, t.HeadRef, t.syncSpinFrame()), tview.Escape(name)), name, true
+		return strings.TrimSuffix(branchLabel(ref, t.HeadRef, t.syncSpinner.frame()), tview.Escape(name)), name, true
 	case core.Tag:
 		return "", ref.Name, true
 	}
@@ -3412,41 +3392,12 @@ func (t *TUI) promptSetUpstream() {
 
 // startSyncSpinner 启动当前分支前的点阵动画；已有动画时不重复启动。
 func (t *TUI) startSyncSpinner() {
-	if t.syncSpinner != nil || t.app == nil {
-		return
-	}
-	s := &syncSpinner{}
-	t.syncSpinner = s
-	t.renderSyncIndicator()
-	s.anim = startAnim(t.app, spinInterval, t.tickSyncSpinner)
-}
-
-// tickSyncSpinner 是同步动画的一帧：切换到下一个点阵字符并重绘当前分支。
-func (t *TUI) tickSyncSpinner() bool {
-	s := t.syncSpinner
-	if s == nil {
-		return false
-	}
-	s.advance()
-	t.renderSyncIndicator()
-	return true
+	t.syncSpinner.start()
 }
 
 // stopSyncSpinner 停止动画并把当前分支前的标记恢复成对勾。
 func (t *TUI) stopSyncSpinner() {
-	if s := t.syncSpinner; s != nil {
-		t.syncSpinner = nil
-		s.anim.stop()
-	}
-	t.renderSyncIndicator()
-}
-
-// syncSpinFrame 返回同步动画当前帧；没有同步动画时返回空串。
-func (t *TUI) syncSpinFrame() string {
-	if t.syncSpinner == nil {
-		return ""
-	}
-	return t.syncSpinner.frame()
+	t.syncSpinner.stop()
 }
 
 // renderSyncIndicator 按当前动画帧更新 HEAD 所在的本地分支节点标记；
@@ -3463,7 +3414,7 @@ func (t *TUI) renderSyncIndicator() {
 	if t.refMarquee != nil && t.refMarquee.node == node {
 		t.stopRefMarquee()
 	}
-	node.SetText(branchLabel(branch, t.HeadRef, t.syncSpinFrame()))
+	node.SetText(branchLabel(branch, t.HeadRef, t.syncSpinner.frame()))
 }
 
 /** COMMIT OP */
