@@ -626,6 +626,111 @@ func (v *diffView) hoverAt(posX, posY int) bool {
 	return true
 }
 
+// refTree 让滚轮滚动后的视口不被重绘拉回选中项。
+// tview.TreeView 每次 Draw 都会把选中节点移进视口，跑马灯重绘时会把滚轮滚动的位置抹掉；
+// 选中项在视口外时跳过这一步，滚动位置才能留住。
+// 依赖 tview v0.42 的内部行为：SetCurrentNode 不触发 process，
+// 且没有选中项时 process 不改 offsetY；升级 tview 时需要复查这两点。
+type refTree struct {
+	*tview.TreeView
+
+	scrolled bool // 滚轮滚动过，选中项可以留在视口外
+}
+
+func newRefTree() *refTree {
+	return &refTree{
+		TreeView: tview.NewTreeView().
+			SetTopLevel(1).
+			SetGraphics(false),
+	}
+}
+
+// SetCurrentNode 让显式选中的节点在下一次绘制时进入视口。
+func (v *refTree) SetCurrentNode(node *tview.TreeNode) *refTree {
+	v.scrolled = false
+	v.TreeView.SetCurrentNode(node)
+	return v
+}
+
+func (v *refTree) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+	inner := v.TreeView.InputHandler()
+	return func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+		// 按键移动选中项后照常把它拉进视口。
+		v.scrolled = false
+		inner(event, setFocus)
+	}
+}
+
+func (v *refTree) MouseHandler() func(action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive)) (bool, tview.Primitive) {
+	inner := v.TreeView.MouseHandler()
+	return func(action tview.MouseAction, event *tcell.EventMouse, setFocus func(p tview.Primitive)) (bool, tview.Primitive) {
+		if v.InRect(event.Position()) {
+			switch action {
+			case tview.MouseScrollUp, tview.MouseScrollDown:
+				v.scrolled = true
+			case tview.MouseLeftDown:
+				v.scrolled = false
+			}
+		}
+		return inner(action, event, setFocus)
+	}
+}
+
+func (v *refTree) Draw(screen tcell.Screen) {
+	node := v.TreeView.GetCurrentNode()
+	if v.scrolled && v.offscreen(node) {
+		// 选中项在视口外，绘制期间拿掉它，TreeView 就不会去改 offsetY。
+		v.TreeView.SetCurrentNode(nil)
+		v.TreeView.Draw(screen)
+		v.TreeView.SetCurrentNode(node)
+		return
+	}
+	v.TreeView.Draw(screen)
+}
+
+// offscreen 返回节点在树里但不在视口内。
+// 节点被折叠隐藏时返回 false，让 TreeView 按原有行为回退到第一个可见项。
+func (v *refTree) offscreen(node *tview.TreeNode) bool {
+	row := v.row(node)
+	if row < 0 {
+		return false
+	}
+	_, _, _, height := v.GetInnerRect()
+	offset := v.GetScrollOffset()
+	return row < offset || row >= offset+height
+}
+
+// row 返回节点的可见行号；root 本身不显示，从它的子节点按层级 1 开始计数，找不到返回 -1。
+func (v *refTree) row(node *tview.TreeNode) int {
+	root := v.GetRoot()
+	if root == nil || node == nil {
+		return -1
+	}
+	row := -1
+	var walk func(n *tview.TreeNode) bool
+	walk = func(n *tview.TreeNode) bool {
+		row++
+		if n == node {
+			return false
+		}
+		if !n.IsExpanded() {
+			return true
+		}
+		for _, child := range n.GetChildren() {
+			if !walk(child) {
+				return false
+			}
+		}
+		return true
+	}
+	for _, n := range root.GetChildren() {
+		if !walk(n) {
+			return row
+		}
+	}
+	return -1
+}
+
 // rebaseForm 是 interactive rebase 弹窗，布局为说明、动作列表、提示和按钮三段。
 // 动作状态和 rebase 规则由调用方维护，这里只负责展示和交互转发。
 type rebaseForm struct {

@@ -32,7 +32,7 @@ type TUI struct {
 	changeTab  *tview.Button
 	commitTab  *tview.Button
 	filterText *tview.TextArea
-	refList    *tview.TreeView
+	refList    *refTree
 	mainPanels *tview.Pages
 	statusBar  *tview.TextView
 	statusRow  *tview.Flex
@@ -738,9 +738,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		t.refreshRefs(t.refName())
 	})
 
-	refList := tview.NewTreeView().
-		SetTopLevel(1).
-		SetGraphics(false)
+	refList := newRefTree()
 
 	refList.SetTitle(" branches ").
 		SetBorder(true).
