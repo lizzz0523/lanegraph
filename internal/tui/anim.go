@@ -96,6 +96,27 @@ func marqueeWindow(text string, offset, width int) string {
 	return out.String()
 }
 
+// spinInterval 是点阵动画每切换一帧的间隔。
+const spinInterval = 100 * time.Millisecond
+
+// spinFrames 是点阵动画循环显示的帧序列。
+var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// spin 是一组点阵字符循环切换的动画状态。
+type spin struct {
+	index int
+}
+
+// frame 返回当前帧字符。
+func (s *spin) frame() string {
+	return spinFrames[s.index]
+}
+
+// advance 前进一帧。
+func (s *spin) advance() {
+	s.index = (s.index + 1) % len(spinFrames)
+}
+
 // anim 按固定间隔在主循环里执行一帧。frame 返回 false 时自动停止。
 type anim struct {
 	stopCh chan struct{}

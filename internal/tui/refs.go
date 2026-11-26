@@ -9,9 +9,6 @@ import (
 	"github.com/rivo/tview"
 )
 
-// syncFrames 是 pull/push/fetch 期间代替 HEAD 对勾显示的点阵动画帧。
-var syncFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-
 // refMarquee 是引用列表当前的跑马灯状态。
 type refMarquee struct {
 	marquee
@@ -21,16 +18,23 @@ type refMarquee struct {
 	anim *anim
 }
 
-// branchLabel 返回分支在列表中的显示文本；syncFrame >= 0 时用动画帧代替 HEAD 对勾。
-func branchLabel(b core.Branch, headRef string, syncFrame int) string {
+// syncSpinner 是 pull/push/fetch 期间 HEAD 标记的点阵动画。
+type syncSpinner struct {
+	spin
+
+	anim *anim
+}
+
+// branchLabel 返回分支在列表中的显示文本；spinFrame 非空时用动画帧代替 HEAD 对勾。
+func branchLabel(b core.Branch, headRef, spinFrame string) string {
 	// remote 目录已经体现了 remote 名，分支节点只显示后面的部分。
 	label := tview.Escape(b.LocalName())
 	switch {
 	case !b.Remote && b.Name == headRef:
 		// HEAD 指向的本地分支前面加绿色对勾；同步操作期间换成点阵动画。
 		mark := "✓"
-		if syncFrame >= 0 {
-			mark = syncFrames[syncFrame%len(syncFrames)]
+		if spinFrame != "" {
+			mark = spinFrame
 		}
 		return colorSuccess.markup(mark) + " " + label
 	case !b.Remote:
@@ -43,7 +47,7 @@ func branchLabel(b core.Branch, headRef string, syncFrame int) string {
 // buildRefTree 根据分支和标签列表构建引用树。
 // remote 目录和 tags 目录默认折叠，refFolderExpanded 记录用户手动展开过的目录；
 // 过滤激活时临时展开所有目录，让匹配的引用可见。
-func buildRefTree(branches []core.Branch, tags []core.Tag, filter, headRef string, syncFrame int, refFolderExpanded map[string]bool, headerStyle, headerSelectedStyle, selectedStyle tcell.Style) *tview.TreeNode {
+func buildRefTree(branches []core.Branch, tags []core.Tag, filter, headRef, spinFrame string, refFolderExpanded map[string]bool, headerStyle, headerSelectedStyle, selectedStyle tcell.Style) *tview.TreeNode {
 	// 隐藏 root，用 Local / Remote / Refs 作为分组标题。
 	localNode := tview.NewTreeNode("Local").
 		SetTextStyle(headerStyle).
@@ -88,7 +92,7 @@ func buildRefTree(branches []core.Branch, tags []core.Tag, filter, headRef strin
 			}
 		}
 
-		child := tview.NewTreeNode(branchLabel(branch, headRef, syncFrame)).
+		child := tview.NewTreeNode(branchLabel(branch, headRef, spinFrame)).
 			SetReference(branch).
 			SetSelectedTextStyle(selectedStyle)
 		parent.AddChild(child)
