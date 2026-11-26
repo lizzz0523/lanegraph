@@ -128,13 +128,6 @@ func newModalForm(width int) *modalForm {
 		f.finish(-1, "")
 	})
 
-	// 只有弹窗自身接收鼠标；其余区域直接消费，避免点击穿透到下面的主界面。
-	f.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
-		if f.InRect(event.Position()) {
-			return action, event
-		}
-		return tview.MouseConsumed, nil
-	})
 	return f
 }
 
@@ -927,14 +920,6 @@ func newRebaseForm(
 		AddItem(inner, 0, 1, true).
 		AddItem(nil, 42, 0, false)
 
-	// 只有三个分区和按钮接收鼠标；其余区域直接消费，避免点击穿透到下面的主界面。
-	view.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
-		if header.InRect(event.Position()) || list.InRect(event.Position()) || footer.InRect(event.Position()) {
-			return action, event
-		}
-		return tview.MouseConsumed, nil
-	})
-
 	f.view = view
 	f.list = list
 	f.hint = hint
@@ -1107,14 +1092,6 @@ func newRewordForm(
 		AddItem(inner, 0, 1, true).
 		AddItem(nil, 42, 0, false)
 
-	view.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
-		if header.InRect(event.Position()) || subject.InRect(event.Position()) ||
-			description.InRect(event.Position()) || footer.InRect(event.Position()) {
-			return action, event
-		}
-		return tview.MouseConsumed, nil
-	})
-
 	f.view = view
 	f.subject = subject
 	f.description = description
@@ -1242,15 +1219,6 @@ func newHistoryView(
 		AddItem(nil, 18, 0, false).
 		AddItem(inner, 0, 1, true).
 		AddItem(nil, 18, 0, false)
-
-	// 弹窗铺满 mainPage，只有两个子面板需要接收鼠标；其余区域直接消费，
-	// 避免点击穿透到下面的主界面。
-	view.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
-		if list.InRect(event.Position()) || diff.InRect(event.Position()) {
-			return action, event
-		}
-		return tview.MouseConsumed, nil
-	})
 
 	setFocusBorder(list.Box, true)
 	setFocusBorder(diff.Box, false)

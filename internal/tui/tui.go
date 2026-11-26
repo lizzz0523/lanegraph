@@ -966,14 +966,6 @@ func (t *TUI) setupPrompt(name string, prompt *tview.Modal) {
 		Background(colorText.cell).
 		Foreground(colorOnAccent.cell))
 
-	// 只有弹窗自身接收鼠标；其余区域直接消费，避免点击穿透到下面的主界面。
-	prompt.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
-		if prompt.InRect(event.Position()) {
-			return action, event
-		}
-		return tview.MouseConsumed, nil
-	})
-
 	t.promptVisible = true
 	t.openPopup(name, prompt, prompt)
 }
@@ -1348,10 +1340,20 @@ func (t *TUI) setFocusBorder(box *tview.Box, focused bool) {
 
 // openPopup 记录打开前的焦点，并把弹窗页面覆盖到主界面上。
 // page 是添加到 Pages 的容器，focus 是实际接收键盘的控件；两者相同时传同一个值。
+// 弹窗下面先垫一层透明挡板：鼠标事件先交给弹窗，弹窗内部没消费的事件由挡板吞掉，
+// 不会再落到主界面；否则 MouseLeftUp / MouseLeftClick 会穿透到下面的列表。
 func (t *TUI) openPopup(name string, page, focus tview.Primitive) {
 	if t.returnFocus == nil {
 		t.returnFocus = t.app.GetFocus()
 	}
+
+	// 空 Flex 不清背景，挡板对绘制完全透明；Box 会铺满自己的背景色，不能用。
+	blocker := tview.NewFlex()
+	blocker.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		return tview.MouseConsumed, nil
+	})
+
+	t.root.AddPage(name+"-blocker", blocker, true, true)
 	t.root.AddPage(name, page, true, true)
 	t.app.SetFocus(focus)
 }
@@ -1360,6 +1362,7 @@ func (t *TUI) openPopup(name string, page, focus tview.Primitive) {
 // 打开时焦点为空时，回到当前 tab 的列表。
 func (t *TUI) closePopup(name string) {
 	t.root.RemovePage(name)
+	t.root.RemovePage(name + "-blocker")
 	if t.returnFocus != nil {
 		t.app.SetFocus(t.returnFocus)
 		t.returnFocus = nil
@@ -1657,8 +1660,7 @@ func (t *TUI) rebaseCommitInteractive() {
 	t.rebasePopup = popup
 	t.rebaseForm = rebase
 	t.rebaseVisible = true
-	t.root.AddPage("interactive-rebase", rebase.view, true, true)
-	t.app.SetFocus(rebase.list)
+	t.openPopup("interactive-rebase", rebase.view, rebase.list)
 }
 
 // cycleRebaseAction 切换当前选中 commit 的 rebase 动作并刷新列表。
@@ -1727,8 +1729,7 @@ func (t *TUI) rewordCommit() {
 	t.rewordPopup = popup
 	t.rewordForm = reword
 	t.rewordVisible = true
-	t.root.AddPage("reword", reword.view, true, true)
-	t.app.SetFocus(reword.subject)
+	t.openPopup("reword", reword.view, reword.subject)
 }
 
 // closeReword 关闭 reword 弹窗，把焦点还给 commit 列表。
@@ -2003,14 +2004,6 @@ func (t *TUI) openCommitInfo() {
 		AddItem(nil, 42, 0, false).
 		AddItem(inner, 0, 1, true).
 		AddItem(nil, 42, 0, false)
-
-	// 只有信息面板接收鼠标；其余区域直接消费，避免点击穿透到下面的主界面。
-	popup.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
-		if commitInfo.InRect(event.Position()) {
-			return action, event
-		}
-		return tview.MouseConsumed, nil
-	})
 
 	t.commitInfoVisible = true
 	t.openPopup("commit-info", popup, commitInfo)
@@ -2516,14 +2509,6 @@ func (t *TUI) openHelp() {
 		AddItem(nil, 0, 2, false).
 		AddItem(inner, 0, 3, true).
 		AddItem(nil, 0, 2, false)
-
-	// 只有滚动列表接收鼠标；其余区域直接消费，避免点击穿透到下面的主界面。
-	popup.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
-		if help.InRect(event.Position()) {
-			return action, event
-		}
-		return tview.MouseConsumed, nil
-	})
 
 	t.helpVisible = true
 	t.openPopup("help", popup, help)
