@@ -2,12 +2,23 @@ package tui
 
 import (
 	"strings"
+	"time"
 
 	"github.com/lizzz0523/lanegraph/internal/core"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
+
+// refHoverDelay 是鼠标停在引用节点上多久后才开始跑马灯；移动经过的行不会触发。
+const refHoverDelay = 300 * time.Millisecond
+
+// refHover 是鼠标停在引用节点上、等待触发跑马灯的待定状态。
+type refHover struct {
+	node  *tview.TreeNode
+	x, y  int
+	timer *time.Timer
+}
 
 // refMarquee 是引用列表当前的跑马灯状态。
 type refMarquee struct {

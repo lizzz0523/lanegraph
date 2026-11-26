@@ -77,6 +77,7 @@ type TUI struct {
 	pendingCommit     string            // history 跳转后等待 commits 刷新完成再选中的提交
 	refFolderExpanded map[string]bool   // 用户手动展开过的引用树目录，按目录 key 记录
 	refMarquee        *refMarquee       // 引用列表当前的跑马灯状态；nil 表示没有
+	refHover          *refHover         // 鼠标停稳后待启动的跑马灯；nil 表示没有
 	syncSpinner       syncSpinner       // 分支同步动画状态；未播放时 frame 返回空串
 	rebasePopup       *rebasePopup      // interactive rebase 的业务状态
 	rewordPopup       *rewordPopup      // 单条 commit reword 的业务状态
@@ -116,10 +117,17 @@ func (t *TUI) Run() error {
 		EnableMouse(true)
 
 	// 鼠标移动只用来驱动引用列表的跑马灯，其它鼠标事件原样放行。
+	// 滚轮滚动时指针不动，不会产生 MouseMove，需要在这里主动取消跑马灯；
+	// 滚动本身会触发一次绘制，所以不用 ForceDraw。
 	app.SetMouseCapture(func(event *tcell.EventMouse, action tview.MouseAction) (*tcell.EventMouse, tview.MouseAction) {
-		if action == tview.MouseMove {
-			x, y := event.Position()
+		x, y := event.Position()
+		switch action {
+		case tview.MouseMove:
 			t.hoverRef(x, y)
+		case tview.MouseScrollUp, tview.MouseScrollDown:
+			if t.refList != nil && t.refList.InRect(x, y) {
+				t.stopRefMarquee()
+			}
 		}
 		return event, action
 	})
@@ -2391,17 +2399,27 @@ func (t *TUI) deleteRef(node *tview.TreeNode) {
 	t.setupPrompt(page, prompt)
 }
 
-// hoverRef 按鼠标位置更新引用列表的跑马灯：同一行内移动不重启，换行或离开引用树时停止。
+// hoverRef 按鼠标位置更新引用列表的跑马灯：同一行内移动不重启，换行或离开引用树时停止；
+// 新行要停留 refHoverDelay 后才开始滚动，避免鼠标扫过时每行都触发。
 func (t *TUI) hoverRef(x, y int) {
-	if t.refMarquee != nil && t.refMarquee.x == x && t.refMarquee.y == y {
-		return
+	node, _ := t.refNodeAt(x, y)
+
+	if m := t.refMarquee; m != nil {
+		if m.x == x && m.y == y {
+			return
+		}
+		if m.node == node {
+			m.x, m.y = x, y
+			return
+		}
 	}
 
-	node, level := t.refNodeAt(x, y)
-	if t.refMarquee != nil && t.refMarquee.node == node {
-		t.refMarquee.x, t.refMarquee.y = x, y
+	// 同一行内移动时保留倒计时，从进入这一行开始计算停留时间。
+	if h := t.refHover; h != nil && node != nil && h.node == node {
+		h.x, h.y = x, y
 		return
 	}
+	t.cancelRefHover()
 
 	// 鼠标移动不会让 tview 自动重绘，停止后要主动刷一次才能恢复未滚动的文本。
 	stopped := t.refMarquee != nil
@@ -2413,7 +2431,36 @@ func (t *TUI) hoverRef(x, y int) {
 	if node == nil || t.popupVisible() {
 		return
 	}
-	t.startRefMarquee(node, x, y, level)
+	t.scheduleRefHover(node, x, y)
+}
+
+// scheduleRefHover 在鼠标停留 refHoverDelay 后启动跑马灯；期间换行或离开会取消。
+func (t *TUI) scheduleRefHover(node *tview.TreeNode, x, y int) {
+	h := &refHover{node: node, x: x, y: y}
+	t.refHover = h
+	h.timer = time.AfterFunc(refHoverDelay, func() {
+		t.app.QueueUpdateDraw(func() {
+			if t.refHover != h {
+				return
+			}
+			t.refHover = nil
+			// 滚轮可以让指针下的行变化但不产生 MouseMove，位置要重新解析一次。
+			current, level := t.refNodeAt(h.x, h.y)
+			if current != h.node || t.popupVisible() {
+				return
+			}
+			t.startRefMarquee(current, h.x, h.y, level)
+		})
+	})
+}
+
+// cancelRefHover 取消还没到时间的跑马灯启动。
+func (t *TUI) cancelRefHover() {
+	if t.refHover == nil {
+		return
+	}
+	t.refHover.timer.Stop()
+	t.refHover = nil
 }
 
 // openHelp 弹出快捷键帮助窗口。
@@ -2608,8 +2655,10 @@ func (t *TUI) startRefMarquee(node *tview.TreeNode, x, y, level int) {
 	t.refMarquee = m
 }
 
-// stopRefMarquee 停止跑马灯并把节点文本恢复成未滚动的样子。
+// stopRefMarquee 停止跑马灯并把节点文本恢复成未滚动的样子；
+// 尚未启动的待定项也一并取消。
 func (t *TUI) stopRefMarquee() {
+	t.cancelRefHover()
 	m := t.refMarquee
 	if m == nil {
 		return
