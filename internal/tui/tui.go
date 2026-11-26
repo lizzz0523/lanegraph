@@ -28,10 +28,9 @@ type TUI struct {
 
 	// root 包住整个界面，弹窗作为独立页面叠在 main 上，从而覆盖全屏。
 	root       *tview.Pages
-	repoHead   *tview.TextView
 	changeTab  *tview.Button
 	commitTab  *tview.Button
-	filterText *tview.TextArea
+	refFilter  *tview.TextArea
 	refList    *refTree
 	mainPanels *tview.Pages
 	statusBar  *tview.TextView
@@ -216,7 +215,7 @@ func (t *TUI) Run() error {
 			}
 		}
 
-		filtering := t.filterText != nil && t.filterText.HasFocus()
+		filtering := t.refFilter != nil && t.refFilter.HasFocus()
 		committing := (t.commitSubject != nil && t.commitSubject.HasFocus()) ||
 			(t.commitDescription != nil && t.commitDescription.HasFocus())
 		// filter 和 commit 输入框里要能正常输入字母；Ctrl+Q 仍然随时可退出。
@@ -226,7 +225,7 @@ func (t *TUI) Run() error {
 			t.quit()
 			return nil
 		case event.Key() == tcell.KeyEscape && filtering:
-			t.filterText.SetText("", false)
+			t.refFilter.SetText("", false)
 			app.SetFocus(t.refList)
 			return nil
 		// commit 输入框里 Esc 回到 local changes 列表。
@@ -726,22 +725,22 @@ func (t *TUI) setupUI() tview.Primitive {
 		AddItem(changeList, 40, 1, true).
 		AddItem(changeInfo, 0, 1, false)
 
-	filterText := tview.NewTextArea()
+	refFilter := tview.NewTextArea()
 
-	filterText.SetTitle(" filter ").
+	refFilter.SetTitle(" filter ").
+		SetTitleAlign(tview.AlignLeft).
 		SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
-		SetFocusFunc(func() { t.setFocusBorder(filterText.Box, true) }).
-		SetBlurFunc(func() { t.setFocusBorder(filterText.Box, false) })
+		SetFocusFunc(func() { t.setFocusBorder(refFilter.Box, true) }).
+		SetBlurFunc(func() { t.setFocusBorder(refFilter.Box, false) })
 
-	filterText.SetChangedFunc(func() {
+	refFilter.SetChangedFunc(func() {
 		t.refreshRefs(t.refName())
 	})
 
 	refList := newRefTree()
 
-	refList.SetTitle(" branches ").
-		SetBorder(true).
+	refList.SetBorder(true).
 		SetBorderPadding(0, 0, 1, 1).
 		SetFocusFunc(func() { t.setFocusBorder(refList.Box, true) }).
 		SetBlurFunc(func() { t.setFocusBorder(refList.Box, false) })
@@ -785,28 +784,6 @@ func (t *TUI) setupUI() tview.Primitive {
 
 	t.focusOnScrollTree(refList, nil)
 
-	repoHead := tview.NewTextView().
-		SetText(t.HeadRef).
-		SetWrap(false)
-
-	repoHead.SetTitle(" "+t.RepoName+" ").
-		SetBorder(true).
-		SetBorderPadding(0, 0, 1, 1)
-
-	repoHead.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
-		if action != tview.MouseLeftClick || !repoHead.InRect(event.Position()) {
-			return action, event
-		}
-		if row := t.commitRow(t.HeadHash); row >= 0 {
-			commitList.SetCurrentItem(row)
-		}
-		if node := t.refNode(t.HeadRef); node != nil {
-			refList.SetCurrentNode(node)
-		}
-		t.app.SetFocus(refList)
-		return tview.MouseConsumed, nil
-	})
-
 	changeTab := tview.NewButton("Local Changes")
 	commitTab := tview.NewButton("All Commits")
 
@@ -839,6 +816,11 @@ func (t *TUI) setupUI() tview.Primitive {
 		AddItem(changeTab, 1, 0, false).
 		AddItem(commitTab, 1, 0, false)
 
+	mainTabs.SetTitle(" "+t.RepoName+" ").
+		SetTitleAlign(tview.AlignLeft).
+		SetBorder(true).
+		SetBorderPadding(0, 0, 0, 0)
+
 	// Pages 会先把整块区域刷成背景色再画当前页，
 	// 所以切换时不会残留上一个面板的像素。
 	mainPanels := tview.NewPages().
@@ -847,10 +829,8 @@ func (t *TUI) setupUI() tview.Primitive {
 
 	sidebar := tview.NewFlex().
 		SetDirection(tview.FlexRow).
-		AddItem(repoHead, 3, 0, false).
-		AddItem(mainTabs, 2, 0, false).
-		AddItem(nil, 1, 0, false).
-		AddItem(filterText, 3, 0, false).
+		AddItem(mainTabs, 4, 0, false).
+		AddItem(refFilter, 3, 0, false).
 		AddItem(refList, 0, 1, false)
 
 	content := tview.NewFlex().
@@ -913,10 +893,9 @@ func (t *TUI) setupUI() tview.Primitive {
 		AddPage("main", mainPage, true, true)
 
 	t.root = root
-	t.repoHead = repoHead
 	t.changeTab = changeTab
 	t.commitTab = commitTab
-	t.filterText = filterText
+	t.refFilter = refFilter
 	t.refList = refList
 	t.mainPanels = mainPanels
 	t.statusBar = statusBar
@@ -952,7 +931,7 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.statusBusy = make(map[string]string)
 
 	// SetRoot 只会对 commitList 触发 focus 回调，其余需手动初始化为未聚焦
-	t.setFocusBorder(filterText.Box, false)
+	t.setFocusBorder(refFilter.Box, false)
 	t.setFocusBorder(refList.Box, false)
 	t.setFocusBorder(commitList.Box, true)
 	t.setFocusBorder(commitInfo.Box, false)
@@ -1345,9 +1324,9 @@ func (t *TUI) focusChain() []tview.Primitive {
 		return t.historyView.focusables()
 	}
 	if t.activeTab == tabChange {
-		return []tview.Primitive{t.changeTab, t.commitTab, t.filterText, t.refList, t.changeList, t.changeDiff, t.commitSubject, t.commitDescription, t.commitButton}
+		return []tview.Primitive{t.changeTab, t.commitTab, t.refFilter, t.refList, t.changeList, t.changeDiff, t.commitSubject, t.commitDescription, t.commitButton}
 	}
-	return []tview.Primitive{t.changeTab, t.commitTab, t.filterText, t.refList, t.commitList, t.commitInfo, t.fileList, t.fileDiff}
+	return []tview.Primitive{t.changeTab, t.commitTab, t.refFilter, t.refList, t.commitList, t.commitInfo, t.fileList, t.fileDiff}
 }
 
 // setFocusBorder 按焦点状态切换边框和标题颜色。
@@ -1451,8 +1430,8 @@ func (t *TUI) refreshRefs(selected string) {
 	t.stopRefMarquee()
 
 	filter := ""
-	if t.filterText != nil {
-		filter = strings.ToLower(strings.TrimSpace(t.filterText.GetText()))
+	if t.refFilter != nil {
+		filter = strings.ToLower(strings.TrimSpace(t.refFilter.GetText()))
 	}
 
 	refRoot := buildRefTree(t.Branches, t.Tags, filter, t.HeadRef, t.syncSpinner.frame(), t.refFolderExpanded, t.headerStyle, t.headerSelectedStyle, t.selectedStyle)
@@ -2545,11 +2524,8 @@ func (t *TUI) showRefs(_ refsRequest, refs core.Refs, err error) {
 	t.Merging = refs.Merging
 	t.Squashing = refs.Squashing
 	t.CherryPicking = refs.CherryPicking
-	t.renderInProgressActions()
-	if t.repoHead != nil {
-		t.repoHead.SetText(t.HeadRef)
-	}
 	t.refreshRefs(selected)
+	t.renderInProgressActions()
 
 	// pull/checkout 后 HEAD 已变化，用 refs 里的新 HeadHash 定位到 HEAD 提交。
 	// commits 刷新已由 refreshTab 或调用方发起，这里只应用选择。
