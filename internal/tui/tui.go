@@ -2577,13 +2577,13 @@ func (t *TUI) refNodeAt(x, y int) (*tview.TreeNode, int) {
 
 // refMarqueeLabel 返回引用节点固定不动的图标 markup 和需要滚动的纯文本名字；
 // 分组标题和目录没有可滚动的名字。
-func (t *TUI) refMarqueeLabel(node *tview.TreeNode) (prefix, name string, ok bool) {
+func (t *TUI) refMarqueeLabel(node *tview.TreeNode) (string, string, bool) {
 	switch ref := node.GetReference().(type) {
 	case core.Branch:
-		name = ref.LocalName()
-		return strings.TrimSuffix(branchLabel(ref, t.HeadRef, t.syncSpinner.frame()), tview.Escape(name)), name, true
+		prefix := branchPrefix(ref, t.HeadRef, t.syncSpinner.frame())
+		return prefix, refLabel(ref.LocalName()), true
 	case core.Tag:
-		return "", ref.Name, true
+		return "", refLabel(ref.Name), true
 	}
 	return "", "", false
 }
