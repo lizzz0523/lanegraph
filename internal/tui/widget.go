@@ -862,11 +862,11 @@ func newRebaseForm(
 		AddItem(parts, 0, 1, true).
 		AddItem(nil, 8, 0, false)
 
-	// 弹窗铺满整个界面，左右各留 15 列、上下各留 3 行，和 history 弹窗一致。
+	// 弹窗铺满整个界面，左右各留 42 列、上下各留 8 行。
 	view := tview.NewFlex().
-		AddItem(nil, 35, 0, false).
+		AddItem(nil, 42, 0, false).
 		AddItem(inner, 0, 1, true).
-		AddItem(nil, 35, 0, false)
+		AddItem(nil, 42, 0, false)
 
 	// 只有三个分区和按钮接收鼠标；其余区域直接消费，避免点击穿透到下面的主界面。
 	view.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
@@ -1044,9 +1044,9 @@ func newRewordForm(
 		AddItem(nil, 15, 0, false)
 
 	view := tview.NewFlex().
-		AddItem(nil, 35, 0, false).
+		AddItem(nil, 42, 0, false).
 		AddItem(inner, 0, 1, true).
-		AddItem(nil, 35, 0, false)
+		AddItem(nil, 42, 0, false)
 
 	view.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
 		if header.InRect(event.Position()) || subject.InRect(event.Position()) ||
@@ -1177,12 +1177,12 @@ func newHistoryView(
 		AddItem(content, 0, 1, true).
 		AddItem(nil, 3, 0, false)
 
-	// 弹窗铺满 mainPage 所在区域，左右各留 15 列、上下各留 3 行，
-	// 内容区正好是 mainPage 宽 - 30、高 - 6。
+	// 弹窗铺满 mainPage 所在区域，左右各留 18 列、上下各留 3 行，
+	// 内容区正好是 mainPage 宽 - 36、高 - 6。
 	view := tview.NewFlex().
-		AddItem(nil, 15, 0, false).
+		AddItem(nil, 18, 0, false).
 		AddItem(inner, 0, 1, true).
-		AddItem(nil, 15, 0, false)
+		AddItem(nil, 18, 0, false)
 
 	// 弹窗铺满 mainPage，只有两个子面板需要接收鼠标；其余区域直接消费，
 	// 避免点击穿透到下面的主界面。

@@ -834,7 +834,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		AddItem(refList, 0, 1, false)
 
 	content := tview.NewFlex().
-		AddItem(sidebar, 30, 0, false).
+		AddItem(sidebar, 36, 0, false).
 		AddItem(mainPanels, 0, 1, true)
 
 	statusBar := tview.NewTextView().
@@ -1985,17 +1985,16 @@ func (t *TUI) openCommitInfo() {
 		Foreground(t.borderFocusColor).
 		Background(colorPopup.cell))
 
-	// 弹窗铺满 mainPage 所在区域，左右各留 15 列、上下各留 3 行，
-	// 和 history 弹窗保持一致的留白。
+	// 弹窗铺满 mainPage 所在区域，左右各留 42 列、上下各留 15 行。
 	inner := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(nil, 15, 0, false).
 		AddItem(commitInfo, 0, 1, true).
 		AddItem(nil, 15, 0, false)
 
 	popup := tview.NewFlex().
-		AddItem(nil, 35, 0, false).
+		AddItem(nil, 42, 0, false).
 		AddItem(inner, 0, 1, true).
-		AddItem(nil, 35, 0, false)
+		AddItem(nil, 42, 0, false)
 
 	// 只有信息面板接收鼠标；其余区域直接消费，避免点击穿透到下面的主界面。
 	popup.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
@@ -2313,7 +2312,7 @@ func (t *TUI) createRef(op createOp, commit *core.Commit) {
 
 	const page = "create-ref"
 
-	prompt := newModalForm(62).
+	prompt := newModalForm(80).
 		SetText(message).
 		SetLabel(label).
 		SetButtons([]string{"Cancel", "Create"})
