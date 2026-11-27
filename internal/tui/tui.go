@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -55,6 +57,7 @@ type TUI struct {
 	commitDescription *tview.TextArea
 	commitButton      *tview.Button
 	amendCheck        *tview.Checkbox
+	headLabel         *tview.TextView // 提交栏左侧显示的 仓库路径:HEAD
 
 	rebaseForm  *rebaseForm     // interactive rebase 弹窗
 	rewordForm  *rewordForm     // 单条 commit reword 弹窗
@@ -286,6 +289,7 @@ func (t *TUI) Run() error {
 	t.refreshTabStyles()
 	t.refreshRefs("")
 	t.refreshCommit(true)
+	t.refreshHeadLabel()
 
 	return app.Run()
 }
@@ -712,12 +716,19 @@ func (t *TUI) setupUI() tview.Primitive {
 		return action, event
 	})
 
+	headLabel := tview.NewTextView().
+		SetDynamicColors(true).
+		SetWrap(false).
+		SetTextAlign(tview.AlignLeft)
+
 	commitAction := tview.NewFlex().
+		AddItem(nil, 1, 0, false).
+		AddItem(headLabel, 0, 1, false).
 		AddItem(nil, 1, 0, false).
 		AddItem(amendCheck, 1, 0, false).
 		AddItem(nil, 1, 0, false).
 		AddItem(amendLabel, 5, 0, false).
-		AddItem(nil, 0, 1, false).
+		AddItem(nil, 2, 0, false).
 		AddItem(commitButton, 16, 0, false).
 		AddItem(nil, 1, 0, false)
 
@@ -743,7 +754,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		SetBlurFunc(func() { t.setFocusBorder(refFilter.Box, false) })
 
 	refFilter.SetChangedFunc(func() {
-		t.refreshRefs(t.refName())
+		t.refreshRefs(t.currentRef())
 	})
 
 	refList := newRefTree()
@@ -925,6 +936,7 @@ func (t *TUI) setupUI() tview.Primitive {
 	t.commitDescription = commitDescription
 	t.commitButton = commitButton
 	t.amendCheck = amendCheck
+	t.headLabel = headLabel
 
 	t.tabStyle = defaultStyle
 	t.tabActiveStyle = accentStyle
@@ -1456,6 +1468,23 @@ func (t *TUI) refreshRefs(selected string) {
 	if node := firstRefNode(refRoot); node != nil {
 		t.refList.SetCurrentNode(node)
 	}
+}
+
+// refreshHeadLabel 把提交栏左侧的标识更新为 仓库路径:HEAD；
+// 路径在 home 目录下时用 ~ 前缀缩短。
+func (t *TUI) refreshHeadLabel() {
+	if t.headLabel == nil {
+		return
+	}
+	path := t.Repo
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if path == home {
+			path = "~"
+		} else if strings.HasPrefix(path, home+string(filepath.Separator)) {
+			path = "~" + path[len(home):]
+		}
+	}
+	t.headLabel.SetText(colorMuted.markup(tview.Escape(path + ":" + t.HeadRef)))
 }
 
 // toggleRefFolder 切换引用树目录的展开状态，并记住用户的选择以便重建引用树时恢复。
@@ -2538,7 +2567,7 @@ func (t *TUI) showRefs(_ refsRequest, refs core.Refs, err error) {
 	selected := t.pendingRef
 	t.pendingRef = ""
 	if selected == "" {
-		selected = t.refName()
+		selected = t.currentRef()
 	}
 
 	if err != nil {
@@ -2556,6 +2585,7 @@ func (t *TUI) showRefs(_ refsRequest, refs core.Refs, err error) {
 	t.Squashing = refs.Squashing
 	t.CherryPicking = refs.CherryPicking
 	t.refreshRefs(selected)
+	t.refreshHeadLabel()
 	t.renderInProgressActions()
 
 	// pull/checkout 后 HEAD 已变化，用 refs 里的新 HeadHash 定位到 HEAD 提交。
@@ -2570,8 +2600,8 @@ func (t *TUI) showRefs(_ refsRequest, refs core.Refs, err error) {
 	}
 }
 
-// refName 返回引用列表当前选中节点的名字；分组标题和目录返回空。
-func (t *TUI) refName() string {
+// currentRef 返回引用列表当前选中节点的名字；分组标题和目录返回空。
+func (t *TUI) currentRef() string {
 	if t.refList == nil {
 		return ""
 	}
