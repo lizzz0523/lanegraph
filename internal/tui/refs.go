@@ -31,8 +31,8 @@ type refMarquee struct {
 }
 
 // begin 绑定节点并开始滚动；内容在 level 层对应的宽度内放得下时返回 false。
-func (m *refMarquee) begin(t *TUI, prefix, text string, level int) bool {
-	m.reset(prefix, text)
+func (m *refMarquee) begin(t *TUI, prefix, text string, bold bool, level int) bool {
+	m.reset(prefix, text, bold)
 	width := t.refMarqueeWidth(level)
 	if !m.fits(width) {
 		return false
@@ -110,16 +110,21 @@ func (s *syncSpinner) start() {
 	s.anim.start()
 }
 
+// isBranchHead 表示 b 是否是 HEAD 指向的本地分支。
+func isBranchHead(b core.Branch, headRef string) bool {
+	return !b.Remote && b.Name == headRef
+}
+
 // branchPrefix 返回分支前面的标记和分隔空格；远端分支没有前缀。
 func branchPrefix(b core.Branch, headRef, spinFrame string) string {
 	switch {
-	case !b.Remote && b.Name == headRef:
+	case isBranchHead(b, headRef):
 		// HEAD 指向的本地分支前面加绿色对勾；同步操作期间换成点阵动画。
 		mark := "✓"
 		if spinFrame != "" {
 			mark = spinFrame
 		}
-		return colorSuccess.markup(mark) + " "
+		return colorSuccess.markup(mark, true) + " "
 	case !b.Remote:
 		// 其余本地分支用分支符号占位对齐。
 		return colorMuted.markup("↘") + " "
@@ -129,8 +134,12 @@ func branchPrefix(b core.Branch, headRef, spinFrame string) string {
 
 // branchLabel 返回分支在列表中的显示文本；spinFrame 非空时用动画帧代替 HEAD 对勾。
 func branchLabel(b core.Branch, headRef, spinFrame string) string {
+	name := tview.Escape(refLabel(b.LocalName()))
+	if isBranchHead(b, headRef) {
+		name = colorText.markup(name, true)
+	}
 	// remote 目录和分支前缀目录已经体现了路径，分支节点只显示最后一段。
-	return branchPrefix(b, headRef, spinFrame) + tview.Escape(refLabel(b.LocalName()))
+	return branchPrefix(b, headRef, spinFrame) + name
 }
 
 // tagLabel 返回标签在列表中的显示文本。

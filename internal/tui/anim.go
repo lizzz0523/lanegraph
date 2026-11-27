@@ -19,6 +19,7 @@ const marqueeGap = 3
 type marquee struct {
 	prefix string
 	text   string
+	bold   bool
 	offset int
 }
 
@@ -30,13 +31,18 @@ func (m *marquee) fits(width int) bool {
 
 // base 返回未滚动的完整文本。
 func (m *marquee) base() string {
-	return m.prefix + tview.Escape(m.text)
+	text := tview.Escape(m.text)
+	if m.bold {
+		text = colorText.markup(text, true)
+	}
+	return m.prefix + text
 }
 
 // reset 替换滚动内容并回到起点。
-func (m *marquee) reset(prefix, text string) {
+func (m *marquee) reset(prefix, text string, bold bool) {
 	m.prefix = prefix
 	m.text = text
+	m.bold = bold
 	m.offset = 0
 }
 
@@ -58,7 +64,12 @@ func (m *marquee) frame(width int) string {
 		return m.base()
 	}
 	source := m.text + strings.Repeat(" ", marqueeGap)
-	return m.prefix + tview.Escape(marqueeWindow(source+source, m.offset, avail))
+
+	text := tview.Escape(marqueeWindow(source+source, m.offset, avail))
+	if m.bold {
+		text = colorText.markup(text, true)
+	}
+	return m.prefix + text
 }
 
 // marqueeWindow 从 text 的第 offset 格开始取 width 格；

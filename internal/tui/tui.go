@@ -827,7 +827,7 @@ func (t *TUI) setupUI() tview.Primitive {
 	mainTabs.SetTitle(" "+t.RepoName+" ").
 		SetTitleAlign(tview.AlignLeft).
 		SetBorder(true).
-		SetBorderPadding(0, 0, 0, 0)
+		SetBorderPadding(0, 0, 1, 1)
 
 	// Pages 会先把整块区域刷成背景色再画当前页，
 	// 所以切换时不会残留上一个面板的像素。
@@ -2609,15 +2609,16 @@ func (t *TUI) refNodeAt(x, y int) (*tview.TreeNode, int) {
 
 // refMarqueeLabel 返回引用节点固定不动的图标 markup 和需要滚动的纯文本名字；
 // 分组标题和目录没有可滚动的名字。
-func (t *TUI) refMarqueeLabel(node *tview.TreeNode) (string, string, bool) {
+func (t *TUI) refMarqueeLabel(node *tview.TreeNode) (string, string, bool, bool) {
 	switch ref := node.GetReference().(type) {
 	case core.Branch:
 		prefix := branchPrefix(ref, t.HeadRef, t.syncSpinner.frame())
-		return prefix, refLabel(ref.LocalName()), true
+		isHead := isBranchHead(ref, t.HeadRef)
+		return prefix, refLabel(ref.LocalName()), isHead, true
 	case core.Tag:
-		return "", refLabel(ref.Name), true
+		return "", refLabel(ref.Name), false, true
 	}
-	return "", "", false
+	return "", "", false, false
 }
 
 // refMarqueeWidth 返回引用列表里层级为 level 的节点可用的文本宽度。
@@ -2629,12 +2630,12 @@ func (t *TUI) refMarqueeWidth(level int) int {
 
 // startRefMarquee 在节点上启动跑马灯；内容在宽度内放得下时不启动。
 func (t *TUI) startRefMarquee(node *tview.TreeNode, x, y, level int) {
-	prefix, name, ok := t.refMarqueeLabel(node)
+	prefix, name, isHead, ok := t.refMarqueeLabel(node)
 	if !ok {
 		return
 	}
 	m := &refMarquee{node: node, x: x, y: y}
-	if !m.begin(t, prefix, name, level) {
+	if !m.begin(t, prefix, name, isHead, level) {
 		return
 	}
 	t.refMarquee = m
