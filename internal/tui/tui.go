@@ -3718,49 +3718,55 @@ func (t *TUI) showCommitOpRunning(req commitOpRequest) {
 func (t *TUI) showCommitOp(req commitOpRequest, _ string, err error) {
 	message := t.commitOpLabel(req, true)
 	if err != nil {
-		// git 的错误可能是多行，压成一行避免撑坏单行 statusBar。
-		message = strings.Join(strings.Fields(err.Error()), " ")
-		switch req.op {
-		case opReset:
-			message = "reset failed: " + message
-		case opRebase:
-			message = "rebase failed: " + message
-		case opRebaseInteractive:
-			message = "interactive rebase failed: " + message
-		case opReword:
-			message = "reword failed: " + message
-		case opRebaseContinue:
-			message = "rebase continue failed: " + message
-		case opRebaseAbort:
-			message = "rebase abort failed: " + message
-		case opMerge:
-			if req.mergeMode == core.MergeSquash {
-				message = "squash failed: " + message
-			} else {
-				message = "merge failed: " + message
+		var autostashErr *core.AutostashError
+		if errors.As(err, &autostashErr) {
+			// 操作本身已完成，只是暂存的本地改动没恢复；用完成文案加提醒，避免误报为失败。
+			message += "; " + strings.Join(strings.Fields(autostashErr.Error()), " ")
+		} else {
+			// git 的错误可能是多行，压成一行避免撑坏单行 statusBar。
+			message = strings.Join(strings.Fields(err.Error()), " ")
+			switch req.op {
+			case opReset:
+				message = "reset failed: " + message
+			case opRebase:
+				message = "rebase failed: " + message
+			case opRebaseInteractive:
+				message = "interactive rebase failed: " + message
+			case opReword:
+				message = "reword failed: " + message
+			case opRebaseContinue:
+				message = "rebase continue failed: " + message
+			case opRebaseAbort:
+				message = "rebase abort failed: " + message
+			case opMerge:
+				if req.mergeMode == core.MergeSquash {
+					message = "squash failed: " + message
+				} else {
+					message = "merge failed: " + message
+				}
+			case opMergeContinue:
+				message = "merge continue failed: " + message
+			case opMergeAbort:
+				message = "merge abort failed: " + message
+			case opSquashContinue:
+				message = "squash continue failed: " + message
+			case opSquashAbort:
+				message = "squash abort failed: " + message
+			case opRevert:
+				message = "revert failed: " + message
+			case opRevertContinue:
+				message = "revert continue failed: " + message
+			case opRevertAbort:
+				message = "revert abort failed: " + message
+			case opCherryPick:
+				message = "cherry-pick failed: " + message
+			case opCherryPickContinue:
+				message = "cherry-pick continue failed: " + message
+			case opCherryPickAbort:
+				message = "cherry-pick abort failed: " + message
+			default:
+				message = "commit failed: " + message
 			}
-		case opMergeContinue:
-			message = "merge continue failed: " + message
-		case opMergeAbort:
-			message = "merge abort failed: " + message
-		case opSquashContinue:
-			message = "squash continue failed: " + message
-		case opSquashAbort:
-			message = "squash abort failed: " + message
-		case opRevert:
-			message = "revert failed: " + message
-		case opRevertContinue:
-			message = "revert continue failed: " + message
-		case opRevertAbort:
-			message = "revert abort failed: " + message
-		case opCherryPick:
-			message = "cherry-pick failed: " + message
-		case opCherryPickContinue:
-			message = "cherry-pick continue failed: " + message
-		case opCherryPickAbort:
-			message = "cherry-pick abort failed: " + message
-		default:
-			message = "commit failed: " + message
 		}
 	}
 	t.statusDone("commit", message)

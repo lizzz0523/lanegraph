@@ -848,16 +848,18 @@ func GitRevert(ctx context.Context, repo string, commit Commit) (string, error) 
 
 	output, err := gitOutput(ctx, repo, nil, "revert", "--no-edit", commit.Hash)
 	if err != nil {
+		revertErr := fmt.Errorf("git revert error: %w", gitStderr(err))
 		// 只有停在冲突态时才把 stash 留给 Continue / Abort 恢复。
 		if !GitRevertInProgress(ctx, repo) {
-			restored, _ := gitUnstash(ctx, repo, revertAutostash)
+			restored, restoreErr := gitUnstash(ctx, repo, revertAutostash)
 			output += restored
+			revertErr = errors.Join(revertErr, unwrapAutostash(restoreErr))
 		}
-		return output, fmt.Errorf("git revert error: %w", gitStderr(err))
+		return output, revertErr
 	}
 
-	restored, _ := gitUnstash(ctx, repo, revertAutostash)
-	return output + restored, nil
+	restored, err := gitUnstash(ctx, repo, revertAutostash)
+	return output + restored, err
 }
 
 // GitRevertInProgress 返回仓库是否停在未完成的 revert 中。
@@ -871,8 +873,8 @@ func GitRevertContinue(ctx context.Context, repo string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("git revert continue error: %w", gitStderr(err))
 	}
-	restored, _ := gitUnstash(ctx, repo, revertAutostash)
-	return output + restored, nil
+	restored, err := gitUnstash(ctx, repo, revertAutostash)
+	return output + restored, err
 }
 
 // GitRevertAbort 取消未完成的 revert，恢复到 revert 之前的状态；完成后恢复之前暂存的本地改动。
@@ -881,8 +883,8 @@ func GitRevertAbort(ctx context.Context, repo string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("git revert abort error: %w", gitStderr(err))
 	}
-	restored, _ := gitUnstash(ctx, repo, revertAutostash)
-	return output + restored, nil
+	restored, err := gitUnstash(ctx, repo, revertAutostash)
+	return output + restored, err
 }
 
 // cherryPickAutostash 是 cherry-pick 自动暂存使用的标记，作用类似 git 的 MERGE_AUTOSTASH。
@@ -896,16 +898,18 @@ func GitCherryPick(ctx context.Context, repo string, commit Commit) (string, err
 
 	output, err := gitOutput(ctx, repo, nil, "cherry-pick", commit.Hash)
 	if err != nil {
+		cherryPickErr := fmt.Errorf("git cherry-pick error: %w", gitStderr(err))
 		// 只有停在冲突态时才把 stash 留给 Continue / Abort 恢复。
 		if !GitCherryPickInProgress(ctx, repo) {
-			restored, _ := gitUnstash(ctx, repo, cherryPickAutostash)
+			restored, restoreErr := gitUnstash(ctx, repo, cherryPickAutostash)
 			output += restored
+			cherryPickErr = errors.Join(cherryPickErr, unwrapAutostash(restoreErr))
 		}
-		return output, fmt.Errorf("git cherry-pick error: %w", gitStderr(err))
+		return output, cherryPickErr
 	}
 
-	restored, _ := gitUnstash(ctx, repo, cherryPickAutostash)
-	return output + restored, nil
+	restored, err := gitUnstash(ctx, repo, cherryPickAutostash)
+	return output + restored, err
 }
 
 // GitCherryPickInProgress 返回仓库是否停在未完成的 cherry-pick 中。
@@ -919,8 +923,8 @@ func GitCherryPickContinue(ctx context.Context, repo string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("git cherry-pick continue error: %w", gitStderr(err))
 	}
-	restored, _ := gitUnstash(ctx, repo, cherryPickAutostash)
-	return output + restored, nil
+	restored, err := gitUnstash(ctx, repo, cherryPickAutostash)
+	return output + restored, err
 }
 
 // GitCherryPickAbort 取消未完成的 cherry-pick，恢复到 cherry-pick 之前的状态；完成后恢复之前暂存的本地改动。
@@ -929,8 +933,8 @@ func GitCherryPickAbort(ctx context.Context, repo string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("git cherry-pick abort error: %w", gitStderr(err))
 	}
-	restored, _ := gitUnstash(ctx, repo, cherryPickAutostash)
-	return output + restored, nil
+	restored, err := gitUnstash(ctx, repo, cherryPickAutostash)
+	return output + restored, err
 }
 
 // gitAutostash 暂存本地改动，并把 stash hash 记录到 name 指定的 git 路径。
@@ -958,8 +962,40 @@ func gitAutostash(ctx context.Context, repo, name string) error {
 	return nil
 }
 
+// AutostashError 表示 git 操作本身已完成，但自动暂存的本地改动没有恢复成功。
+// stash 条目会保留，用户需要按 name 标记在 stash 列表里找回。
+type AutostashError struct {
+	Name string
+	Err  error
+}
+
+func (e *AutostashError) Error() string {
+	return "local changes were not fully restored; stash entry " + e.Name + " kept: " + e.Err.Error()
+}
+
+func (e *AutostashError) Unwrap() error { return e.Err }
+
+// autostashError 把恢复本地改动的错误包装成 AutostashError；err 为 nil 时返回 nil。
+func autostashError(name string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &AutostashError{Name: name, Err: err}
+}
+
+// unwrapAutostash 去掉 AutostashError 包装，供操作本身已失败时合并错误使用，
+// 避免调用方把整个操作当成“已完成但有警告”。
+func unwrapAutostash(err error) error {
+	var autostashErr *AutostashError
+	if errors.As(err, &autostashErr) {
+		return autostashErr.Err
+	}
+	return err
+}
+
 // gitUnstash 恢复 name 记录的本地改动并删除记录。
-// 恢复冲突时保留 stash 条目，和 git --autostash 的行为一致，由用户自行处理。
+// 恢复冲突时保留 stash 条目，和 git --autostash 的行为一致，由用户自行处理；
+// 失败返回 *AutostashError，表示改动仍然留在 stash 里。
 func gitUnstash(ctx context.Context, repo, name string) (string, error) {
 	path, ok := gitPath(ctx, repo, name)
 	if !ok {
@@ -970,11 +1006,11 @@ func gitUnstash(ctx context.Context, repo, name string) (string, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", nil
 		}
-		return "", fmt.Errorf("read autostash error: %w", err)
+		return "", autostashError(name, fmt.Errorf("read autostash error: %w", err))
 	}
 	// 先清掉记录：即使恢复失败，也不能影响之后的操作。
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("remove autostash error: %w", err)
+		return "", autostashError(name, fmt.Errorf("remove autostash error: %w", err))
 	}
 
 	hash := strings.TrimSpace(string(data))
@@ -989,7 +1025,7 @@ func gitUnstash(ctx context.Context, repo, name string) (string, error) {
 		output, err = gitOutput(ctx, repo, nil, "stash", "apply", hash)
 	}
 	if err != nil {
-		return output, fmt.Errorf("git stash restore error: %w", gitStderr(err))
+		return output, autostashError(name, fmt.Errorf("git stash restore error: %w", gitStderr(err)))
 	}
 	return output, nil
 }
