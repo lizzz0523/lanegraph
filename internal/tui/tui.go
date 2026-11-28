@@ -287,7 +287,7 @@ func (t *TUI) Run() error {
 	defer t.tasks.close()
 
 	t.refreshTabStyles()
-	t.refreshRefs("")
+	t.refreshRefs(t.HeadRef)
 	t.refreshCommit(true)
 	t.refreshHeadLabel()
 
