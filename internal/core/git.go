@@ -848,14 +848,14 @@ func GitRevert(ctx context.Context, repo string, commit Commit) (string, error) 
 
 	output, err := gitOutput(ctx, repo, nil, "revert", "--no-edit", commit.Hash)
 	if err != nil {
-		revertErr := fmt.Errorf("git revert error: %w", gitStderr(err))
+		err = fmt.Errorf("git revert error: %w", gitStderr(err))
 		// 只有停在冲突态时才把 stash 留给 Continue / Abort 恢复。
 		if !GitRevertInProgress(ctx, repo) {
 			restored, restoreErr := gitUnstash(ctx, repo, revertAutostash)
 			output += restored
-			revertErr = errors.Join(revertErr, unwrapAutostash(restoreErr))
+			err = errors.Join(err, unwrapAutostash(restoreErr))
 		}
-		return output, revertErr
+		return output, err
 	}
 
 	restored, err := gitUnstash(ctx, repo, revertAutostash)
@@ -898,14 +898,14 @@ func GitCherryPick(ctx context.Context, repo string, commit Commit) (string, err
 
 	output, err := gitOutput(ctx, repo, nil, "cherry-pick", commit.Hash)
 	if err != nil {
-		cherryPickErr := fmt.Errorf("git cherry-pick error: %w", gitStderr(err))
+		err = fmt.Errorf("git cherry-pick error: %w", gitStderr(err))
 		// 只有停在冲突态时才把 stash 留给 Continue / Abort 恢复。
 		if !GitCherryPickInProgress(ctx, repo) {
 			restored, restoreErr := gitUnstash(ctx, repo, cherryPickAutostash)
 			output += restored
-			cherryPickErr = errors.Join(cherryPickErr, unwrapAutostash(restoreErr))
+			err = errors.Join(err, unwrapAutostash(restoreErr))
 		}
-		return output, cherryPickErr
+		return output, err
 	}
 
 	restored, err := gitUnstash(ctx, repo, cherryPickAutostash)
