@@ -38,6 +38,27 @@ func (p *rebasePopup) cycleAction(row, delta int) {
 	p.actions[row] = rebaseActionOrder[index]
 }
 
+// move 把 row 对应的 commit 和动作一起移动到 row+delta，返回移动后的行号。
+// 越界时保持原位并返回原行号。
+func (p *rebasePopup) move(row, delta int) int {
+	target := row + delta
+	if row < 0 || row >= len(p.commits) || target < 0 || target >= len(p.commits) {
+		return row
+	}
+	p.commits[row], p.commits[target] = p.commits[target], p.commits[row]
+	p.actions[row], p.actions[target] = p.actions[target], p.actions[row]
+	return target
+}
+
+// order 按 git todo 的顺序（旧到新）返回 commit hash；UI 列表是新到旧。
+func (p *rebasePopup) order() []string {
+	order := make([]string, len(p.commits))
+	for i, commit := range p.commits {
+		order[len(p.commits)-1-i] = commit.Hash
+	}
+	return order
+}
+
 // validateActions 校验动作并汇总为 full hash → action 的映射。
 // 排除 drop 后最旧的提交必须可被 pick，否则它前面没有可供合并的提交。
 func (p *rebasePopup) validateActions() (map[string]core.RebaseAction, error) {
@@ -115,4 +136,20 @@ func rewordValidation(commits []core.Commit, headHash string, commit core.Commit
 		return "commit is not on the current branch"
 	}
 	return ""
+}
+
+// renderRebaseGraph 按当前列表顺序渲染 rebase 预览。
+// interactive rebase 的结果是线性的，因此把每个 commit 的 parent 临时改成下一个 commit，
+// 避免非拓扑顺序让 ComputeGraph 把已经错过的 parent 画成旁支。
+func renderRebaseGraph(commits []core.Commit) []string {
+	ordered := make([]core.Commit, len(commits))
+	copy(ordered, commits)
+	for i := range ordered {
+		if i+1 < len(ordered) {
+			ordered[i].Parents = []string{ordered[i+1].Hash}
+		} else {
+			ordered[i].Parents = nil
+		}
+	}
+	return renderCommitGraph(ordered, core.ComputeGraph(ordered), false)
 }

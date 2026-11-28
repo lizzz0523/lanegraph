@@ -48,8 +48,10 @@ var keymap = struct {
 	listFirst rune
 	listLast  rune
 
-	rebasePrev rune
-	rebaseNext rune
+	rebasePrev     rune
+	rebaseNext     rune
+	rebaseMoveUp   rune
+	rebaseMoveDown rune
 
 	dialogClose rune
 }{
@@ -92,8 +94,10 @@ var keymap = struct {
 	listFirst: 'g',
 	listLast:  'G',
 
-	rebasePrev: 'h',
-	rebaseNext: 'l',
+	rebasePrev:     'h',
+	rebaseNext:     'l',
+	rebaseMoveUp:   '[',
+	rebaseMoveDown: ']',
 
 	dialogClose: 'q',
 }
@@ -146,6 +150,7 @@ var keyBindings = []struct {
 	{"Interative Rebase", []keyBinding{
 		{"← / " + keyLabel(keymap.rebasePrev), "Previous rebase action"},
 		{"→ / " + keyLabel(keymap.rebaseNext), "Next rebase action"},
+		{keyLabel(keymap.rebaseMoveUp) + " / " + keyLabel(keymap.rebaseMoveDown), "Move selected commit up or down"},
 	}},
 	{"Commit Detail", []keyBinding{
 		{keyLabel(keymap.commitInfo), "Show or close full commit detail"},

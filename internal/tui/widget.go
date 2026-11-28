@@ -812,7 +812,7 @@ func (v *refTree) row(node *tview.TreeNode) int {
 type rebaseForm struct {
 	view         *tview.Flex
 	list         *listView
-	lines        []string // renderGraph 生成的、不含动作列的行
+	lines        []string // renderRebaseGraph 生成的、不含动作列的行
 	hint         *tview.TextView
 	cancelButton *tview.Button
 	rebaseButton *tview.Button
@@ -824,6 +824,7 @@ func newRebaseForm(
 	actions []core.RebaseAction,
 	selectedStyle tcell.Style,
 	borderColor, focusColor tcell.Color,
+	onMoveCommit func(delta int),
 	onCycleAction func(delta int),
 	onCancel, onConfirm func(),
 ) *rebaseForm {
@@ -886,6 +887,12 @@ func newRebaseForm(
 				return nil
 			case keymap.rebaseNext:
 				onCycleAction(1)
+				return nil
+			case keymap.rebaseMoveUp:
+				onMoveCommit(-1)
+				return nil
+			case keymap.rebaseMoveDown:
+				onMoveCommit(1)
 				return nil
 			}
 		}
@@ -957,6 +964,12 @@ func newRebaseForm(
 	setFocusBorder(list.Box, true)
 
 	return f
+}
+
+// SetCommits 同时更新图线和动作列，用于移动 commit 后重绘列表。
+func (f *rebaseForm) SetCommits(lines []string, actions []core.RebaseAction) {
+	f.lines = lines
+	f.SetActions(actions)
 }
 
 // SetActions 按 actions 重绘动作列；线的部分保持不变。

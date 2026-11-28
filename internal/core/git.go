@@ -507,37 +507,62 @@ const (
 	RebaseDrop   RebaseAction = "drop"
 )
 
-// rebaseSequenceEditor 把 git 生成的 todo 行首动作替换成 actions 里记录的动作。
-// todo 使用缩写 hash，按完整 hash 的前缀匹配；找不到对应动作的行保持原样。
+// rebaseSequenceEditor 先按 order 重排 git 生成的 todo 行，再把行首动作替换成 actions 里记录的动作。
+// todo 使用缩写 hash，按完整 hash 的前缀匹配；找不到对应动作的行保持原样，未匹配的行追加在末尾。
 const rebaseSequenceEditor = `#!/bin/sh
 set -e
 todo="$1"
 tmp="$todo.lanegraph"
-awk -v map="$LANEGRAPH_REBASE_ACTIONS" '
+awk -v map="$LANEGRAPH_REBASE_ACTIONS" -v order="$LANEGRAPH_REBASE_ORDER" '
 BEGIN {
+    while ((getline line < order) > 0) {
+        if (line != "") ordered[++count] = line
+    }
     while ((getline line < map) > 0) {
         split(line, fields, " ")
         if (fields[1] != "") actions[fields[1]] = fields[2]
     }
 }
 {
-    if (NF >= 2) {
-        for (hash in actions) {
-            if (substr(hash, 1, length($2)) == $2) {
-                $1 = actions[hash]
+    if (NF < 2) {
+        extras[++extra] = $0
+        next
+    }
+    matched = 0
+    for (i = 1; i <= count; i++) {
+        if (substr(ordered[i], 1, length($2)) == $2) {
+            lines[ordered[i]] = $0
+            matched = 1
+            break
+        }
+    }
+    if (!matched) {
+        extras[++extra] = $0
+    }
+}
+END {
+    for (i = 1; i <= count; i++) {
+        hash = ordered[i]
+        if (!(hash in lines)) continue
+        line = lines[hash]
+        split(line, fields, " ")
+        for (actionHash in actions) {
+            if (substr(actionHash, 1, length(fields[2])) == fields[2]) {
+                sub(/^[^ \t]+/, actions[actionHash], line)
                 break
             }
         }
+        print line
     }
-    print
+    for (i = 1; i <= extra; i++) print extras[i]
 }' "$todo" > "$tmp"
 mv "$tmp" "$todo"
 `
 
 // GitRebaseInteractive 以 commit 为基点执行 interactive rebase，并自动暂存和恢复本地改动。
-// actions 按完整 hash 指定每个提交的动作，未指定的提交保留 git 默认的 pick；
-// 动作通过临时 sequence editor 写回 todo，GIT_EDITOR=true 让 squash 直接接受合并后的提交信息。
-func GitRebaseInteractive(ctx context.Context, repo string, commit Commit, actions map[string]RebaseAction) (string, error) {
+// actions 按完整 hash 指定每个提交的动作，order 按完整 hash 指定 todo 顺序；未在 actions 中指定的提交保留 git 默认的 pick；
+// 动作和顺序通过临时 sequence editor 写回 todo，GIT_EDITOR=true 让 squash 直接接受合并后的提交信息。
+func GitRebaseInteractive(ctx context.Context, repo string, commit Commit, actions map[string]RebaseAction, order []string) (string, error) {
 	dir, err := os.MkdirTemp("", "lanegraph-rebase-")
 	if err != nil {
 		return "", fmt.Errorf("interactive rebase error: %w", err)
@@ -553,6 +578,11 @@ func GitRebaseInteractive(ctx context.Context, repo string, commit Commit, actio
 		return "", fmt.Errorf("interactive rebase error: %w", err)
 	}
 
+	orderPath := filepath.Join(dir, "order")
+	if err := os.WriteFile(orderPath, []byte(strings.Join(order, "\n")+"\n"), 0o600); err != nil {
+		return "", fmt.Errorf("interactive rebase error: %w", err)
+	}
+
 	editorPath := filepath.Join(dir, "sequence-editor")
 	if err := os.WriteFile(editorPath, []byte(rebaseSequenceEditor), 0o700); err != nil {
 		return "", fmt.Errorf("interactive rebase error: %w", err)
@@ -563,6 +593,7 @@ func GitRebaseInteractive(ctx context.Context, repo string, commit Commit, actio
 	env := append(gitContinueEnv(),
 		"GIT_SEQUENCE_EDITOR="+editorPath,
 		"LANEGRAPH_REBASE_ACTIONS="+actionsPath,
+		"LANEGRAPH_REBASE_ORDER="+orderPath,
 	)
 	output, err := gitOutput(ctx, repo, env, "rebase", "-i", "--autostash", commit.Hash)
 	if err != nil {

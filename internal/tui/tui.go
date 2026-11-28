@@ -468,7 +468,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		return event
 	})
 
-	commitList.SetLines(renderGraph(t.Commits, core.ComputeGraph(t.Commits), true))
+	commitList.SetLines(renderCommitGraph(t.Commits, core.ComputeGraph(t.Commits), true))
 
 	commitList.SetSelectedFunc(func() {
 		t.refreshCommit(false)
@@ -1171,7 +1171,7 @@ func (t *TUI) setupTasks() {
 			case opRebase:
 				return t.Rebase(ctx, req.commit)
 			case opRebaseInteractive:
-				return t.RebaseInteractive(ctx, req.commit, req.rebaseActions)
+				return t.RebaseInteractive(ctx, req.commit, req.rebaseActions, req.rebaseOrder)
 			case opReword:
 				return t.Reword(ctx, req.commit, req.subject, req.description)
 			case opRebaseContinue:
@@ -1686,11 +1686,12 @@ func (t *TUI) rebaseCommitInteractive() {
 
 	rebase := newRebaseForm(
 		message,
-		renderGraph(commits, core.ComputeGraph(commits), false),
+		renderRebaseGraph(commits),
 		popup.actions,
 		t.selectedStyle,
 		t.borderColor,
 		t.borderFocusColor,
+		t.moveRebaseCommit,
 		t.cycleRebaseAction,
 		t.closeRebaseInteractive,
 		t.confirmRebaseInteractive,
@@ -1700,6 +1701,22 @@ func (t *TUI) rebaseCommitInteractive() {
 	t.rebaseForm = rebase
 	t.rebaseVisible = true
 	t.openPopup("interactive-rebase", rebase.view, rebase.list)
+}
+
+// moveRebaseCommit 把当前选中的 commit 上移或下移，并让选中项跟随它。
+func (t *TUI) moveRebaseCommit(delta int) {
+	if !t.rebaseVisible {
+		return
+	}
+	row := t.rebaseForm.list.CurrentItem()
+	target := t.rebasePopup.move(row, delta)
+	if target == row {
+		return
+	}
+	lines := renderRebaseGraph(t.rebasePopup.commits)
+	t.rebaseForm.SetCommits(lines, t.rebasePopup.actions)
+	t.rebaseForm.list.SetCurrentItem(target)
+	t.rebaseForm.ResetHint()
 }
 
 // cycleRebaseAction 切换当前选中 commit 的 rebase 动作并刷新列表。
@@ -1735,8 +1752,9 @@ func (t *TUI) confirmRebaseInteractive() {
 		return
 	}
 	base := popup.base
+	order := popup.order()
 	t.closeRebaseInteractive()
-	t.executeRebaseInteractive(base, actions)
+	t.executeRebaseInteractive(base, actions, order)
 }
 
 // rewordCommit 先弹窗编辑提交信息，确认后改写选中的 commit。
@@ -2789,7 +2807,7 @@ func (t *TUI) showCommits(_ commitsRequest, commits []core.Commit, err error) {
 	}
 
 	t.Commits = commits
-	t.commitList.SetLines(renderGraph(commits, core.ComputeGraph(commits), true))
+	t.commitList.SetLines(renderCommitGraph(commits, core.ComputeGraph(commits), true))
 	// 刷新后 compare 可能已不存在（rebase/切分支），按 hash 重新确认。
 	t.syncCompare()
 
@@ -3541,8 +3559,8 @@ func (t *TUI) executeRebase(commit core.Commit) {
 }
 
 // executeRebaseInteractive 通过 Execute 强制执行 interactive rebase。
-func (t *TUI) executeRebaseInteractive(commit core.Commit, actions map[string]core.RebaseAction) {
-	t.tasks.commit.Execute(commitOpRequest{op: opRebaseInteractive, commit: commit, rebaseActions: actions})
+func (t *TUI) executeRebaseInteractive(commit core.Commit, actions map[string]core.RebaseAction, order []string) {
+	t.tasks.commit.Execute(commitOpRequest{op: opRebaseInteractive, commit: commit, rebaseActions: actions, rebaseOrder: order})
 }
 
 // executeReword 通过 Execute 强制执行，改写 commit 的提交信息。

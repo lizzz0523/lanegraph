@@ -184,9 +184,9 @@ func (s *State) Rebase(ctx context.Context, commit Commit) (string, error) {
 	return GitRebase(ctx, s.Repo, commit)
 }
 
-// RebaseInteractive 以 commit 为基点执行 interactive rebase，actions 指定每个提交的动作。
-func (s *State) RebaseInteractive(ctx context.Context, commit Commit, actions map[string]RebaseAction) (string, error) {
-	return GitRebaseInteractive(ctx, s.Repo, commit, actions)
+// RebaseInteractive 以 commit 为基点执行 interactive rebase，actions 指定每个提交的动作，order 指定 todo 顺序。
+func (s *State) RebaseInteractive(ctx context.Context, commit Commit, actions map[string]RebaseAction, order []string) (string, error) {
+	return GitRebaseInteractive(ctx, s.Repo, commit, actions, order)
 }
 
 // Reword 改写 commit 的提交信息。
