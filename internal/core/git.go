@@ -501,11 +501,12 @@ func GitReset(ctx context.Context, repo string, commit Commit, mode ResetMode) (
 
 // GitRebase 把当前分支 rebase 到 commit，并自动暂存和恢复本地改动。
 func GitRebase(ctx context.Context, repo string, commit Commit) (string, error) {
+	before, _ := gitOutputTrimmed(ctx, repo, "rev-parse", "--verify", "refs/stash")
 	output, err := gitOutput(ctx, repo, nil, "rebase", "--autostash", commit.Hash)
 	if err != nil {
 		return "", fmt.Errorf("git rebase error: %w", gitStderr(err))
 	}
-	return output, nil
+	return output, autostashWarning(ctx, repo, before)
 }
 
 // RebaseAction 是 interactive rebase todo 中每个提交的动作。
@@ -606,11 +607,12 @@ func GitRebaseInteractive(ctx context.Context, repo string, commit Commit, actio
 		"LANEGRAPH_REBASE_ACTIONS="+actionsPath,
 		"LANEGRAPH_REBASE_ORDER="+orderPath,
 	)
+	before, _ := gitOutputTrimmed(ctx, repo, "rev-parse", "--verify", "refs/stash")
 	output, err := gitOutput(ctx, repo, env, "rebase", "-i", "--autostash", commit.Hash)
 	if err != nil {
 		return "", fmt.Errorf("git rebase error: %w", gitStderr(err))
 	}
-	return output, nil
+	return output, autostashWarning(ctx, repo, before)
 }
 
 // rewordSequenceEditor 在 todo 的目标提交后插入 exec，用新消息 amend 该提交。
@@ -674,6 +676,7 @@ func GitReword(ctx context.Context, repo string, commit Commit, subject, descrip
 		args = append(args, commit.Parents[0])
 	}
 
+	before, _ := gitOutputTrimmed(ctx, repo, "rev-parse", "--verify", "refs/stash")
 	output, err := gitOutput(ctx, repo, env, args...)
 	if err != nil {
 		if !GitRebaseInProgress(ctx, repo) {
@@ -682,7 +685,7 @@ func GitReword(ctx context.Context, repo string, commit Commit, subject, descrip
 		return "", fmt.Errorf("git rebase error: %w", gitStderr(err))
 	}
 	removeRewordMessage(ctx, repo)
-	return output, nil
+	return output, autostashWarning(ctx, repo, before)
 }
 
 // GitRebaseInProgress 返回仓库是否停在未完成的 rebase 中。
@@ -696,6 +699,7 @@ func GitRebaseInProgress(ctx context.Context, repo string) bool {
 
 // GitRebaseContinue 在冲突解决并暂存后继续 rebase，返回 git 的输出。
 func GitRebaseContinue(ctx context.Context, repo string) (string, error) {
+	before, _ := gitOutputTrimmed(ctx, repo, "rev-parse", "--verify", "refs/stash")
 	output, err := gitOutput(ctx, repo, gitContinueEnv(), "rebase", "--continue")
 	if err != nil {
 		return "", fmt.Errorf("git rebase continue error: %w", gitStderr(err))
@@ -703,7 +707,7 @@ func GitRebaseContinue(ctx context.Context, repo string) (string, error) {
 	if !GitRebaseInProgress(ctx, repo) {
 		removeRewordMessage(ctx, repo)
 	}
-	return output, nil
+	return output, autostashWarning(ctx, repo, before)
 }
 
 // GitRebaseAbort 取消未完成的 rebase，恢复到 rebase 之前的状态。
@@ -752,12 +756,13 @@ func GitMerge(ctx context.Context, repo string, commit Commit, mode MergeMode) (
 	if mode != MergeFF && mode != MergeNoFF && mode != MergeSquash {
 		return "", fmt.Errorf("unknown merge mode: %d", mode)
 	}
+	before, _ := gitOutputTrimmed(ctx, repo, "rev-parse", "--verify", "refs/stash")
 	output, err := gitOutput(ctx, repo, nil, "merge", "--"+mode.String(), "--no-edit", "--autostash", commit.Hash)
 	if err != nil {
 		return "", fmt.Errorf("git merge error: %w", gitStderr(err))
 	}
 	if mode != MergeSquash || !GitSquashInProgress(ctx, repo) {
-		return output, nil
+		return output, autostashWarning(ctx, repo, before)
 	}
 	committed, err := GitSquashContinue(ctx, repo)
 	if err != nil {
@@ -773,11 +778,12 @@ func GitMergeInProgress(ctx context.Context, repo string) bool {
 
 // GitMergeContinue 在冲突解决并暂存后继续 merge，返回 git 的输出。
 func GitMergeContinue(ctx context.Context, repo string) (string, error) {
+	before, _ := gitOutputTrimmed(ctx, repo, "rev-parse", "--verify", "refs/stash")
 	output, err := gitOutput(ctx, repo, gitContinueEnv(), "merge", "--continue")
 	if err != nil {
 		return "", fmt.Errorf("git merge continue error: %w", gitStderr(err))
 	}
-	return output, nil
+	return output, autostashWarning(ctx, repo, before)
 }
 
 // GitMergeAbort 取消未完成的 merge，恢复到 merge 之前的状态。
@@ -799,11 +805,12 @@ func GitSquashInProgress(ctx context.Context, repo string) bool {
 // squash merge 成功时由 GitMerge 自动调用，冲突或自动提交失败时由用户 Continue；
 // 有 autostash 时 git commit 会自动恢复本地改动。
 func GitSquashContinue(ctx context.Context, repo string) (string, error) {
+	before, _ := gitOutputTrimmed(ctx, repo, "rev-parse", "--verify", "refs/stash")
 	output, err := gitOutput(ctx, repo, gitContinueEnv(), "commit", "--no-edit")
 	if err != nil {
 		return "", fmt.Errorf("git commit error: %w", gitStderr(err))
 	}
-	return output, nil
+	return output, autostashWarning(ctx, repo, before)
 }
 
 // GitSquashAbort 取消待提交的 squash，恢复到 merge 之前的状态。
@@ -983,12 +990,21 @@ func autostashError(name string, err error) error {
 	return &AutostashError{Name: name, Err: err}
 }
 
-// unwrapAutostash 去掉 AutostashError 包装，供操作本身已失败时合并错误使用，
-// 避免调用方把整个操作当成“已完成但有警告”。
+// autostashWarning 判断 git 原生 --autostash 是否把本地改动留在了 stash 里。
+// git 应用 autostash 冲突时只在 stderr 里警告并以 0 退出，只能靠 refs/stash 是否残留判断。
+func autostashWarning(ctx context.Context, repo, before string) error {
+	if after, _ := gitOutputTrimmed(ctx, repo, "rev-parse", "--verify", "refs/stash"); after != "" && after != before {
+		return &AutostashError{Name: "autostash", Err: errors.New("applying autostash resulted in conflicts")}
+	}
+	return nil
+}
+
+// unwrapAutostash 去掉 AutostashError 的类型，只保留带 stash 名称的文案，
+// 供操作本身已失败时合并错误使用，避免调用方把整个操作当成“已完成但有警告”。
 func unwrapAutostash(err error) error {
 	var autostashErr *AutostashError
 	if errors.As(err, &autostashErr) {
-		return autostashErr.Err
+		return errors.New(autostashErr.Error())
 	}
 	return err
 }
