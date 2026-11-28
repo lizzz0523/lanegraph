@@ -1,18 +1,20 @@
 # lanegraph
 
-在终端里以图形方式浏览 git 提交历史的 TUI 工具。
+English | [简体中文](README.zh-CN.md)
+
+A terminal UI for Git.
 
 ![lanegraph](screenshot.png)
 
-## 安装
+## Installation
 
-需要 Go 1.24 或以上版本：
+Requires Go 1.24 or later:
 
 ```sh
 go install github.com/lizzz0523/lanegraph@latest
 ```
 
-也可以克隆仓库后本地安装：
+Or build from source:
 
 ```sh
 git clone https://github.com/lizzz0523/lanegraph.git
@@ -20,24 +22,24 @@ cd lanegraph
 go install .
 ```
 
-安装后二进制位于 `$GOBIN`（未设置时为 `$(go env GOPATH)/bin`），确保该目录在 `PATH` 中。
+The binary is placed in `$GOBIN` (`$(go env GOPATH)/bin` if unset); make sure it is on your `PATH`.
 
-### 更好的 diff 显示
+### Better diff display
 
-lanegraph 会自动探测 `PATH` 中的 diff 着色器，优先使用 `git-split-diffs`，其次使用 `git-delta`，安装任一即可生效：
+lanegraph auto-detects a diff highlighter on `PATH`, preferring `git-split-diffs`, then `git-delta`:
 
 ```sh
-npm install -g git-split-diffs   # 或
+npm install -g git-split-diffs   # or
 brew install git-delta
 ```
 
-未安装时使用内置的基础着色。
+Built-in basic highlighting is used when neither is installed.
 
-## 使用
+## Usage
 
 ```sh
-lanegraph            # 查看当前目录所在仓库
-lanegraph /path/repo # 查看指定仓库
+lanegraph            # open the repository in the current directory
+lanegraph /path/repo # open a specific repository
 ```
 
-按 `q` 退出。
+Press `?` to show key bindings, `q` to quit.
