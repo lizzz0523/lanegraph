@@ -1100,6 +1100,7 @@ func (t *TUI) setupTasks() {
 		OnRunning: t.showCheckoutRunning,
 		OnResult:  t.showCheckout,
 		NoCache:   true,
+		Exclusive: true,
 	})
 
 	t.tasks.create = async.New(async.Config[string, createRequest]{
@@ -1120,6 +1121,7 @@ func (t *TUI) setupTasks() {
 		OnRunning: t.showCreateRunning,
 		OnResult:  t.showCreate,
 		NoCache:   true,
+		Exclusive: true,
 	})
 
 	t.tasks.delete = async.New(async.Config[string, deleteRequest]{
@@ -1140,6 +1142,7 @@ func (t *TUI) setupTasks() {
 		OnRunning: t.showDeleteRunning,
 		OnResult:  t.showDelete,
 		NoCache:   true,
+		Exclusive: true,
 	})
 
 	t.tasks.sync = async.New(async.Config[string, syncOpRequest]{
@@ -1160,6 +1163,7 @@ func (t *TUI) setupTasks() {
 		OnRunning: t.showSyncRunning,
 		OnResult:  t.showSync,
 		NoCache:   true,
+		Exclusive: true,
 	})
 
 	t.tasks.commit = async.New(async.Config[string, commitOpRequest]{
@@ -1210,6 +1214,7 @@ func (t *TUI) setupTasks() {
 		OnRunning: t.showCommitOpRunning,
 		OnResult:  t.showCommitOp,
 		NoCache:   true,
+		Exclusive: true,
 	})
 
 	t.tasks.change = async.New(async.Config[string, changeOpRequest]{
@@ -1233,6 +1238,7 @@ func (t *TUI) setupTasks() {
 		OnRunning: t.showChangeOpRunning,
 		OnResult:  t.showChangeOp,
 		NoCache:   true,
+		Exclusive: true,
 	})
 }
 
@@ -1617,7 +1623,7 @@ func (t *TUI) jumpToChild() {
 
 // resetCommit 先弹窗选择 reset 模式，确认后把当前分支重置到选中的 commit。
 func (t *TUI) resetCommit() {
-	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.tasks.commit.Running() {
+	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.tasks.busy() {
 		return
 	}
 	row := t.commitList.CurrentItem()
@@ -1656,7 +1662,7 @@ func (t *TUI) resetCommit() {
 
 // rebaseCommit 先弹窗确认，再把当前分支 rebase 到选中的 commit。
 func (t *TUI) rebaseCommit() {
-	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.tasks.commit.Running() {
+	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.tasks.busy() {
 		return
 	}
 	row := t.commitList.CurrentItem()
@@ -1688,7 +1694,7 @@ func (t *TUI) rebaseCommit() {
 
 // rebaseCommitInteractive 先弹窗选择每个 commit 的动作，确认后执行 interactive rebase。
 func (t *TUI) rebaseCommitInteractive() {
-	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.rebaseVisible || t.tasks.commit.Running() {
+	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.rebaseVisible || t.tasks.busy() {
 		return
 	}
 	row := t.commitList.CurrentItem()
@@ -1790,7 +1796,7 @@ func (t *TUI) confirmRebaseInteractive() {
 
 // rewordCommit 先弹窗编辑提交信息，确认后改写选中的 commit。
 func (t *TUI) rewordCommit() {
-	if t.tasks.commit == nil || t.root == nil || t.popupVisible() || t.tasks.commit.Running() {
+	if t.tasks.commit == nil || t.root == nil || t.popupVisible() || t.tasks.busy() {
 		return
 	}
 	row := t.commitList.CurrentItem()
@@ -1849,7 +1855,7 @@ func (t *TUI) confirmReword() {
 
 // continueRebase 在冲突解决并暂存后继续 rebase。
 func (t *TUI) continueRebase() {
-	if t.tasks.commit == nil || t.tasks.commit.Running() {
+	if t.tasks.commit == nil || t.tasks.busy() {
 		return
 	}
 	t.executeCommitOp(opRebaseContinue)
@@ -1857,7 +1863,7 @@ func (t *TUI) continueRebase() {
 
 // abortRebase 先弹窗确认，再取消未完成的 rebase。
 func (t *TUI) abortRebase() {
-	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.tasks.commit.Running() {
+	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.tasks.busy() {
 		return
 	}
 
@@ -1879,7 +1885,7 @@ func (t *TUI) abortRebase() {
 
 // mergeCommit 先弹窗确认，再把选中的 commit merge 到当前分支。
 func (t *TUI) mergeCommit() {
-	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.tasks.commit.Running() {
+	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.tasks.busy() {
 		return
 	}
 	row := t.commitList.CurrentItem()
@@ -1919,7 +1925,7 @@ func (t *TUI) mergeCommit() {
 
 // continueMerge 在冲突解决并暂存后继续 merge。
 func (t *TUI) continueMerge() {
-	if t.tasks.commit == nil || t.tasks.commit.Running() {
+	if t.tasks.commit == nil || t.tasks.busy() {
 		return
 	}
 	t.executeCommitOp(opMergeContinue)
@@ -1927,7 +1933,7 @@ func (t *TUI) continueMerge() {
 
 // abortMerge 先弹窗确认，再取消未完成的 merge。
 func (t *TUI) abortMerge() {
-	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.tasks.commit.Running() {
+	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.tasks.busy() {
 		return
 	}
 
@@ -1949,7 +1955,7 @@ func (t *TUI) abortMerge() {
 
 // continueSquash 提交待完成的 squash（冲突解决或自动提交失败后）；冲突未解决时 git 会报错。
 func (t *TUI) continueSquash() {
-	if t.tasks.commit == nil || t.tasks.commit.Running() {
+	if t.tasks.commit == nil || t.tasks.busy() {
 		return
 	}
 	t.executeCommitOp(opSquashContinue)
@@ -1957,7 +1963,7 @@ func (t *TUI) continueSquash() {
 
 // abortSquash 先弹窗确认，再取消待完成的 squash。
 func (t *TUI) abortSquash() {
-	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.tasks.commit.Running() {
+	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.tasks.busy() {
 		return
 	}
 
@@ -1979,7 +1985,7 @@ func (t *TUI) abortSquash() {
 
 // revertCommit 先弹窗确认，再生成一条撤销选中 commit 的新提交。
 func (t *TUI) revertCommit() {
-	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.tasks.commit.Running() {
+	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.tasks.busy() {
 		return
 	}
 	row := t.commitList.CurrentItem()
@@ -2011,7 +2017,7 @@ func (t *TUI) revertCommit() {
 
 // continueRevert 在冲突解决并暂存后继续 revert。
 func (t *TUI) continueRevert() {
-	if t.tasks.commit == nil || t.tasks.commit.Running() {
+	if t.tasks.commit == nil || t.tasks.busy() {
 		return
 	}
 	t.executeCommitOp(opRevertContinue)
@@ -2019,7 +2025,7 @@ func (t *TUI) continueRevert() {
 
 // abortRevert 先弹窗确认，再取消未完成的 revert。
 func (t *TUI) abortRevert() {
-	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.tasks.commit.Running() {
+	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.tasks.busy() {
 		return
 	}
 
@@ -2041,7 +2047,7 @@ func (t *TUI) abortRevert() {
 
 // cherryPickCommit 先弹窗确认，再把选中的 commit cherry-pick 到当前分支。
 func (t *TUI) cherryPickCommit() {
-	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.tasks.commit.Running() {
+	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.tasks.busy() {
 		return
 	}
 	row := t.commitList.CurrentItem()
@@ -2073,7 +2079,7 @@ func (t *TUI) cherryPickCommit() {
 
 // continueCherryPick 在冲突解决并暂存后继续 cherry-pick。
 func (t *TUI) continueCherryPick() {
-	if t.tasks.commit == nil || t.tasks.commit.Running() {
+	if t.tasks.commit == nil || t.tasks.busy() {
 		return
 	}
 	t.executeCommitOp(opCherryPickContinue)
@@ -2081,7 +2087,7 @@ func (t *TUI) continueCherryPick() {
 
 // abortCherryPick 先弹窗确认，再取消未完成的 cherry-pick。
 func (t *TUI) abortCherryPick() {
-	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.tasks.commit.Running() {
+	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.tasks.busy() {
 		return
 	}
 
@@ -2103,7 +2109,7 @@ func (t *TUI) abortCherryPick() {
 
 // commitChanges 用表单内容提交暂存区改动；Amend 勾选时改写 HEAD。
 func (t *TUI) commitChanges() {
-	if t.tasks.commit == nil || t.tasks.commit.Running() {
+	if t.tasks.commit == nil || t.tasks.busy() {
 		return
 	}
 	subject := strings.TrimSpace(t.commitSubject.GetText())
@@ -2284,7 +2290,7 @@ func (t *TUI) locateHistory() {
 
 // toggleLocalChange 用空格暂存/取消暂存当前文件；目录节点处理目录内的全部变更。
 func (t *TUI) toggleLocalChange() {
-	if t.tasks.change == nil || t.tasks.localFiles.Running() || t.tasks.change.Running() {
+	if t.tasks.change == nil || t.tasks.localFiles.Running() || t.tasks.busy() {
 		return
 	}
 	node := t.changeList.GetCurrentNode()
@@ -2321,7 +2327,7 @@ func (t *TUI) toggleLocalChange() {
 
 // discardLocalChange 先弹窗确认，再丢弃当前文件的改动。
 func (t *TUI) discardLocalChange() {
-	if t.tasks.change == nil || t.root == nil || t.promptVisible || t.tasks.localFiles.Running() || t.tasks.change.Running() {
+	if t.tasks.change == nil || t.root == nil || t.promptVisible || t.tasks.localFiles.Running() || t.tasks.busy() {
 		return
 	}
 	node := t.changeList.GetCurrentNode()
@@ -2415,15 +2421,15 @@ func (t *TUI) refreshHistoryDiff() {
 // checkoutRef 对选中的分支或标签执行 checkout：
 // 本地分支直接切换；远端分支切换到同名本地分支，不存在时创建跟踪分支；标签进入 detached HEAD。
 func (t *TUI) checkoutRef(node *tview.TreeNode) {
-	if t.tasks.checkout == nil || t.tasks.checkout.Running() {
+	if t.tasks.checkout == nil || t.tasks.busy() {
 		return
 	}
 	t.executeCheckout(node)
 }
 
-// syncBranch 拉取当前分支、推送当前分支或拉取远端引用；同一时间只允许一个同步操作。
+// syncBranch 拉取当前分支、推送当前分支或拉取远端引用；写操作同一时间只允许一个。
 func (t *TUI) syncBranch(op syncOp) {
-	if t.tasks.sync == nil || t.tasks.sync.Running() {
+	if t.tasks.sync == nil || t.tasks.busy() {
 		return
 	}
 	t.executeSync(op, false)
@@ -2442,7 +2448,7 @@ func (t *TUI) createRefFromCommit(op createOp) {
 // createRef 弹出输入框，创建分支或标签。
 // commit 为 nil 时从 HEAD 创建，否则从该 commit 创建。
 func (t *TUI) createRef(op createOp, commit *core.Commit) {
-	if t.tasks.create == nil || t.root == nil || t.promptVisible || t.tasks.create.Running() {
+	if t.tasks.create == nil || t.root == nil || t.promptVisible || t.tasks.busy() {
 		return
 	}
 
@@ -2491,7 +2497,7 @@ func (t *TUI) createRef(op createOp, commit *core.Commit) {
 
 // deleteRef 先弹窗确认，再删除选中的本地分支、远端分支或标签。
 func (t *TUI) deleteRef(node *tview.TreeNode) {
-	if t.tasks.delete == nil || t.root == nil || t.promptVisible || t.tasks.delete.Running() {
+	if t.tasks.delete == nil || t.root == nil || t.promptVisible || t.tasks.busy() {
 		return
 	}
 

@@ -162,7 +162,8 @@ type tasks struct {
 	fileHistory     *async.Task[[]core.Commit, historyRequest]
 	fileHistoryDiff *async.Task[string, historyDiffRequest]
 
-	// 操作任务不缓存，每次 Execute 都会真正执行。
+	// 操作任务不缓存，每次 Execute 都会真正执行；它们都标记为 Exclusive，
+	// 由 busy 统一判断，避免多个 git 写命令并发。
 	checkout *async.Task[string, checkoutRequest]
 	create   *async.Task[string, createRequest]
 	delete   *async.Task[string, deleteRequest]
@@ -188,6 +189,16 @@ func (ts *tasks) lifecycles() []async.Lifecycle {
 		ts.commit,
 		ts.change,
 	}
+}
+
+// busy 表示是否有参与全局互斥的操作正在执行。
+func (ts *tasks) busy() bool {
+	for _, task := range ts.lifecycles() {
+		if task.Exclusive() && task.Running() {
+			return true
+		}
+	}
+	return false
 }
 
 func (ts *tasks) wait() {

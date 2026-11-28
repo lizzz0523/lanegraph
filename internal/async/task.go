@@ -15,6 +15,9 @@ type Config[T, K any] struct {
 	OnResult  func(K, T, error) // Post 非 nil 时在 UI 线程
 	// NoCache 为 true 时不读写缓存，Execute 每次都会重新执行；适合操作类任务。
 	NoCache bool
+	// Exclusive 为 true 时，该任务与其他 Exclusive 任务全局互斥。
+	// Task 本身不加锁，由调用方汇总 Running() 后统一判断。
+	Exclusive bool
 }
 
 // phase 是当前槽位的结果状态。
@@ -35,10 +38,12 @@ type slot[K any] struct {
 	cancel context.CancelFunc
 }
 
-// Lifecycle 统一描述 Task 的关闭与等待操作，便于管理不同泛型实例。
+// Lifecycle 统一描述 Task 的状态、关闭与等待操作，便于管理不同泛型实例。
 type Lifecycle interface {
-	Close()
 	Wait()
+	Close()
+	Running() bool
+	Exclusive() bool
 }
 
 // Task 是一个单槽位的异步任务：同一时间只关心最新一次请求。
@@ -73,6 +78,11 @@ func (t *Task[T, K]) Running() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.slot.phase == phaseRunning
+}
+
+// Exclusive 表示该任务是否参与全局互斥。
+func (t *Task[T, K]) Exclusive() bool {
+	return t.cfg.Exclusive
 }
 
 // Execute 确保 arg 对应的结果可用：缓存命中时直接返回，否则在后台执行。
