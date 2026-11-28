@@ -39,7 +39,7 @@ type TUI struct {
 	statusRow  *tview.Flex
 	// keybindHint 是状态栏右侧的 “Keybindings: ?” 提示，和 Continue/Abort 互斥显示。
 	keybindHint *tview.TextView
-	// continueButton / abortButton 按当前未完成的操作（rebase / merge / squash / cherry-pick）显示对应文案和动作；
+	// continueButton / abortButton 按当前未完成的操作（rebase / merge / squash / revert / cherry-pick）显示对应文案和动作；
 	// 没有未完成操作时宽度为 0。
 	continueButton *tview.Button
 	abortButton    *tview.Button
@@ -424,6 +424,7 @@ func (t *TUI) setupUI() tview.Primitive {
 	// i 执行 interactive rebase；
 	// w 改写选中的 commit 的提交信息；
 	// m 把选中的 commit merge 到当前分支；
+	// v 生成一条撤销选中 commit 的新提交；
 	// c 把选中的 commit cherry-pick 到当前分支；
 	// b / t 从选中的 commit 创建分支 / 标签。
 	commitList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -449,6 +450,9 @@ func (t *TUI) setupUI() tview.Primitive {
 				return nil
 			case keymap.commitMerge:
 				t.mergeCommit()
+				return nil
+			case keymap.commitRevert:
+				t.revertCommit()
 				return nil
 			case keymap.commitCherryPick:
 				t.cherryPickCommit()
@@ -875,7 +879,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		})
 	}
 
-	// rebase / merge / cherry-pick 未完成时，在 statusBar 右侧显示 Continue / Abort；
+	// rebase / merge / revert / cherry-pick 未完成时，在 statusBar 右侧显示 Continue / Abort；
 	// 文案和动作由 renderInProgressActions 按当前状态切换，平时宽度为 0，不占用状态栏空间。
 	continueButton := tview.NewButton("")
 	continueButton.SetStyle(accentStyle).SetActivatedStyle(accentStyle)
@@ -1184,6 +1188,12 @@ func (t *TUI) setupTasks() {
 				return t.SquashContinue(ctx)
 			case opSquashAbort:
 				return t.SquashAbort(ctx)
+			case opRevert:
+				return t.Revert(ctx, req.commit)
+			case opRevertContinue:
+				return t.RevertContinue(ctx)
+			case opRevertAbort:
+				return t.RevertAbort(ctx)
 			case opCherryPick:
 				return t.CherryPick(ctx, req.commit)
 			case opCherryPickContinue:
@@ -1918,6 +1928,68 @@ func (t *TUI) abortSquash() {
 	t.setupPrompt(page, prompt)
 }
 
+// revertCommit 先弹窗确认，再生成一条撤销选中 commit 的新提交。
+func (t *TUI) revertCommit() {
+	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.tasks.commit.Running() {
+		return
+	}
+	row := t.commitList.CurrentItem()
+	if row < 0 || row >= len(t.Commits) {
+		return
+	}
+	commit := t.Commits[row]
+
+	message := fmt.Sprintf("Revert %s on %s?\n\n%s\n\n",
+		tview.Escape(commit.ShortHash()), tview.Escape(t.HeadRef), tview.Escape(commit.Subject))
+
+	message += colorMuted.markup("Local changes will be stashed and restored automatically.")
+
+	const page = "revert"
+
+	prompt := tview.NewModal().
+		SetText(message).
+		AddButtons([]string{"Cancel", "Revert"}).
+		SetDoneFunc(func(buttonIndex int, _ string) {
+			t.promptVisible = false
+			t.closePopup(page)
+			if buttonIndex == 1 {
+				t.executeRevert(commit)
+			}
+		})
+
+	t.setupPrompt(page, prompt)
+}
+
+// continueRevert 在冲突解决并暂存后继续 revert。
+func (t *TUI) continueRevert() {
+	if t.tasks.commit == nil || t.tasks.commit.Running() {
+		return
+	}
+	t.executeCommitOp(opRevertContinue)
+}
+
+// abortRevert 先弹窗确认，再取消未完成的 revert。
+func (t *TUI) abortRevert() {
+	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.tasks.commit.Running() {
+		return
+	}
+
+	const page = "revert-abort"
+
+	prompt := tview.NewModal().
+		SetText("Abort revert?\n\nAll conflict resolutions will be lost.\n\n" + colorMuted.markup("Local changes stashed before the revert will be restored.")).
+		AddButtons([]string{"Cancel", "Abort"}).
+		SetDoneFunc(func(buttonIndex int, _ string) {
+			t.promptVisible = false
+			t.closePopup(page)
+			if buttonIndex == 1 {
+				t.executeCommitOp(opRevertAbort)
+			}
+		})
+
+	t.setupPrompt(page, prompt)
+}
+
 // cherryPickCommit 先弹窗确认，再把选中的 commit cherry-pick 到当前分支。
 func (t *TUI) cherryPickCommit() {
 	if t.tasks.commit == nil || t.root == nil || t.promptVisible || t.tasks.commit.Running() {
@@ -2583,6 +2655,7 @@ func (t *TUI) showRefs(_ refsRequest, refs core.Refs, err error) {
 	t.Rebasing = refs.Rebasing
 	t.Merging = refs.Merging
 	t.Squashing = refs.Squashing
+	t.Reverting = refs.Reverting
 	t.CherryPicking = refs.CherryPicking
 	t.refreshRefs(selected)
 	t.refreshHeadLabel()
@@ -3482,6 +3555,11 @@ func (t *TUI) executeMerge(commit core.Commit, mode core.MergeMode) {
 	t.tasks.commit.Execute(commitOpRequest{op: opMerge, commit: commit, mergeMode: mode})
 }
 
+// executeRevert 通过 Execute 强制执行，生成一条撤销 commit 的新提交。
+func (t *TUI) executeRevert(commit core.Commit) {
+	t.tasks.commit.Execute(commitOpRequest{op: opRevert, commit: commit})
+}
+
 // executeCherryPick 通过 Execute 强制执行，把 commit cherry-pick 到当前分支。
 func (t *TUI) executeCherryPick(commit core.Commit) {
 	t.tasks.commit.Execute(commitOpRequest{op: opCherryPick, commit: commit})
@@ -3538,6 +3616,12 @@ func (t *TUI) showCommitOp(req commitOpRequest, _ string, err error) {
 			message = "squash continue failed: " + message
 		case opSquashAbort:
 			message = "squash abort failed: " + message
+		case opRevert:
+			message = "revert failed: " + message
+		case opRevertContinue:
+			message = "revert continue failed: " + message
+		case opRevertAbort:
+			message = "revert abort failed: " + message
 		case opCherryPick:
 			message = "cherry-pick failed: " + message
 		case opCherryPickContinue:
@@ -3628,6 +3712,21 @@ func (t *TUI) commitOpLabel(req commitOpRequest, done bool) string {
 			return "squash aborted"
 		}
 		return "aborting squash"
+	case opRevert:
+		if done {
+			return "reverted " + req.commit.ShortHash()
+		}
+		return "reverting " + req.commit.ShortHash()
+	case opRevertContinue:
+		if done {
+			return "revert continued"
+		}
+		return "continuing revert"
+	case opRevertAbort:
+		if done {
+			return "revert aborted"
+		}
+		return "aborting revert"
 	case opCherryPick:
 		if done {
 			return "cherry-picked " + req.commit.ShortHash()
@@ -3748,8 +3847,8 @@ func (t *TUI) renderStatus() {
 	t.statusBar.SetText(colorMuted.markup(strings.Join(messages, ", ") + "…"))
 }
 
-// renderInProgressActions 按 rebase / merge / squash / cherry-pick 状态切换 statusBar 右侧 Continue / Abort 的文案和动作。
-// 这些操作不会同时进行；同时处于未完成状态时按 rebase、merge、squash、cherry-pick 的顺序优先显示。
+// renderInProgressActions 按 rebase / merge / squash / revert / cherry-pick 状态切换 statusBar 右侧 Continue / Abort 的文案和动作。
+// 这些操作不会同时进行；同时处于未完成状态时按 rebase、merge、squash、revert、cherry-pick 的顺序优先显示。
 func (t *TUI) renderInProgressActions() {
 	if t.statusRow == nil || t.keybindHint == nil || t.continueButton == nil || t.abortButton == nil {
 		return
@@ -3767,6 +3866,9 @@ func (t *TUI) renderInProgressActions() {
 	case t.Squashing:
 		continueLabel, abortLabel = "Continue squash", "Abort squash"
 		continueFunc, abortFunc = t.continueSquash, t.abortSquash
+	case t.Reverting:
+		continueLabel, abortLabel = "Continue revert", "Abort revert"
+		continueFunc, abortFunc = t.continueRevert, t.abortRevert
 	case t.CherryPicking:
 		continueLabel, abortLabel = "Continue cherry-pick", "Abort cherry-pick"
 		continueFunc, abortFunc = t.continueCherryPick, t.abortCherryPick

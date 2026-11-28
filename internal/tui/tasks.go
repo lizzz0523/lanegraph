@@ -110,6 +110,9 @@ const (
 	opMergeAbort
 	opSquashContinue
 	opSquashAbort
+	opRevert
+	opRevertContinue
+	opRevertAbort
 	opCherryPick
 	opCherryPickContinue
 	opCherryPickAbort

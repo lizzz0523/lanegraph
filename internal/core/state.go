@@ -20,6 +20,8 @@ type State struct {
 	Merging bool
 	// Squashing 表示 squash merge 已应用但尚未提交，通常是有冲突或自动提交失败。
 	Squashing bool
+	// Reverting 表示仓库有未完成的 revert（冲突解决中）。
+	Reverting bool
 	// CherryPicking 表示仓库有未完成的 cherry-pick（冲突解决中）。
 	CherryPicking bool
 
@@ -60,6 +62,7 @@ func NewState(ctx context.Context, repo string) (State, error) {
 	s.Rebasing = refs.Rebasing
 	s.Merging = refs.Merging
 	s.Squashing = refs.Squashing
+	s.Reverting = refs.Reverting
 	s.CherryPicking = refs.CherryPicking
 	s.Commits = commits
 	return s, nil
@@ -74,6 +77,7 @@ type Refs struct {
 	Rebasing      bool
 	Merging       bool
 	Squashing     bool
+	Reverting     bool
 	CherryPicking bool
 }
 
@@ -96,6 +100,7 @@ func (s *State) Refs(ctx context.Context) (Refs, error) {
 		Rebasing:      GitRebaseInProgress(ctx, s.Repo),
 		Merging:       GitMergeInProgress(ctx, s.Repo),
 		Squashing:     GitSquashInProgress(ctx, s.Repo),
+		Reverting:     GitRevertInProgress(ctx, s.Repo),
 		CherryPicking: GitCherryPickInProgress(ctx, s.Repo),
 	}, nil
 }
@@ -222,6 +227,21 @@ func (s *State) SquashContinue(ctx context.Context) (string, error) {
 // SquashAbort 取消待完成的 squash。
 func (s *State) SquashAbort(ctx context.Context) (string, error) {
 	return GitSquashAbort(ctx, s.Repo)
+}
+
+// Revert 生成一条撤销 commit 的新提交。
+func (s *State) Revert(ctx context.Context, commit Commit) (string, error) {
+	return GitRevert(ctx, s.Repo, commit)
+}
+
+// RevertContinue 在冲突解决并暂存后继续 revert。
+func (s *State) RevertContinue(ctx context.Context) (string, error) {
+	return GitRevertContinue(ctx, s.Repo)
+}
+
+// RevertAbort 取消未完成的 revert。
+func (s *State) RevertAbort(ctx context.Context) (string, error) {
+	return GitRevertAbort(ctx, s.Repo)
 }
 
 // CherryPick 把 commit 应用到当前分支。

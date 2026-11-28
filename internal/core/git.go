@@ -795,6 +795,54 @@ func GitSquashAbort(ctx context.Context, repo string) (string, error) {
 	return output, nil
 }
 
+// revertAutostash 是 revert 自动暂存使用的标记，作用类似 git 的 MERGE_AUTOSTASH。
+const revertAutostash = "LANEGRAPH_REVERT_AUTOSTASH"
+
+// GitRevert 生成一条撤销 commit 的新提交，并自动暂存和恢复本地改动。
+func GitRevert(ctx context.Context, repo string, commit Commit) (string, error) {
+	if err := gitAutostash(ctx, repo, revertAutostash); err != nil {
+		return "", err
+	}
+
+	output, err := gitOutput(ctx, repo, nil, "revert", "--no-edit", commit.Hash)
+	if err != nil {
+		// 只有停在冲突态时才把 stash 留给 Continue / Abort 恢复。
+		if !GitRevertInProgress(ctx, repo) {
+			restored, _ := gitUnstash(ctx, repo, revertAutostash)
+			output += restored
+		}
+		return output, fmt.Errorf("git revert error: %w", gitStderr(err))
+	}
+
+	restored, _ := gitUnstash(ctx, repo, revertAutostash)
+	return output + restored, nil
+}
+
+// GitRevertInProgress 返回仓库是否停在未完成的 revert 中。
+func GitRevertInProgress(ctx context.Context, repo string) bool {
+	return gitPathExists(ctx, repo, "REVERT_HEAD")
+}
+
+// GitRevertContinue 在冲突解决并暂存后继续 revert，返回 git 的输出；完成后恢复之前暂存的本地改动。
+func GitRevertContinue(ctx context.Context, repo string) (string, error) {
+	output, err := gitOutput(ctx, repo, gitContinueEnv(), "revert", "--continue")
+	if err != nil {
+		return "", fmt.Errorf("git revert continue error: %w", gitStderr(err))
+	}
+	restored, _ := gitUnstash(ctx, repo, revertAutostash)
+	return output + restored, nil
+}
+
+// GitRevertAbort 取消未完成的 revert，恢复到 revert 之前的状态；完成后恢复之前暂存的本地改动。
+func GitRevertAbort(ctx context.Context, repo string) (string, error) {
+	output, err := gitOutput(ctx, repo, nil, "revert", "--abort")
+	if err != nil {
+		return "", fmt.Errorf("git revert abort error: %w", gitStderr(err))
+	}
+	restored, _ := gitUnstash(ctx, repo, revertAutostash)
+	return output + restored, nil
+}
+
 // cherryPickAutostash 是 cherry-pick 自动暂存使用的标记，作用类似 git 的 MERGE_AUTOSTASH。
 const cherryPickAutostash = "LANEGRAPH_CHERRY_PICK_AUTOSTASH"
 
