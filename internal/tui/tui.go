@@ -468,7 +468,7 @@ func (t *TUI) setupUI() tview.Primitive {
 		return event
 	})
 
-	commitList.SetLines(renderCommitGraph(t.Commits, core.ComputeGraph(t.Commits), true))
+	commitList.SetLines(renderGraph(t.Commits, core.ComputeGraph(t.Commits), true))
 
 	commitList.SetSelectedFunc(func() {
 		t.refreshCommit(false)
@@ -2807,7 +2807,7 @@ func (t *TUI) showCommits(_ commitsRequest, commits []core.Commit, err error) {
 	}
 
 	t.Commits = commits
-	t.commitList.SetLines(renderCommitGraph(commits, core.ComputeGraph(commits), true))
+	t.commitList.SetLines(renderGraph(commits, core.ComputeGraph(commits), true))
 	// 刷新后 compare 可能已不存在（rebase/切分支），按 hash 重新确认。
 	t.syncCompare()
 

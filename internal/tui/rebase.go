@@ -151,5 +151,5 @@ func renderRebaseGraph(commits []core.Commit) []string {
 			ordered[i].Parents = nil
 		}
 	}
-	return renderCommitGraph(ordered, core.ComputeGraph(ordered), false)
+	return renderGraph(ordered, core.ComputeGraph(ordered), false)
 }

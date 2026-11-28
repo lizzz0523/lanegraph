@@ -255,7 +255,7 @@ func (c cell) nodeGlyph(merge bool) string {
 	return string(r)
 }
 
-func renderCommitGraph(commits []core.Commit, graph core.Graph, showRefs bool) []string {
+func renderGraph(commits []core.Commit, graph core.Graph, showRefs bool) []string {
 	colorOf := authorColorMap(commits)
 	now := time.Now()
 
