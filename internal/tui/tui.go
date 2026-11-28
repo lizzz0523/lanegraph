@@ -271,6 +271,21 @@ func (t *TUI) Run() error {
 			case keymap.globalCreateTag:
 				t.createRef(opCreateTag, nil)
 				return nil
+			case keymap.globalContinue:
+				if _, _, continueFunc, _ := t.inProgressActions(); continueFunc != nil {
+					continueFunc()
+				}
+				return nil
+			case keymap.globalAbort:
+				if _, _, _, abortFunc := t.inProgressActions(); abortFunc != nil {
+					abortFunc()
+				}
+				return nil
+			case keymap.globalToggleAmend:
+				if t.activeTab == tabChange {
+					t.amendCheck.SetChecked(!t.amendCheck.IsChecked())
+					return nil
+				}
 			}
 		}
 		return event
@@ -1353,10 +1368,15 @@ func (t *TUI) focusChain() []tview.Primitive {
 	if t.historyVisible {
 		return t.historyView.focusables()
 	}
+	chain := []tview.Primitive{t.commitTab, t.changeTab, t.refFilter, t.refList, t.commitList, t.commitInfo, t.fileList, t.fileDiff}
 	if t.activeTab == tabChange {
-		return []tview.Primitive{t.commitTab, t.changeTab, t.refFilter, t.refList, t.changeList, t.changeDiff, t.commitSubject, t.commitDescription, t.commitButton}
+		chain = []tview.Primitive{t.commitTab, t.changeTab, t.refFilter, t.refList, t.changeList, t.changeDiff, t.commitSubject, t.commitDescription, t.amendCheck, t.commitButton}
 	}
-	return []tview.Primitive{t.commitTab, t.changeTab, t.refFilter, t.refList, t.commitList, t.commitInfo, t.fileList, t.fileDiff}
+	// 有未完成操作时，状态栏的 Continue/Abort 接在焦点链末尾；平时按钮宽度为 0，不进入焦点链。
+	if _, _, continueFunc, _ := t.inProgressActions(); continueFunc != nil {
+		chain = append(chain, t.continueButton, t.abortButton)
+	}
+	return chain
 }
 
 // setFocusBorder 按焦点状态切换边框和标题颜色。
@@ -3953,32 +3973,31 @@ func (t *TUI) renderStatus() {
 	t.statusBar.SetText(colorMuted.markup(strings.Join(messages, ", ") + "…"))
 }
 
+// inProgressActions 返回当前未完成操作的 Continue / Abort 文案和动作。
+// 这些操作不会同时进行；同时处于未完成状态时按 rebase、merge、squash、revert、cherry-pick 的顺序优先。
+func (t *TUI) inProgressActions() (continueLabel, abortLabel string, continueFunc, abortFunc func()) {
+	switch {
+	case t.Rebasing:
+		return "Continue rebase", "Abort rebase", t.continueRebase, t.abortRebase
+	case t.Merging:
+		return "Continue merge", "Abort merge", t.continueMerge, t.abortMerge
+	case t.Squashing:
+		return "Continue squash", "Abort squash", t.continueSquash, t.abortSquash
+	case t.Reverting:
+		return "Continue revert", "Abort revert", t.continueRevert, t.abortRevert
+	case t.CherryPicking:
+		return "Continue cherry-pick", "Abort cherry-pick", t.continueCherryPick, t.abortCherryPick
+	}
+	return "", "", nil, nil
+}
+
 // renderInProgressActions 按 rebase / merge / squash / revert / cherry-pick 状态切换 statusBar 右侧 Continue / Abort 的文案和动作。
-// 这些操作不会同时进行；同时处于未完成状态时按 rebase、merge、squash、revert、cherry-pick 的顺序优先显示。
 func (t *TUI) renderInProgressActions() {
 	if t.statusRow == nil || t.keybindHint == nil || t.continueButton == nil || t.abortButton == nil {
 		return
 	}
 
-	var continueLabel, abortLabel string
-	var continueFunc, abortFunc func()
-	switch {
-	case t.Rebasing:
-		continueLabel, abortLabel = "Continue rebase", "Abort rebase"
-		continueFunc, abortFunc = t.continueRebase, t.abortRebase
-	case t.Merging:
-		continueLabel, abortLabel = "Continue merge", "Abort merge"
-		continueFunc, abortFunc = t.continueMerge, t.abortMerge
-	case t.Squashing:
-		continueLabel, abortLabel = "Continue squash", "Abort squash"
-		continueFunc, abortFunc = t.continueSquash, t.abortSquash
-	case t.Reverting:
-		continueLabel, abortLabel = "Continue revert", "Abort revert"
-		continueFunc, abortFunc = t.continueRevert, t.abortRevert
-	case t.CherryPicking:
-		continueLabel, abortLabel = "Continue cherry-pick", "Abort cherry-pick"
-		continueFunc, abortFunc = t.continueCherryPick, t.abortCherryPick
-	}
+	continueLabel, abortLabel, continueFunc, abortFunc := t.inProgressActions()
 	t.continueButton.SetLabel(continueLabel).SetSelectedFunc(continueFunc)
 	t.abortButton.SetLabel(abortLabel).SetSelectedFunc(abortFunc)
 
@@ -3994,6 +4013,16 @@ func (t *TUI) renderInProgressActions() {
 	hintWidth := 0
 	if continueLabel == "" {
 		hintWidth = tview.TaggedStringWidth(t.keybindHint.GetText(true)) + 2
+		// 操作结束后按钮宽度归零，焦点若还停在按钮上要移回列表。
+		if t.app != nil {
+			if focus := t.app.GetFocus(); focus == t.continueButton || focus == t.abortButton {
+				if t.activeTab == tabChange {
+					t.app.SetFocus(t.changeList)
+				} else {
+					t.app.SetFocus(t.commitList)
+				}
+			}
+		}
 	}
 	t.statusRow.ResizeItem(t.keybindHint, hintWidth, 0)
 }

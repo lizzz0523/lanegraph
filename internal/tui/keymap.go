@@ -17,6 +17,9 @@ var keymap = struct {
 	globalFetch        rune
 	globalCreateBranch rune
 	globalCreateTag    rune
+	globalContinue     rune
+	globalAbort        rune
+	globalToggleAmend  rune
 
 	commitReset             rune
 	commitRebase            rune
@@ -65,6 +68,9 @@ var keymap = struct {
 	globalFetch:        'f',
 	globalCreateBranch: 'B',
 	globalCreateTag:    'T',
+	globalContinue:     'C',
+	globalAbort:        'A',
+	globalToggleAmend:  'a',
 
 	commitReset:             'R',
 	commitRebase:            'r',
@@ -133,6 +139,9 @@ var keyBindings = []struct {
 		{keyLabel(keymap.globalFetch), "Fetch remote branches and tags"},
 		{keyLabel(keymap.globalCreateBranch), "Create and checkout branch from HEAD"},
 		{keyLabel(keymap.globalCreateTag), "Create tag from HEAD"},
+		{keyLabel(keymap.globalContinue), "Continue unfinished rebase, merge, squash, revert or cherry-pick"},
+		{keyLabel(keymap.globalAbort), "Abort unfinished rebase, merge, squash, revert or cherry-pick"},
+		{keyLabel(keymap.globalToggleAmend), "Toggle amend on Local Changes tab"},
 	}},
 	{"Branches & Tags", []keyBinding{
 		{keyLabel(keymap.refCheckout), "Checkout branch or tag"},
