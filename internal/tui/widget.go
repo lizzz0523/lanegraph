@@ -70,13 +70,37 @@ func compactFolders(node *tview.TreeNode) {
 	}
 }
 
-// sortFoldersFirst 使用稳定排序，保证同一层内的原有顺序不变。
+// sortFoldersFirst 使用稳定排序：目录在前，同层再忽略大小写按名字字母排序；
+// 忽略大小写后同名时保持原有相对顺序。
 func sortFoldersFirst(node *tview.TreeNode) {
 	children := node.GetChildren()
+	// 文件和引用只按树中显示的最后一段名字排序，并统一转成小写忽略大小写。
+	name := func(node *tview.TreeNode) string {
+		var name string
+		switch value := node.GetReference().(type) {
+		case folder:
+			return strings.ToLower(value.name)
+		case core.FileChange:
+			name = value.Path
+		case core.Branch:
+			name = value.LocalName()
+		case core.Tag:
+			name = value.Name
+		default:
+			return ""
+		}
+		if i := strings.LastIndex(name, "/"); i >= 0 {
+			name = name[i+1:]
+		}
+		return strings.ToLower(name)
+	}
 	sort.SliceStable(children, func(i, j int) bool {
 		iFolder := len(children[i].GetChildren()) > 0
 		jFolder := len(children[j].GetChildren()) > 0
-		return iFolder && !jFolder
+		if iFolder != jFolder {
+			return iFolder
+		}
+		return name(children[i]) < name(children[j])
 	})
 	node.SetChildren(children)
 
