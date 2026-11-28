@@ -785,6 +785,12 @@ func (t *TUI) setupUI() tview.Primitive {
 		case keymap.refDelete:
 			t.deleteRef(node)
 			return nil
+		case keymap.refInclude:
+			t.toggleRefInclude(node)
+			return nil
+		case keymap.refExclude:
+			t.toggleRefExclude(node)
+			return nil
 		}
 		return event
 	})
@@ -1463,7 +1469,7 @@ func (t *TUI) refreshRefs(selected string) {
 		filter = strings.ToLower(strings.TrimSpace(t.refFilter.GetText()))
 	}
 
-	refRoot := buildRefTree(t.Branches, t.Tags, filter, t.HeadRef, t.syncSpinner.frame(), t.refFolderExpanded, t.headerStyle, t.headerSelectedStyle, t.selectedStyle)
+	refRoot := buildRefTree(t.Branches, t.Tags, t.RefSelection, filter, t.HeadRef, t.syncSpinner.frame(), t.refFolderExpanded, t.headerStyle, t.headerSelectedStyle, t.selectedStyle)
 	t.refList.SetRoot(refRoot)
 
 	if node := t.refNode(selected); node != nil {
@@ -1505,6 +1511,35 @@ func (t *TUI) toggleRefFolder(node *tview.TreeNode) {
 		t.refFolderExpanded = make(map[string]bool)
 	}
 	t.refFolderExpanded[folder.key] = expanded
+}
+
+// toggleRefInclude 切换当前分支是否只看其提交；标签和目录不可选。
+func (t *TUI) toggleRefInclude(node *tview.TreeNode) {
+	t.toggleRefSelection(node, core.RefSelectInclude)
+}
+
+// toggleRefExclude 切换当前分支是否屏蔽其提交；标签和目录不可选。
+func (t *TUI) toggleRefExclude(node *tview.TreeNode) {
+	t.toggleRefSelection(node, core.RefSelectExclude)
+}
+
+// toggleRefSelection 把分支切换到 mode；已经是 mode 时取消选择。
+func (t *TUI) toggleRefSelection(node *tview.TreeNode, mode core.RefSelectMode) {
+	branch, ok := node.GetReference().(core.Branch)
+	if !ok {
+		return
+	}
+	if t.RefSelection[branch.Name] == mode {
+		delete(t.RefSelection, branch.Name)
+	} else {
+		if t.RefSelection == nil {
+			t.RefSelection = make(map[string]core.RefSelectMode)
+		}
+		t.RefSelection[branch.Name] = mode
+	}
+	// 重建引用树画出圆点，并把过滤立即应用到已有提交列表。
+	t.refreshRefs(branch.Name)
+	t.setCommits(t.filteredCommits())
 }
 
 // refreshCommit 刷新选中 commit 的信息，并异步请求文件列表。
@@ -2671,6 +2706,10 @@ func (t *TUI) showRefs(_ refsRequest, refs core.Refs, err error) {
 	t.Squashing = refs.Squashing
 	t.Reverting = refs.Reverting
 	t.CherryPicking = refs.CherryPicking
+	// 分支删除后清掉残留的过滤条件，提交列表也立即恢复完整。
+	if t.pruneRefSelection() {
+		t.setCommits(t.filteredCommits())
+	}
 	t.refreshRefs(selected)
 	t.refreshHeadLabel()
 	t.renderInProgressActions()
@@ -2724,12 +2763,31 @@ func (t *TUI) refNodeAt(x, y int) (*tview.TreeNode, int) {
 	return visibleRefNode(root, row)
 }
 
+// pruneRefSelection 删除 RefSelection 中已不存在的分支名，返回是否有变化。
+func (t *TUI) pruneRefSelection() bool {
+	if len(t.RefSelection) == 0 {
+		return false
+	}
+	exists := make(map[string]bool, len(t.Branches))
+	for _, branch := range t.Branches {
+		exists[branch.Name] = true
+	}
+	changed := false
+	for name := range t.RefSelection {
+		if !exists[name] {
+			delete(t.RefSelection, name)
+			changed = true
+		}
+	}
+	return changed
+}
+
 // refMarqueeLabel 返回引用节点固定不动的图标 markup 和需要滚动的纯文本名字；
 // 分组标题和目录没有可滚动的名字。
 func (t *TUI) refMarqueeLabel(node *tview.TreeNode) (string, string, bool, bool) {
 	switch ref := node.GetReference().(type) {
 	case core.Branch:
-		prefix := branchPrefix(ref, t.HeadRef, t.syncSpinner.frame())
+		prefix := branchPrefix(ref, t.RefSelection[ref.Name], t.HeadRef, t.syncSpinner.frame())
 		isHead := isBranchHead(ref, t.HeadRef)
 		return prefix, refLabel(ref.LocalName()), isHead, true
 	case core.Tag:
@@ -2789,6 +2847,31 @@ func (t *TUI) showCommits(_ commitsRequest, commits []core.Commit, err error) {
 	}
 	t.statusDone("commits", "")
 
+	t.AllCommits = commits
+	t.setCommits(t.filteredCommits())
+}
+
+// filteredCommits 返回按 RefSelection 过滤后的提交：
+// 只看 Include 分支可达的提交，并排除 Exclude 分支可达的提交；没有设置时返回完整列表。
+func (t *TUI) filteredCommits() []core.Commit {
+	if len(t.RefSelection) == 0 {
+		return t.AllCommits
+	}
+	var included, excluded []string
+	for _, branch := range t.Branches {
+		switch t.RefSelection[branch.Name] {
+		case core.RefSelectInclude:
+			included = append(included, branch.Hash)
+		case core.RefSelectExclude:
+			excluded = append(excluded, branch.Hash)
+		}
+	}
+	// 选中的分支可能已经不存在，此时两边都为空，退回完整列表。
+	return core.FilterCommits(t.AllCommits, included, excluded)
+}
+
+// setCommits 用 commits 重建提交列表，并按 hash 恢复选中项。
+func (t *TUI) setCommits(commits []core.Commit) {
 	// 按 hash 恢复选中项：topo-order 下刷新可能重排已有提交，不能依赖行号不变。
 	row := t.commitList.CurrentItem()
 	previous := ""
@@ -2822,6 +2905,9 @@ func (t *TUI) showCommits(_ commitsRequest, commits []core.Commit, err error) {
 		row = found
 	} else if found := t.commitRow(previous); found >= 0 {
 		row = found
+	} else {
+		// 过滤后原选中项可能已不可见，回到最新的提交。
+		row = 0
 	}
 	// SetCurrentItem 会像用户选中一样触发 refreshCommit，这里不再额外请求。
 	t.commitList.SetCurrentItem(row)
@@ -3539,7 +3625,7 @@ func (t *TUI) renderSyncIndicator() {
 	if t.refMarquee != nil && t.refMarquee.node == node {
 		t.stopRefMarquee()
 	}
-	node.SetText(branchLabel(branch, t.HeadRef, t.syncSpinner.frame()))
+	node.SetText(branchLabel(branch, t.RefSelection[branch.Name], t.HeadRef, t.syncSpinner.frame()))
 }
 
 /** COMMIT OP */

@@ -27,8 +27,11 @@ type State struct {
 
 	Branches []Branch
 	Tags     []Tag
+	// RefSelection 记录各分支参与提交过滤的方式，key 为分支名；未出现表示不过滤。
+	RefSelection map[string]RefSelectMode
 
 	Commits       []Commit
+	AllCommits    []Commit // 未按 RefSelection 过滤的完整提交列表
 	CurrentCommit Commit
 	CompareCommit *Commit
 
@@ -65,8 +68,18 @@ func NewState(ctx context.Context, repo string) (State, error) {
 	s.Reverting = refs.Reverting
 	s.CherryPicking = refs.CherryPicking
 	s.Commits = commits
+	s.AllCommits = commits
 	return s, nil
 }
+
+// RefSelectMode 表示分支参与提交过滤的方式；map 里没有的 key 视为不过滤。
+type RefSelectMode int
+
+const (
+	RefSelectNone RefSelectMode = iota
+	RefSelectInclude
+	RefSelectExclude
+)
 
 // Refs 是仓库的分支、标签与 HEAD 快照。
 type Refs struct {

@@ -39,6 +39,8 @@ var keymap = struct {
 
 	refCheckout rune
 	refDelete   rune
+	refInclude  rune
+	refExclude  rune
 
 	diffWhitespace rune
 	diffSideBySide rune
@@ -85,6 +87,8 @@ var keymap = struct {
 
 	refCheckout: ' ',
 	refDelete:   'd',
+	refInclude:  'y',
+	refExclude:  'Y',
 
 	diffWhitespace: 'w',
 	diffSideBySide: 's',
@@ -133,6 +137,8 @@ var keyBindings = []struct {
 	{"Branchs & Tags", []keyBinding{
 		{keyLabel(keymap.refCheckout), "Checkout branch or tag"},
 		{keyLabel(keymap.refDelete), "Delete branch or tag"},
+		{keyLabel(keymap.refInclude), "Include branch in commit filter"},
+		{keyLabel(keymap.refExclude), "Exclude branch from commit filter"},
 	}},
 	{"All Commits", []keyBinding{
 		{keyLabel(keymap.commitReset), "Reset current branch to selected commit"},

@@ -115,8 +115,10 @@ func isBranchHead(b core.Branch, headRef string) bool {
 	return !b.Remote && b.Name == headRef
 }
 
-// branchPrefix 返回分支前面的标记和分隔空格；远端分支没有前缀。
-func branchPrefix(b core.Branch, headRef, spinFrame string) string {
+// branchPrefix 返回分支前面的标记和分隔空格，包含提交过滤的圆点；
+// 远端分支没有 HEAD/本地分支标记。
+func branchPrefix(b core.Branch, mode core.RefSelectMode, headRef, spinFrame string) string {
+	var prefix string
 	switch {
 	case isBranchHead(b, headRef):
 		// HEAD 指向的本地分支前面加绿色对勾；同步操作期间换成点阵动画。
@@ -124,22 +126,28 @@ func branchPrefix(b core.Branch, headRef, spinFrame string) string {
 		if spinFrame != "" {
 			mark = spinFrame
 		}
-		return colorSuccess.markup(mark, true) + " "
+		prefix = colorSuccess.markup(mark, true) + " "
 	case !b.Remote:
 		// 其余本地分支用分支符号占位对齐。
-		return colorMuted.markup("↘") + " "
+		prefix = colorMuted.markup("↘") + " "
 	}
-	return ""
+	switch mode {
+	case core.RefSelectInclude:
+		prefix += colorAccent.markup("●", true) + " "
+	case core.RefSelectExclude:
+		prefix += colorMuted.markup("●", true) + " "
+	}
+	return prefix
 }
 
 // branchLabel 返回分支在列表中的显示文本；spinFrame 非空时用动画帧代替 HEAD 对勾。
-func branchLabel(b core.Branch, headRef, spinFrame string) string {
+func branchLabel(b core.Branch, mode core.RefSelectMode, headRef, spinFrame string) string {
 	name := tview.Escape(refLabel(b.LocalName()))
 	if isBranchHead(b, headRef) {
 		name = colorText.markup(name, true)
 	}
 	// remote 目录和分支前缀目录已经体现了路径，分支节点只显示最后一段。
-	return branchPrefix(b, headRef, spinFrame) + name
+	return branchPrefix(b, mode, headRef, spinFrame) + name
 }
 
 // tagLabel 返回标签在列表中的显示文本。
@@ -209,9 +217,10 @@ func buildPrefixTree(refs []refLeaf, selectedStyle tcell.Style) *tview.TreeNode 
 }
 
 // buildRefTree 根据分支和标签列表构建引用树。
-// remote 目录和 tags 目录默认折叠，refFolderExpanded 记录用户手动切换过的目录；
-// 过滤激活时临时展开所有目录，让匹配的引用可见。
-func buildRefTree(branches []core.Branch, tags []core.Tag, filter, headRef, spinFrame string, refFolderExpanded map[string]bool, headerStyle, headerSelectedStyle, selectedStyle tcell.Style) *tview.TreeNode {
+// selection 记录各分支参与提交过滤的方式，用来画名字前的圆点；
+// 过滤激活时临时展开所有目录，让匹配的引用可见；
+// folderExpanded 记录用户手动切换过的目录，remote 和 tags 目录默认折叠。
+func buildRefTree(branches []core.Branch, tags []core.Tag, selection map[string]core.RefSelectMode, filter, headRef, spinFrame string, folderExpanded map[string]bool, headerStyle, headerSelectedStyle, selectedStyle tcell.Style) *tview.TreeNode {
 	rootNode := tview.NewTreeNode("")
 
 	// 隐藏 root，用 Local / Remote / Refs 作为分组标题。
@@ -241,7 +250,7 @@ func buildRefTree(branches []core.Branch, tags []core.Tag, filter, headRef, spin
 		ref := refLeaf{
 			group:     "local",
 			name:      branch.Name,
-			label:     branchLabel(branch, headRef, spinFrame),
+			label:     branchLabel(branch, selection[branch.Name], headRef, spinFrame),
 			reference: branch,
 		}
 		if !branch.Remote {
@@ -325,7 +334,7 @@ func buildRefTree(branches []core.Branch, tags []core.Tag, filter, headRef, spin
 			if !ok {
 				return true
 			}
-			if expanded, ok := refFolderExpanded[folder.key]; ok {
+			if expanded, ok := folderExpanded[folder.key]; ok {
 				setFolderExpanded(node, expanded)
 			}
 			return true

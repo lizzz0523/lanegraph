@@ -99,6 +99,54 @@ func ComputeGraph(commits []Commit) Graph {
 	return Graph{Rows: rows, LaneCount: min(maxLanes, max(1, laneCount))}
 }
 
+// FilterCommits 返回从 included 可达、且不从 excluded 可达的提交，保持输入顺序。
+// included 为空时不限制起点；excluded 优先，同时命中两边的提交会被移除。
+func FilterCommits(commits []Commit, included, excluded []string) []Commit {
+	if len(included) == 0 && len(excluded) == 0 {
+		return commits
+	}
+
+	parents := make(map[string][]string, len(commits))
+	for _, commit := range commits {
+		parents[commit.Hash] = commit.Parents
+	}
+
+	reachable := func(tips []string) map[string]bool {
+		seen := make(map[string]bool)
+		stack := append([]string(nil), tips...)
+		for len(stack) > 0 {
+			hash := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if seen[hash] {
+				continue
+			}
+			seen[hash] = true
+			stack = append(stack, parents[hash]...)
+		}
+		return seen
+	}
+
+	keep := make(map[string]bool, len(commits))
+	if len(included) == 0 {
+		for _, commit := range commits {
+			keep[commit.Hash] = true
+		}
+	} else {
+		keep = reachable(included)
+	}
+	for hash := range reachable(excluded) {
+		delete(keep, hash)
+	}
+
+	filtered := make([]Commit, 0, len(keep))
+	for _, commit := range commits {
+		if keep[commit.Hash] {
+			filtered = append(filtered, commit)
+		}
+	}
+	return filtered
+}
+
 func freeSlot(lanes []string) int {
 	slot := slices.IndexFunc(lanes, func(lane string) bool { return lane == "" })
 	if slot != -1 {
