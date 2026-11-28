@@ -47,11 +47,11 @@ type TUI struct {
 	commitPanel *tview.Flex
 	commitList  *listView
 	commitInfo  *tview.TextView
-	fileList    *tview.TreeView
+	fileList    *treeView
 	fileDiff    *diffView
 
 	changePanel       *tview.Flex
-	changeList        *tview.TreeView
+	changeList        *treeView
 	changeDiff        *diffView
 	commitSubject     *tview.TextArea
 	commitDescription *tview.TextArea
@@ -501,10 +501,8 @@ func (t *TUI) setupUI() tview.Primitive {
 		return event
 	})
 
-	fileList := tview.NewTreeView().
-		SetRoot(buildFileTree(nil, selectedStyle)).
-		SetTopLevel(1).
-		SetGraphics(false)
+	fileList := newTreeView()
+	fileList.SetRoot(buildFileTree(nil, selectedStyle))
 
 	fileList.SetTitle(" commit files ").
 		SetTitleAlign(tview.AlignLeft).
@@ -591,10 +589,8 @@ func (t *TUI) setupUI() tview.Primitive {
 		AddItem(commitInfo, 4, 0, false).
 		AddItem(commitDetail, 0, 1, false)
 
-	changeList := tview.NewTreeView().
-		SetRoot(buildLocalTree(nil, selectedStyle, headerStyle)).
-		SetTopLevel(1).
-		SetGraphics(false)
+	changeList := newTreeView()
+	changeList.SetRoot(buildLocalTree(nil, selectedStyle, headerStyle))
 
 	changeList.SetTitle(" local changes ").
 		SetTitleAlign(tview.AlignLeft).

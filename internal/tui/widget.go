@@ -606,6 +606,68 @@ func (v *listView) move(delta int) {
 	v.SetCurrentItem(index)
 }
 
+// treeView 在 tview.TreeView 选中行上补整行底色。
+// tview 只把 selectedTextStyle 应用到节点文字本身，行尾仍是普通背景；
+// 这里在绘制之后逐格重写整行，只替换背景色，保留每段文字自己的前景色。
+type treeView struct {
+	*tview.TreeView
+}
+
+func newTreeView() *treeView {
+	return &treeView{TreeView: tview.NewTreeView().
+		SetTopLevel(1).
+		SetGraphics(false)}
+}
+
+func (v *treeView) Draw(screen tcell.Screen) {
+	v.TreeView.Draw(screen)
+
+	node := v.TreeView.GetCurrentNode()
+	if node == nil {
+		return
+	}
+	row := v.row(node) - v.TreeView.GetScrollOffset()
+	x, y, width, height := v.TreeView.GetInnerRect()
+	if row < 0 || row >= height {
+		return
+	}
+	for column := x; column < x+width; column++ {
+		mainc, combc, style, _ := screen.GetContent(column, y+row)
+		screen.SetContent(column, y+row, mainc, combc, style.Background(colorSelection.cell))
+	}
+}
+
+// row 返回节点的可见行号；root 本身不显示，从它的子节点按层级 1 开始计数，找不到返回 -1。
+func (v *treeView) row(node *tview.TreeNode) int {
+	root := v.TreeView.GetRoot()
+	if root == nil || node == nil {
+		return -1
+	}
+	row := -1
+	var walk func(n *tview.TreeNode) bool
+	walk = func(n *tview.TreeNode) bool {
+		row++
+		if n == node {
+			return false
+		}
+		if !n.IsExpanded() {
+			return true
+		}
+		for _, child := range n.GetChildren() {
+			if !walk(child) {
+				return false
+			}
+		}
+		return true
+	}
+	for _, n := range root.GetChildren() {
+		if !walk(n) {
+			return row
+		}
+	}
+	return -1
+}
+
 // diffView 在 TextView 之上增加鼠标悬停时的整行高亮。
 // hover 是逻辑行号，-1 表示当前没有高亮。
 type diffView struct {
@@ -708,17 +770,13 @@ func (v *diffView) hoverAt(posX, posY int) bool {
 // 依赖 tview v0.42 的内部行为：SetCurrentNode 不触发 process，
 // 且没有选中项时 process 不改 offsetY；升级 tview 时需要复查这两点。
 type refTree struct {
-	*tview.TreeView
+	*treeView
 
 	scrolled bool // 滚轮滚动过，选中项可以留在视口外
 }
 
 func newRefTree() *refTree {
-	return &refTree{
-		TreeView: tview.NewTreeView().
-			SetTopLevel(1).
-			SetGraphics(false),
-	}
+	return &refTree{treeView: newTreeView()}
 }
 
 // SetCurrentNode 让显式选中的节点在下一次绘制时进入视口。
@@ -761,7 +819,7 @@ func (v *refTree) Draw(screen tcell.Screen) {
 		v.TreeView.SetCurrentNode(node)
 		return
 	}
-	v.TreeView.Draw(screen)
+	v.treeView.Draw(screen)
 }
 
 // offscreen 返回节点在树里但不在视口内。
@@ -774,37 +832,6 @@ func (v *refTree) offscreen(node *tview.TreeNode) bool {
 	_, _, _, height := v.GetInnerRect()
 	offset := v.GetScrollOffset()
 	return row < offset || row >= offset+height
-}
-
-// row 返回节点的可见行号；root 本身不显示，从它的子节点按层级 1 开始计数，找不到返回 -1。
-func (v *refTree) row(node *tview.TreeNode) int {
-	root := v.GetRoot()
-	if root == nil || node == nil {
-		return -1
-	}
-	row := -1
-	var walk func(n *tview.TreeNode) bool
-	walk = func(n *tview.TreeNode) bool {
-		row++
-		if n == node {
-			return false
-		}
-		if !n.IsExpanded() {
-			return true
-		}
-		for _, child := range n.GetChildren() {
-			if !walk(child) {
-				return false
-			}
-		}
-		return true
-	}
-	for _, n := range root.GetChildren() {
-		if !walk(n) {
-			return row
-		}
-	}
-	return -1
 }
 
 // rebaseForm 是 interactive rebase 弹窗，布局为说明、动作列表、提示和按钮三段。
