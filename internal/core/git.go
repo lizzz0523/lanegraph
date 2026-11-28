@@ -385,7 +385,8 @@ var ErrNoUpstream = errors.New("push rejected: no upstream branch")
 // force 为 true 时使用 --force-with-lease，避免覆盖别人刚推上去的提交。
 // track 为 true 时显式指定远端和分支，并把远端分支设为当前分支的 upstream。
 func GitPush(ctx context.Context, repo string, force, track bool) (string, error) {
-	args := []string{"push"}
+	// --porcelain 把拒绝原因按固定英文写到 stdout，不受 locale 影响，便于区分失败类型。
+	args := []string{"push", "--porcelain"}
 	if force {
 		args = append(args, "--force-with-lease")
 	}
@@ -402,17 +403,27 @@ func GitPush(ctx context.Context, repo string, force, track bool) (string, error
 	}
 	output, err := gitOutput(ctx, repo, gitRemoteEnv(), args...)
 	if err != nil {
-		err = gitStderr(err)
-		switch {
 		// 只有非快进才提示 force push；本地落后（fetch first）时强制推送会丢掉远端提交。
-		case strings.Contains(err.Error(), "(non-fast-forward)"):
+		if strings.Contains(output, "(non-fast-forward)") {
 			return "", ErrNonFastForward
-		case strings.Contains(err.Error(), "has no upstream branch"):
+		}
+		// 没有 upstream 时 push 在本地就失败，用 rev-parse 结构化确认，避免匹配本地化文案。
+		if !track && gitHasNoUpstream(ctx, repo) {
 			return "", ErrNoUpstream
 		}
-		return "", fmt.Errorf("git push error: %w", err)
+		return "", fmt.Errorf("git push error: %w", gitStderr(err))
 	}
 	return output, nil
+}
+
+// gitHasNoUpstream 判断当前分支是否没有配置 upstream。
+// HEAD 游离时返回 false，保留 push 原始错误，避免误报成需要设置 upstream。
+func gitHasNoUpstream(ctx context.Context, repo string) bool {
+	if _, err := gitOutputTrimmed(ctx, repo, "symbolic-ref", "--short", "-q", "HEAD"); err != nil {
+		return false
+	}
+	_, err := gitOutputTrimmed(ctx, repo, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+	return err != nil
 }
 
 // GitFetch 拉取远端引用，返回 git 的输出。
@@ -1383,6 +1394,7 @@ func gitOutputTrimmed(ctx context.Context, repo string, args ...string) (string,
 
 // gitOutput 保留原始输出，供 -z 分隔的路径解析使用，避免 TrimSpace 破坏文件名。
 // env 为 nil 时继承当前进程环境。
+// 命令失败时仍返回已捕获的 stdout，供 push --porcelain 这类机器可读输出使用。
 func gitOutput(ctx context.Context, repo string, env []string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = repo
@@ -1392,7 +1404,7 @@ func gitOutput(ctx context.Context, repo string, env []string, args ...string) (
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		return "", err
+		return string(output), err
 	}
 	return string(output), nil
 }
