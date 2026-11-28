@@ -133,9 +133,9 @@ func branchPrefix(b core.Branch, mode core.RefSelectMode, headRef, spinFrame str
 	}
 	switch mode {
 	case core.RefSelectInclude:
-		prefix += colorAccent.markup("●", true) + " "
+		prefix += colorAccent.markup("◓", true) + " "
 	case core.RefSelectExclude:
-		prefix += colorMuted.markup("●", true) + " "
+		prefix += colorMuted.markup("◓", true) + " "
 	}
 	return prefix
 }

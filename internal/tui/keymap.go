@@ -134,11 +134,11 @@ var keyBindings = []struct {
 		{keyLabel(keymap.globalCreateBranch), "Create and checkout branch from HEAD"},
 		{keyLabel(keymap.globalCreateTag), "Create tag from HEAD"},
 	}},
-	{"Branchs & Tags", []keyBinding{
+	{"Branches & Tags", []keyBinding{
 		{keyLabel(keymap.refCheckout), "Checkout branch or tag"},
 		{keyLabel(keymap.refDelete), "Delete branch or tag"},
-		{keyLabel(keymap.refInclude), "Include branch in commit filter"},
-		{keyLabel(keymap.refExclude), "Exclude branch from commit filter"},
+		{keyLabel(keymap.refInclude), "Show only commits of branch"},
+		{keyLabel(keymap.refExclude), "Hide commits of branch"},
 	}},
 	{"All Commits", []keyBinding{
 		{keyLabel(keymap.commitReset), "Reset current branch to selected commit"},
