@@ -144,8 +144,8 @@ var keyBindings = []struct {
 		{"← / " + keyLabel(keymap.rebasePrev), "Previous rebase action"},
 		{"→ / " + keyLabel(keymap.rebaseNext), "Next rebase action"},
 	}},
-	{"Commit Message", []keyBinding{
-		{keyLabel(keymap.commitInfo), "Show or close full commit message"},
+	{"Commit Detail", []keyBinding{
+		{keyLabel(keymap.commitInfo), "Show or close full commit detail"},
 	}},
 	{"Commit Files", []keyBinding{
 		{keyLabel(keymap.fileOpen), "Open file in default app"},
