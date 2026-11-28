@@ -73,6 +73,46 @@ func commitDate(date, now time.Time) string {
 	return date.Format("Jan _2  2006")
 }
 
+// formatRefs 生成 commit 列表中的 refs 文本：远端分支前加灰色 ↗，和同一提交上的同名本地分支
+// 合并成 "↗ | local"；HEAD 指向的分支用绿色对勾。只有对勾是绿色，引用名用 accent 色。
+func formatRefs(entries []core.CommitRef) string {
+	locals := make(map[string]bool, len(entries))
+	remotes := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		if entry.Local != "" {
+			locals[entry.Local] = true
+		}
+		if entry.Remote != "" {
+			remotes[entry.Remote] = true
+		}
+	}
+
+	var parts []string
+	for _, entry := range entries {
+		var symbol string
+		switch {
+		case entry.Remote != "":
+			// 同一提交上已有同名本地分支时，远端信息合并到本地分支的标记里。
+			if locals[entry.Remote] {
+				continue
+			}
+			symbol = colorMuted.markup("↗") + " "
+		case entry.Local != "":
+			if remotes[entry.Local] {
+				symbol = colorMuted.markup("↗") + " " + colorRefs.markup("❘") + " "
+			}
+			if entry.Head {
+				symbol += colorSuccess.markup("✓", true) + " "
+			}
+		}
+		parts = append(parts, symbol+colorRefs.markup(tview.Escape(entry.Label), true))
+	}
+
+	return colorRefs.markup("(", true) +
+		strings.Join(parts, colorRefs.markup(", ", true)) +
+		colorRefs.markup(")", true)
+}
+
 // 线从格子上/下边缘进入后的走向
 type course uint8
 
@@ -295,8 +335,8 @@ func renderGraph(commits []core.Commit, graph core.Graph, showRefs bool) []strin
 		fmt.Fprintf(&out, " %s", colorHash.markup(commit.ShortHash()))
 		fmt.Fprintf(&out, " %s", colorOf[commit.Author].markup(tview.Escape(authorInitial(commit.Author)), true))
 		fmt.Fprintf(&out, " %s", colorDate.markup(tview.Escape(commitDate(commit.Date, now))))
-		if showRefs && commit.Refs != "" {
-			fmt.Fprintf(&out, " %s", colorRefs.markup("("+tview.Escape(commit.Refs)+")", true))
+		if showRefs && len(commit.Refs) > 0 {
+			fmt.Fprintf(&out, " %s", formatRefs(commit.Refs))
 		}
 		fmt.Fprintf(&out, " %s", tview.Escape(commit.Subject))
 

@@ -230,11 +230,19 @@ func GitCheckout(ctx context.Context, repo, ref string) (string, error) {
 type Commit struct {
 	Hash    string
 	Parents []string
-	Refs    string // %D，如 "HEAD -> main, origin/main, tag: v1"
+	Refs    []CommitRef // %D（--decorate=full）解析出的引用
 	Author  string
 	Date    time.Time
 	Subject string
 	Body    string
+}
+
+// CommitRef 是 commit 装饰里的一条引用，只保留显示需要的信息。
+type CommitRef struct {
+	Label  string // 显示文本：分支名、远端分支名或 "tag: v1"
+	Local  string // 本地分支名；非本地分支为空
+	Remote string // 远端分支去掉 remote 前缀后的分支名；非远端分支为空
+	Head   bool   // 是 HEAD 指向的本地分支
 }
 
 // shortHash 返回 7 位短 hash。
@@ -266,8 +274,11 @@ func GitCommits(ctx context.Context, repo string) ([]Commit, error) {
 	// 起点为 HEAD + 本地分支 + 远端分支 + 标签，未合并的分支也会被画出来
 	// topo-order 让同一分支的提交连续输出，减少 lane 交错；它和 date-order 一样保证父提交在子提交之后
 	// -z 用 NUL 分隔记录，body 里的换行才不会把一条记录拆成多行
+	// 远端 HEAD 是指向默认分支的符号引用（如 origin/HEAD），和对应远端分支重复，装饰里排除。
+	// --decorate=full 让 %D 输出完整 refname，便于区分本地分支和远端分支。
 	log, err := gitOutputTrimmed(ctx, repo, "log", "-z", "--topo-order", "--branches",
-		"--remotes", "--tags", "HEAD", "--format=%H%x00%P%x00%D%x00%an%x00%cI%x00%s%x00%b")
+		"--remotes", "--tags", "--decorate=full", "--decorate-refs-exclude=refs/remotes/*/HEAD",
+		"HEAD", "--format=%H%x00%P%x00%D%x00%an%x00%cI%x00%s%x00%b")
 	if err != nil {
 		return nil, fmt.Errorf("git log error: %w", err)
 	}
@@ -286,7 +297,7 @@ func GitCommits(ctx context.Context, repo string) ([]Commit, error) {
 		commits = append(commits, Commit{
 			Hash:    parts[i],
 			Parents: strings.Fields(parts[i+1]),
-			Refs:    parts[i+2],
+			Refs:    parseCommitRefs(parts[i+2]),
 			Author:  parts[i+3],
 			Date:    date,
 			Subject: strings.TrimRight(parts[i+5], "\r\n"),
@@ -294,6 +305,34 @@ func GitCommits(ctx context.Context, repo string) ([]Commit, error) {
 		})
 	}
 	return commits, nil
+}
+
+// parseCommitRefs 把 --decorate=full 的 %D 拆成引用列表。
+func parseCommitRefs(refs string) []CommitRef {
+	if refs == "" {
+		return nil
+	}
+	parts := strings.Split(refs, ", ")
+	entries := make([]CommitRef, 0, len(parts))
+	for _, part := range parts {
+		switch {
+		case strings.HasPrefix(part, "HEAD -> refs/heads/"):
+			name := strings.TrimPrefix(part, "HEAD -> refs/heads/")
+			entries = append(entries, CommitRef{Label: name, Local: name, Head: true})
+		case strings.HasPrefix(part, "refs/heads/"):
+			name := strings.TrimPrefix(part, "refs/heads/")
+			entries = append(entries, CommitRef{Label: name, Local: name})
+		case strings.HasPrefix(part, "refs/remotes/"):
+			name := strings.TrimPrefix(part, "refs/remotes/")
+			_, branch, _ := strings.Cut(name, "/")
+			entries = append(entries, CommitRef{Label: name, Remote: branch})
+		case strings.HasPrefix(part, "tag: refs/tags/"):
+			entries = append(entries, CommitRef{Label: "tag: " + strings.TrimPrefix(part, "tag: refs/tags/")})
+		default:
+			entries = append(entries, CommitRef{Label: part})
+		}
+	}
+	return entries
 }
 
 // GitFileHistory 返回 path 涉及的提交历史，按 git log 默认顺序（新到旧）。
