@@ -303,7 +303,7 @@ func (t *TUI) Run() error {
 
 	t.refreshTabStyles()
 	t.refreshRefs(t.HeadRef)
-	t.refreshCommit(true)
+	t.refreshCommit(t.HeadHash)
 	t.refreshHeadLabel()
 
 	return app.Run()
@@ -486,7 +486,7 @@ func (t *TUI) setupUI() tview.Primitive {
 	commitList.SetLines(renderGraph(t.Commits, core.ComputeGraph(t.Commits), true))
 
 	commitList.SetSelectedFunc(func() {
-		t.refreshCommit(false)
+		t.refreshCommit("")
 	})
 	commitList.SetHighlightFunc(func(index int) {
 		t.compareCommit(index)
@@ -1569,9 +1569,16 @@ func (t *TUI) toggleRefSelection(node *tview.TreeNode, mode core.RefSelectMode) 
 }
 
 // refreshCommit 刷新选中 commit 的信息，并异步请求文件列表。
-// force 为 true 时无论选中项是否变化都重绘 commitInfo。
-func (t *TUI) refreshCommit(force bool) {
+// selected 为要选中的 commit hash；为空或找不到时沿用列表当前项。
+func (t *TUI) refreshCommit(selected string) {
 	row := t.commitList.CurrentItem()
+	if selected != "" {
+		if found := t.commitRow(selected); found >= 0 && found != row {
+			// SetCurrentItem 会触发 selected 回调，由回调完成本次刷新。
+			t.commitList.SetCurrentItem(found)
+			return
+		}
+	}
 	if row >= len(t.Commits) {
 		return
 	}
@@ -1585,7 +1592,8 @@ func (t *TUI) refreshCommit(force bool) {
 		t.setCompare(nil)
 	}
 
-	if force || changed {
+	// selected 非空表示显式定位，和原来的 force 一样无条件重绘。
+	if selected != "" || changed {
 		t.commitInfo.SetText(renderCommit(commit, t.infoWidth))
 	}
 	t.requestFiles(commit, t.CompareCommit)
