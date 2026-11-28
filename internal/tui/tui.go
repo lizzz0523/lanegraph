@@ -488,8 +488,8 @@ func (t *TUI) setupUI() tview.Primitive {
 	commitList.SetSelectedFunc(func() {
 		t.refreshCommit("")
 	})
-	commitList.SetHighlightFunc(func(index int) {
-		t.compareCommit(index)
+	commitList.SetHighlightFunc(func(row int) {
+		t.compareCommit(row)
 	})
 
 	commitInfo := tview.NewTextView().
