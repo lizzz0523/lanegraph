@@ -217,7 +217,7 @@ func (t *TUI) Run() error {
 				t.closeCommitInfo()
 				return nil
 			case tcell.KeyRune:
-				if event.Rune() == keymap.dialogClose {
+				if event.Rune() == keymap.dialogClose || event.Rune() == keymap.commitInfo {
 					t.closeCommitInfo()
 					return nil
 				}
