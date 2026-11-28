@@ -283,7 +283,7 @@ func (t *TUI) Run() error {
 				return nil
 			case keymap.globalToggleAmend:
 				if t.activeTab == tabChange {
-					t.amendCheck.SetChecked(!t.amendCheck.IsChecked())
+					t.toggleAmend()
 					return nil
 				}
 			}
@@ -725,7 +725,7 @@ func (t *TUI) setupUI() tview.Primitive {
 			return action, event
 		}
 		if action == tview.MouseLeftDown {
-			amendCheck.SetChecked(!amendCheck.IsChecked())
+			t.toggleAmend()
 			return tview.MouseMove, event
 		}
 		return action, event
@@ -2125,6 +2125,11 @@ func (t *TUI) abortCherryPick() {
 		})
 
 	t.setupPrompt(page, prompt)
+}
+
+// toggleAmend 切换 Amend 勾选状态；键盘 a 和点击 Amend 标签共用。
+func (t *TUI) toggleAmend() {
+	t.amendCheck.SetChecked(!t.amendCheck.IsChecked())
 }
 
 // commitChanges 用表单内容提交暂存区改动；Amend 勾选时改写 HEAD。
