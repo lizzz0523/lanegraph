@@ -836,8 +836,8 @@ func (t *TUI) setupUI() tview.Primitive {
 
 	mainTabs := tview.NewFlex().
 		SetDirection(tview.FlexRow).
-		AddItem(changeTab, 1, 0, false).
-		AddItem(commitTab, 1, 0, false)
+		AddItem(commitTab, 1, 0, false).
+		AddItem(changeTab, 1, 0, false)
 
 	mainTabs.SetTitle(" "+t.RepoName+" ").
 		SetTitleAlign(tview.AlignLeft).
@@ -1346,9 +1346,9 @@ func (t *TUI) focusChain() []tview.Primitive {
 		return t.historyView.focusables()
 	}
 	if t.activeTab == tabChange {
-		return []tview.Primitive{t.changeTab, t.commitTab, t.refFilter, t.refList, t.changeList, t.changeDiff, t.commitSubject, t.commitDescription, t.commitButton}
+		return []tview.Primitive{t.commitTab, t.changeTab, t.refFilter, t.refList, t.changeList, t.changeDiff, t.commitSubject, t.commitDescription, t.commitButton}
 	}
-	return []tview.Primitive{t.changeTab, t.commitTab, t.refFilter, t.refList, t.commitList, t.commitInfo, t.fileList, t.fileDiff}
+	return []tview.Primitive{t.commitTab, t.changeTab, t.refFilter, t.refList, t.commitList, t.commitInfo, t.fileList, t.fileDiff}
 }
 
 // setFocusBorder 按焦点状态切换边框和标题颜色。
